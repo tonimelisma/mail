@@ -1,9 +1,6 @@
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
-    // You might also need the compose compiler plugin if using @Composable in this module,
-    // but for just state, runtime might be enough. Add if needed:
-    // alias(libs.plugins.kotlin.compose)
 }
 
 android {
@@ -33,13 +30,6 @@ android {
     kotlinOptions {
         jvmTarget = "11"
     }
-    // If using @Composable annotations within this library module, enable compose here:
-    // buildFeatures {
-    //    compose = true
-    // }
-    // composeOptions {
-    //    kotlinCompilerExtensionVersion = "..." // Use the version compatible with your Kotlin version
-    // }
 }
 
 dependencies {
@@ -47,14 +37,6 @@ dependencies {
     // --- MSAL Dependency ---
     api(libs.microsoft.msal)
     implementation(libs.microsoft.display.mask)
-
-    // --- Compose Runtime Dependency --- Needed for mutableStateOf, etc.
-    // Use platform() to ensure version consistency with the BOM used in :app
-    implementation(platform(libs.androidx.compose.bom))
-    // Add the specific runtime artifact
-    implementation(libs.androidx.compose.runtime)
-    // OR without alias: implementation("androidx.compose.runtime:runtime")
-    // ---------------------------------
 
     // Core Kotlin extensions
     implementation(libs.androidx.core.ktx)
