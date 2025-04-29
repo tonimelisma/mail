@@ -1,9 +1,8 @@
 package net.melisma.mail // Package for the app module
 
-// --- Explicit MSAL Imports --- Needed because :app depends on :feature-auth via 'api'
-// -----------------------------
+// MSAL imports
 
-// Import your AuthManager and Result types
+// Import your AuthManager, Listener, and Result types
 // Import your app's theme
 import android.app.Activity
 import android.content.Context
@@ -27,6 +26,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -37,6 +37,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.microsoft.identity.client.IAccount
+import com.microsoft.identity.client.exception.MsalException
+import net.melisma.feature_auth.AuthStateListener
 import net.melisma.feature_auth.MicrosoftAuthManager
 import net.melisma.feature_auth.SignInResult
 import net.melisma.feature_auth.SignOutResult
@@ -69,49 +72,80 @@ class MainActivity : ComponentActivity() {
 // Main screen Composable
 @Composable
 fun MainScreen(authManager: MicrosoftAuthManager) {
-    var account by remember { mutableStateOf(authManager.currentAccount) }
+    // --- Local Composable State ---
+    var isInitialized by remember { mutableStateOf(authManager.isInitialized) }
+    var currentAccountState by remember { mutableStateOf<IAccount?>(authManager.currentAccount) } // Renamed state variable
+    var initializationError by remember { mutableStateOf<MsalException?>(authManager.initializationError) }
+    // -----------------------------
+
     var isLoading by remember { mutableStateOf(false) }
 
-    // Observe account changes from the manager
-    LaunchedEffect(authManager.currentAccount) {
-        if (account != authManager.currentAccount) {
-            account = authManager.currentAccount
-            Log.d("MainScreen", "Account state updated via LaunchedEffect: ${account?.username}")
+    // Use DisposableEffect to register/unregister the listener safely
+    DisposableEffect(authManager) {
+        Log.d("MainScreen", "Registering AuthStateListener")
+        val listener = object : AuthStateListener {
+            override fun onAuthStateChanged(
+                initialized: Boolean,
+                account: IAccount?, // Parameter name from interface
+                error: MsalException?
+            ) {
+                Log.d(
+                    "MainScreenListener",
+                    "onAuthStateChanged: init=$initialized, account=${account?.username}, error=$error"
+                )
+                isInitialized = initialized
+                currentAccountState = account // Update the state variable
+                initializationError = error
+            }
+        }
+        authManager.setAuthStateListener(listener)
+
+        onDispose {
+            Log.d("MainScreen", "Disposing AuthStateListener")
+            authManager.setAuthStateListener(null)
         }
     }
-    // Observe initialization state
-    LaunchedEffect(authManager.isInitialized) {
-        if (!authManager.isInitialized && authManager.initializationError != null) {
-            Log.e("MainScreen", "MSAL Failed to initialize", authManager.initializationError)
-            // Access context directly from the composable scope for the Toast
+
+    // Optional: Show toast on initialization error change
+    LaunchedEffect(initializationError) {
+        if (initializationError != null) {
+            Log.e("MainScreen", "MSAL Failed to initialize", initializationError)
             showToast(authManager.context, "Authentication library failed to initialize.")
         }
     }
 
     val activity = findActivity()
-    // Get context directly within the composable scope where needed
     val contextForToast = LocalContext.current
+
+    // Add log to see the value of isInitialized during composition
+    Log.d(
+        "MainScreen",
+        "Composing MainScreen - isInitialized: $isInitialized, Account: ${currentAccountState?.username}"
+    )
 
     Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
         Box(
             modifier = Modifier
-                .padding(innerPadding) // Apply system bar padding
+                .padding(innerPadding)
                 .fillMaxSize(),
             contentAlignment = Alignment.Center
         ) {
+            // Capture the current state value into a local immutable variable
+            val account = currentAccountState
+
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
                 if (isLoading) {
                     CircularProgressIndicator()
-                } else if (account == null) {
+                } else if (account == null) { // Check the local variable
                     // --- Signed Out State ---
                     Text("Welcome to Melisma Mail")
                     Spacer(modifier = Modifier.height(16.dp))
                     Button(
                         onClick = {
-                            if (!authManager.isInitialized) {
+                            if (!isInitialized) {
                                 showToast(contextForToast, "Auth Service not ready.")
                                 return@Button
                             }
@@ -119,15 +153,14 @@ fun MainScreen(authManager: MicrosoftAuthManager) {
                             val scopes = listOf("User.Read", "Mail.Read")
                             authManager.signIn(activity, scopes) { result ->
                                 isLoading = false
+                                // UI state (currentAccountState) updated via listener
                                 when (result) {
                                     is SignInResult.Success -> {
-                                        // account state update handled by LaunchedEffect
                                         showToast(
                                             contextForToast,
                                             "Sign in Success: ${result.account.username}"
                                         )
                                     }
-
                                     is SignInResult.Error -> {
                                         showToast(
                                             contextForToast,
@@ -135,43 +168,53 @@ fun MainScreen(authManager: MicrosoftAuthManager) {
                                         )
                                         Log.e("MainScreen", "Sign In Error", result.exception)
                                     }
-
                                     is SignInResult.Cancelled -> {
                                         showToast(contextForToast, "Sign in Cancelled")
                                     }
-
                                     is SignInResult.NotInitialized -> {
                                         showToast(contextForToast, "Auth Service not ready.")
                                     }
                                 }
                             }
                         },
-                        enabled = authManager.isInitialized
+                        enabled = isInitialized
                     ) {
                         Text("Sign In with Microsoft")
                     }
-                } else {
+                    if (!isInitialized && initializationError == null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text("(Initializing...)", style = MaterialTheme.typography.bodySmall)
+                    } else if (initializationError != null) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            "(Initialization Failed)",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+
+                } else { // Smart cast works here because 'account' is a local val
                     // --- Signed In State ---
                     Text("Signed in as:")
+                    // Use the local 'account' variable which can now be smart-cast
                     Text(
-                        account?.username ?: "Unknown User",
+                        account.username ?: "Unknown User",
                         style = MaterialTheme.typography.headlineSmall
                     )
                     Spacer(modifier = Modifier.height(16.dp))
                     Button(onClick = {
-                        if (!authManager.isInitialized) {
+                        if (!isInitialized) {
                             showToast(contextForToast, "Auth Service not ready.")
                             return@Button
                         }
                         isLoading = true
                         authManager.signOut { result ->
                             isLoading = false
+                            // UI state (currentAccountState) updated via listener
                             when (result) {
                                 is SignOutResult.Success -> {
-                                    // account state update handled by LaunchedEffect
                                     showToast(contextForToast, "Signed Out")
                                 }
-
                                 is SignOutResult.Error -> {
                                     showToast(
                                         contextForToast,
@@ -179,7 +222,6 @@ fun MainScreen(authManager: MicrosoftAuthManager) {
                                     )
                                     Log.e("MainScreen", "Sign Out Error", result.exception)
                                 }
-
                                 is SignOutResult.NotInitialized -> {
                                     showToast(contextForToast, "Auth Service not ready.")
                                 }
@@ -209,13 +251,12 @@ private fun findActivity(): Activity {
 }
 
 // Helper function for displaying Toast messages
-// Now takes context as a parameter
 private fun showToast(context: Context, message: String?) {
     if (message.isNullOrBlank()) return
     Toast.makeText(context, message, Toast.LENGTH_LONG).show()
 }
 
-// Previews remain the same as they don't interact with the auth manager directly
+// --- Previews ---
 @Preview(showBackground = true, name = "Signed Out Preview")
 @Composable
 fun MainScreenPreview_SignedOut() {
@@ -225,7 +266,9 @@ fun MainScreenPreview_SignedOut() {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text("Welcome to Melisma Mail")
                     Spacer(modifier = Modifier.height(16.dp))
-                    Button(onClick = {}) { Text("Sign In with Microsoft") }
+                    Button(onClick = {}, enabled = true) { Text("Sign In with Microsoft") }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("(Initializing...)", style = MaterialTheme.typography.bodySmall)
                 }
             }
         }

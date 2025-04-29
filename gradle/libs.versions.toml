@@ -1,15 +1,18 @@
 [versions]
 agp = "8.9.2"
 kotlin = "2.0.21"
-coreKtx = "1.10.1"
+coreKtx = "1.16.0"
 junit = "4.13.2"
-junitVersion = "1.1.5"
-espressoCore = "3.5.1"
-lifecycleRuntimeKtx = "2.6.1"
-activityCompose = "1.8.0"
-composeBom = "2024.09.00"
+junitVersion = "1.2.1"
+espressoCore = "3.6.1"
+lifecycleRuntimeKtx = "2.8.7"
+activityCompose = "1.10.1"
+composeBom = "2025.04.01"
 msal = "6.0.0"
 displayMask = "0.3.0"
+# Removed versions for appcompat and material (XML) as they might not be needed
+# appcompat = "1.6.1"
+# material = "1.10.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -28,6 +31,12 @@ androidx-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit
 androidx-material3 = { group = "androidx.compose.material3", name = "material3" }
 microsoft-msal = { group = "com.microsoft.identity.client", name = "msal", version.ref = "msal" }
 microsoft-display-mask = { group = "com.microsoft.device.display", name = "display-mask", version.ref = "displayMask" }
+# Added Compose Runtime alias - needed for feature-auth
+androidx-compose-runtime = { group = "androidx.compose.runtime", name = "runtime" }
+# Removed XML-based appcompat and material aliases
+# androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
+# material = { group = "com.google.android.material", name = "material", version.ref = "material" }
+
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

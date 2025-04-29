@@ -1,7 +1,11 @@
 {
   "client_id": "254a5dcf-ca47-4794-9aee-75d2bec8fe71",
+  // Your Client ID
   "authorization_user_agent": "DEFAULT",
-  "redirect_uri": "msauth://net.melisma.mail/2jmj7l5rSw0yVb%2FvlWAYkK%2FYBwk%3D",
+  // Use the URL-encoded hash ONLY in this config file, matching the "expected" error string
+  "redirect_uri": "msauth://net.melisma.mail/xiqLcVCeut7uni40h117Xcb0hQg%3D",
+  "broker_redirect_uri_registered": true,
+  "account_mode": "SINGLE",
   "authorities": [
     {
       "type": "AAD",
@@ -12,4 +16,3 @@
     }
   ]
 }
-

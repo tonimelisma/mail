@@ -1,6 +1,9 @@
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
+    // You might also need the compose compiler plugin if using @Composable in this module,
+    // but for just state, runtime might be enough. Add if needed:
+    // alias(libs.plugins.kotlin.compose)
 }
 
 android {
@@ -30,25 +33,33 @@ android {
     kotlinOptions {
         jvmTarget = "11"
     }
+    // If using @Composable annotations within this library module, enable compose here:
+    // buildFeatures {
+    //    compose = true
+    // }
+    // composeOptions {
+    //    kotlinCompilerExtensionVersion = "..." // Use the version compatible with your Kotlin version
+    // }
 }
 
 dependencies {
 
-    // --- MSAL Dependency using Version Catalog ---
-    // Use 'api' so that modules depending on :feature-auth (like :app)
-    // can access MSAL types (IAccount, MsalException, etc.)
-    api(libs.microsoft.msal) // Use the alias defined in libs.versions.toml
+    // --- MSAL Dependency ---
+    api(libs.microsoft.msal)
+    implementation(libs.microsoft.display.mask)
 
-    // Keep display-mask as implementation, using Version Catalog
-    implementation(libs.microsoft.display.mask) // Use the alias defined in libs.versions.toml
+    // --- Compose Runtime Dependency --- Needed for mutableStateOf, etc.
+    // Use platform() to ensure version consistency with the BOM used in :app
+    implementation(platform(libs.androidx.compose.bom))
+    // Add the specific runtime artifact
+    implementation(libs.androidx.compose.runtime)
+    // OR without alias: implementation("androidx.compose.runtime:runtime")
+    // ---------------------------------
 
-    // --- REMOVED explicit OpenTelemetry BOM ---
-    // ------------------------------------------
-
-    // Core Kotlin extensions are generally useful
+    // Core Kotlin extensions
     implementation(libs.androidx.core.ktx)
 
-    // Test dependencies remain the same
+    // Test dependencies
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

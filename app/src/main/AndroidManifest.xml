@@ -32,13 +32,11 @@
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
-
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-
                 <data
+                    android:path="/xiqLcVCeut7uni40h117Xcb0hQg="
                     android:host="net.melisma.mail"
-                    android:path="/2jmj7l5rSw0yVb%2FvlWAYkK%2FYBwk%3D"
                     android:scheme="msauth" />
             </intent-filter>
         </activity>

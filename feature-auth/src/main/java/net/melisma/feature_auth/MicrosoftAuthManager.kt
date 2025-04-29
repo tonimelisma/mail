@@ -1,5 +1,6 @@
 package net.melisma.feature_auth // Ensure this matches your module's package structure
 
+// MSAL imports
 import android.app.Activity
 import android.content.Context
 import android.util.Log
@@ -18,7 +19,7 @@ import com.microsoft.identity.client.exception.MsalClientException
 import com.microsoft.identity.client.exception.MsalException
 import com.microsoft.identity.client.exception.MsalUiRequiredException
 
-// --- Sealed Result Classes (Keep As Is) ---
+// --- Sealed Result Classes (Keep As Is for callbacks) ---
 sealed class SignInResult {
     data class Success(val account: IAccount) : SignInResult()
     data class Error(val exception: MsalException) : SignInResult()
@@ -26,7 +27,6 @@ sealed class SignInResult {
     object NotInitialized : SignInResult()
 }
 
-// ... (SignOutResult and AcquireTokenResult remain the same) ...
 sealed class SignOutResult {
     object Success : SignOutResult()
     data class Error(val exception: MsalException) : SignOutResult()
@@ -42,53 +42,115 @@ sealed class AcquireTokenResult {
     object UiRequired : AcquireTokenResult()
 }
 
+// --- Listener Interface for UI updates ---
+interface AuthStateListener {
+    fun onAuthStateChanged(isInitialized: Boolean, account: IAccount?, error: MsalException?)
+}
 
 class MicrosoftAuthManager(
-    // Make context public so MainActivity can access it for Toasts (temporary fix)
-    val context: Context,
+    val context: Context, // Keep public for now for Toast access
     @RawRes private val configResId: Int
 ) {
 
     private var msalInstance: ISingleAccountPublicClientApplication? = null
-    val currentAccount: IAccount?
-        get() = msalInstance?.currentAccount?.currentAccount
+    private var authStateListener: AuthStateListener? = null
 
-    var isInitialized = false
-        private set
+    // --- Regular properties ---
+    var isInitialized: Boolean = false
+        private set(value) {
+            field = value
+            notifyListener() // Notify listener when initialization state changes
+        }
     var initializationError: MsalException? = null
-        private set
+        private set(value) {
+            field = value
+            notifyListener() // Notify listener when initialization state changes
+        }
+
+    // Backing field for the account, updated only via async callbacks
+    private var _currentAccount: IAccount? = null
+    val currentAccount: IAccount?
+        get() = _currentAccount
+    // ---
 
     init {
+        Log.d("MicrosoftAuthManager", "Initializing...")
         initializeMsal()
     }
 
-    // --- Rest of the methods (initializeMsal, signIn, signOut, etc.) remain the same ---
-    // --- as in the previous version (microsoft_auth_manager_v5) ---
+    fun setAuthStateListener(listener: AuthStateListener?) {
+        this.authStateListener = listener
+        // Immediately notify with current state upon registration
+        notifyListener()
+    }
+
+    private fun notifyListener() {
+        // Ensure listener calls happen on the main thread if UI updates are involved
+        // For simplicity now, calling directly. Consider Handler or Coroutines later.
+        authStateListener?.onAuthStateChanged(isInitialized, _currentAccount, initializationError)
+        Log.d(
+            "MicrosoftAuthManager",
+            "Notified Listener: isInitialized=$isInitialized, account=${_currentAccount?.username}"
+        )
+    }
+
+    private fun updateAccountState(newAccount: IAccount?) {
+        if (_currentAccount != newAccount) {
+            _currentAccount = newAccount
+            notifyListener() // Notify listener when account state changes
+        }
+    }
+
     private fun initializeMsal() {
         PublicClientApplication.createSingleAccountPublicClientApplication(
-            context,
+            context.applicationContext, // Use application context
             configResId,
             object : IPublicClientApplication.ISingleAccountApplicationCreatedListener {
                 override fun onCreated(application: ISingleAccountPublicClientApplication) {
                     msalInstance = application
-                    isInitialized = true
                     initializationError = null
+                    isInitialized = true // This triggers the setter and notifyListener()
                     Log.d("MicrosoftAuthManager", "MSAL instance created successfully.")
+                    loadAccountAsync() // Load initial account state
                 }
-
                 override fun onError(exception: MsalException) {
                     msalInstance = null
-                    isInitialized = false
-                    initializationError = exception
-                    Log.e("MicrosoftAuthManager", "MSAL Init Error", exception)
+                    initializationError = exception // Triggers setter
+                    isInitialized = false // Triggers setter
+                    updateAccountState(null) // Clear account state
+                    Log.e("MicrosoftAuthManager", "MSAL Init Error.", exception)
                 }
             })
     }
 
+    private fun loadAccountAsync() {
+        if (!isInitialized || msalInstance == null) {
+            Log.w("MicrosoftAuthManager", "loadAccountAsync called before MSAL initialized.")
+            return
+        }
+        msalInstance?.getCurrentAccountAsync(object :
+            ISingleAccountPublicClientApplication.CurrentAccountCallback {
+            override fun onAccountLoaded(activeAccount: IAccount?) {
+                Log.d("MicrosoftAuthManager", "Async Account loaded: ${activeAccount?.username}")
+                updateAccountState(activeAccount) // Update state via helper
+            }
+
+            override fun onAccountChanged(priorAccount: IAccount?, newAccount: IAccount?) {
+                Log.d("MicrosoftAuthManager", "Async Account changed to: ${newAccount?.username}")
+                updateAccountState(newAccount) // Update state via helper
+            }
+
+            override fun onError(exception: MsalException) {
+                Log.e("MicrosoftAuthManager", "MSAL Load Account Async Error", exception)
+                updateAccountState(null) // Clear account state on error
+            }
+        })
+    }
+
     // --- Sign In ---
     fun signIn(activity: Activity, scopes: List<String>, callback: (SignInResult) -> Unit) {
-        if (msalInstance == null) {
-            Log.e("MicrosoftAuthManager", "signIn called before MSAL initialized.")
+        if (!isInitialized || msalInstance == null) {
+            Log.e("MicrosoftAuthManager", "signIn called before MSAL initialized or init failed.")
             callback(SignInResult.NotInitialized)
             return
         }
@@ -99,14 +161,13 @@ class MicrosoftAuthManager(
                     "MicrosoftAuthManager",
                     "Sign in success. Account: ${authenticationResult.account.username}"
                 )
+                updateAccountState(authenticationResult.account) // Update internal state
                 callback(SignInResult.Success(authenticationResult.account))
             }
-
             override fun onError(exception: MsalException) {
                 Log.e("MicrosoftAuthManager", "Sign In Error", exception)
                 callback(SignInResult.Error(exception))
             }
-
             override fun onCancel() {
                 Log.d("MicrosoftAuthManager", "Sign in cancelled by user.")
                 callback(SignInResult.Cancelled)
@@ -115,18 +176,17 @@ class MicrosoftAuthManager(
 
         val signInParameters = SignInParameters.builder()
             .withActivity(activity)
-            .withLoginHint(null)
+            .withLoginHint(null) // Can be null
             .withScopes(scopes)
             .withCallback(authCallback)
             .build()
-
         msalInstance?.signIn(signInParameters)
     }
 
     // --- Sign Out ---
     fun signOut(callback: (SignOutResult) -> Unit) {
-        if (msalInstance == null) {
-            Log.e("MicrosoftAuthManager", "signOut called before MSAL initialized.")
+        if (!isInitialized || msalInstance == null) {
+            Log.e("MicrosoftAuthManager", "signOut called before MSAL initialized or init failed.")
             callback(SignOutResult.NotInitialized)
             return
         }
@@ -134,9 +194,9 @@ class MicrosoftAuthManager(
         msalInstance?.signOut(object : ISingleAccountPublicClientApplication.SignOutCallback {
             override fun onSignOut() {
                 Log.d("MicrosoftAuthManager", "Sign out success.")
+                updateAccountState(null) // Update internal state
                 callback(SignOutResult.Success)
             }
-
             override fun onError(exception: MsalException) {
                 Log.e("MicrosoftAuthManager", "Sign Out Error", exception)
                 callback(SignOutResult.Error(exception))
@@ -146,10 +206,10 @@ class MicrosoftAuthManager(
 
     // --- Acquire Token Silently ---
     fun acquireTokenSilent(scopes: List<String>, callback: (AcquireTokenResult) -> Unit) {
-        val account = msalInstance?.currentAccount?.currentAccount
+        val account = _currentAccount // Read from the backing field
         val authority = msalInstance?.configuration?.defaultAuthority?.authorityURL?.toString()
 
-        if (msalInstance == null) {
+        if (!isInitialized || msalInstance == null) {
             Log.w("MicrosoftAuthManager", "acquireTokenSilent: MSAL instance not initialized.")
             callback(AcquireTokenResult.NotInitialized)
             return
@@ -192,7 +252,6 @@ class MicrosoftAuthManager(
                 }
             })
             .build()
-
         msalInstance?.acquireTokenSilentAsync(silentParameters)
     }
 
@@ -202,23 +261,25 @@ class MicrosoftAuthManager(
         scopes: List<String>,
         callback: (AcquireTokenResult) -> Unit
     ) {
-        if (msalInstance == null) {
-            Log.e("MicrosoftAuthManager", "acquireTokenInteractive called before MSAL initialized.")
+        if (!isInitialized || msalInstance == null) {
+            Log.e(
+                "MicrosoftAuthManager",
+                "acquireTokenInteractive called before MSAL initialized or init failed."
+            )
             callback(AcquireTokenResult.NotInitialized)
             return
         }
 
         val authCallback = object : AuthenticationCallback {
             override fun onSuccess(authenticationResult: IAuthenticationResult) {
+                updateAccountState(authenticationResult.account) // Update state if needed
                 Log.d("MicrosoftAuthManager", "acquireTokenInteractive success.")
                 callback(AcquireTokenResult.Success(authenticationResult))
             }
-
             override fun onError(exception: MsalException) {
                 Log.e("MicrosoftAuthManager", "acquireTokenInteractive Error", exception)
                 callback(AcquireTokenResult.Error(exception))
             }
-
             override fun onCancel() {
                 Log.d("MicrosoftAuthManager", "acquireTokenInteractive cancelled by user.")
                 callback(AcquireTokenResult.Cancelled)
@@ -230,11 +291,8 @@ class MicrosoftAuthManager(
             .withScopes(scopes)
             .withCallback(authCallback)
             .build()
-
         msalInstance?.acquireToken(interactiveParameters)
     }
-
-    // Removed isBrokerAvailable function
 
     // TODO: Integrate with AccountManager
 }
