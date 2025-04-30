@@ -9,10 +9,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material3.Badge
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -26,6 +29,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import net.melisma.mail.DataState
@@ -33,16 +37,15 @@ import net.melisma.mail.MailFolder
 import net.melisma.mail.MainScreenState
 import java.util.Locale
 
-// Navigation Drawer Content
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MailDrawerContent(
     state: MainScreenState,
     onFolderSelected: (MailFolder) -> Unit,
     onSignOutClick: () -> Unit,
-    onRefreshFolders: () -> Unit
+    onRefreshFolders: () -> Unit // Kept for potential future use
 ) {
-    // Folder sorting logic remains the same...
+    // Folder sorting logic
     val standardFolderOrder = listOf(
         "inbox", "drafts", "sent items", "spam", "trash", "archive", "all mail"
     )
@@ -65,7 +68,6 @@ fun MailDrawerContent(
                 if (!standardFoldersMap.containsKey(sortKey)) {
                     standardFoldersMap[sortKey] = folder
                 } else {
-                    println("Duplicate standard folder key found: $sortKey for ${folder.displayName}.")
                     otherFolders.add(folder)
                 }
             } else {
@@ -77,7 +79,7 @@ fun MailDrawerContent(
         sortedStandard + sortedOther
     }
 
-
+    // Drawer UI
     ModalDrawerSheet {
         Column(modifier = Modifier.fillMaxSize()) {
             // Account Header
@@ -101,13 +103,9 @@ fun MailDrawerContent(
             }
 
             // Folders Header
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
+            Row(modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)) {
                 Text(
                     "Folders",
                     style = MaterialTheme.typography.titleSmall,
@@ -117,10 +115,8 @@ fun MailDrawerContent(
 
             // Folders List Area
             Box(modifier = Modifier.weight(1f)) {
-                // --- Use state.folderDataState in the when expression ---
                 when (state.folderDataState) {
-                    // --- Check against DataState enum values ---
-                    DataState.LOADING -> {
+                    DataState.LOADING, DataState.INITIAL -> {
                         Box(
                             modifier = Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center
@@ -128,25 +124,38 @@ fun MailDrawerContent(
                             CircularProgressIndicator()
                         }
                     }
-
                     DataState.ERROR -> {
+                        // Display user-friendly error message without explicit button
                         Column(
                             modifier = Modifier
-                                .padding(16.dp)
-                                .fillMaxWidth(),
-                            horizontalAlignment = Alignment.CenterHorizontally
+                                .fillMaxSize()
+                                .padding(16.dp), // Fill space
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
                         ) {
-                            Text(
-                                "Error: ${state.folderError ?: "Unknown error"}",
-                                color = MaterialTheme.colorScheme.error
+                            Icon(
+                                imageVector = Icons.Filled.CloudOff,
+                                contentDescription = "Error",
+                                modifier = Modifier.size(48.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant // Less alarming color
                             )
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Button(onClick = onRefreshFolders) { Text("Retry Folders") }
+                            Spacer(modifier = Modifier.height(16.dp))
+                            Text(
+                                text = state.folderError
+                                    ?: "Couldn't load folders", // Use mapped error
+                                style = MaterialTheme.typography.titleMedium,
+                                textAlign = TextAlign.Center
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Check connection and pull down message list to refresh.", // Inform user
+                                style = MaterialTheme.typography.bodyMedium,
+                                textAlign = TextAlign.Center,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
-
                     DataState.SUCCESS -> {
-                        // Use the processed sortedFolders list
                         if (sortedFolders.isNotEmpty()) {
                             LazyColumn {
                                 items(sortedFolders, key = { it.id }) { folder ->
@@ -162,39 +171,36 @@ fun MailDrawerContent(
                                             )
                                         },
                                         badge = {
-                                            if (folder.unreadItemCount > 0) {
-                                                Badge { Text(folder.unreadItemCount.toString()) }
+                                            if (folder.unreadItemCount > 0) Badge {
+                                                Text(
+                                                    folder.unreadItemCount.toString()
+                                                )
                                             }
                                         }
                                     )
                                 }
                             }
                         } else {
-                            // Handle case where state.folders was non-null but resulted in empty sortedFolders
+                            // Empty state
                             Column(
                                 modifier = Modifier
-                                    .padding(16.dp)
-                                    .fillMaxWidth(),
+                                    .fillMaxWidth()
+                                    .padding(16.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally
                             ) {
-                                Text("No folders found.")
+                                Icon(
+                                    Icons.Filled.Folder,
+                                    contentDescription = "Empty",
+                                    modifier = Modifier.size(48.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                                 Spacer(modifier = Modifier.height(8.dp))
-                                Button(onClick = onRefreshFolders) { Text("Refresh Folders") }
+                                Text(
+                                    "No folders found.",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
-                        }
-                    }
-
-                    DataState.INITIAL -> { // Handle initial state before loading starts
-                        Column(
-                            modifier = Modifier
-                                .padding(16.dp)
-                                .fillMaxWidth(),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            // Text("Loading folders...") // Or show nothing until loading state
-                            // Or maybe show a placeholder/skeleton
-                            Spacer(modifier = Modifier.height(24.dp)) // Add some space
-                            CircularProgressIndicator() // Show loading indicator in initial state too
                         }
                     }
                 }
@@ -214,7 +220,5 @@ fun MailDrawerContent(
     }
 }
 
-// Imports assumed to be present for other used composables/types like Column, Text, remember, IAccount, etc.
-// Make sure Util.kt containing getIconForFolder is in the same package or imported.
-// Import TextOverflow if needed
-// import androidx.compose.ui.text.style.TextOverflow
+// Need Util.kt containing getIconForFolder in the same project.
+// Imports assumed present: androidx.compose.ui.text.style.TextOverflow, etc.

@@ -1,14 +1,20 @@
 package net.melisma.mail
 
 import android.app.Activity
+import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.os.Build
 import android.util.Log
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.microsoft.identity.client.IAccount
-import com.microsoft.identity.client.exception.MsalException
-import com.microsoft.identity.client.exception.MsalUiRequiredException // Correct import
+import com.microsoft.identity.client.exception.MsalClientException
+import com.microsoft.identity.client.exception.MsalException // Ensure this is imported if used for parameter types
+import com.microsoft.identity.client.exception.MsalServiceException
+import com.microsoft.identity.client.exception.MsalUiRequiredException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -24,56 +30,75 @@ import java.net.UnknownHostException
 
 // Represents the possible UI states for data lists
 enum class DataState {
-    INITIAL, // Not yet loaded
-    LOADING, // Actively loading (initial or refresh)
-    SUCCESS, // Loaded successfully (might be empty)
-    ERROR    // Failed to load
+    INITIAL, LOADING, SUCCESS, ERROR
 }
 
 @Immutable
 data class MainScreenState(
     // Auth State
     val isAuthInitialized: Boolean = false,
-    val authInitializationError: MsalException? = null,
+    val authInitializationError: MsalException? = null, // Keep raw error
+    val authErrorUserMessage: String? = null, // User-friendly message <--- Ensure this exists
     val currentAccount: IAccount? = null,
-    val isLoadingAuthAction: Boolean = false, // For Sign In/Out
+    val isLoadingAuthAction: Boolean = false,
 
     // Folder State
     val folderDataState: DataState = DataState.INITIAL,
     val folders: List<MailFolder>? = null,
-    val folderError: String? = null, // User-friendly error message
-    val selectedFolder: MailFolder? = null, // Track the selected folder
+    val folderError: String? = null,
+    val selectedFolder: MailFolder? = null,
 
     // Message State
     val messageDataState: DataState = DataState.INITIAL,
     val messages: List<Message>? = null,
-    val messageError: String? = null, // User-friendly error message
+    val messageError: String? = null,
 
     // General UI State
     val toastMessage: String? = null
 )
 
 class MainViewModel(
+    private val applicationContext: Context,
     private val microsoftAuthManager: MicrosoftAuthManager
 ) : ViewModel(), AuthStateListener {
 
     private val _uiState = MutableStateFlow(MainScreenState())
     val uiState: StateFlow<MainScreenState> = _uiState.asStateFlow()
 
+    // Constants for API calls
     private val mailReadScopes = listOf("User.Read", "Mail.Read")
     private val messageListSelectFields = listOf(
         "id", "receivedDateTime", "subject", "sender", "isRead", "bodyPreview"
     )
     private val messageListPageSize = 25
 
-    init {
-        microsoftAuthManager.setAuthStateListener(this)
-        Log.d(
-            "MainViewModel",
-            "ViewModel Initialized. Initial auth state: ${_uiState.value.isAuthInitialized}"
-        )
+    // Connectivity check helper
+    private fun isOnline(): Boolean {
+        val connectivityManager =
+            applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val network = connectivityManager.activeNetwork ?: return false
+            val activeNetwork = connectivityManager.getNetworkCapabilities(network) ?: return false
+            return when {
+                activeNetwork.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> true
+                activeNetwork.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> true
+                activeNetwork.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> true
+                else -> false
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            val networkInfo = connectivityManager.activeNetworkInfo ?: return false
+            @Suppress("DEPRECATION")
+            return networkInfo.isConnected
+        }
     }
 
+    init {
+        microsoftAuthManager.setAuthStateListener(this)
+        Log.d("MainViewModel", "ViewModel Initialized.")
+    }
+
+    // AuthStateListener Implementation
     override fun onAuthStateChanged(
         isInitialized: Boolean,
         account: IAccount?,
@@ -84,24 +109,32 @@ class MainViewModel(
             "onAuthStateChanged: init=$isInitialized, account=${account?.username}, error=$error"
         )
         val previousAccount = _uiState.value.currentAccount
-        _uiState.update {
-            it.copy(
+        _uiState.update { currentState ->
+            val resetNeeded = (account != previousAccount) || !isInitialized
+            val authUserError =
+                if (isInitialized && error != null) mapAuthExceptionToUserMessage(error) else null // Map error here
+            currentState.copy(
                 isAuthInitialized = isInitialized,
                 currentAccount = account,
                 authInitializationError = error,
-                folders = if (account != previousAccount) null else it.folders,
-                folderError = if (account != previousAccount) null else it.folderError,
-                selectedFolder = if (account != previousAccount) null else it.selectedFolder,
-                messages = if (account != previousAccount) null else it.messages,
-                messageError = if (account != previousAccount) null else it.messageError,
+                authErrorUserMessage = authUserError, // Assign mapped message
                 isLoadingAuthAction = false,
-                folderDataState = if (account != previousAccount) DataState.INITIAL else it.folderDataState,
-                messageDataState = if (account != previousAccount) DataState.INITIAL else it.messageDataState
+                // Reset dependent state if needed
+                folders = if (resetNeeded) null else currentState.folders,
+                folderError = if (resetNeeded) null else currentState.folderError,
+                selectedFolder = if (resetNeeded) null else currentState.selectedFolder,
+                messages = if (resetNeeded) null else currentState.messages,
+                messageError = if (resetNeeded) null else currentState.messageError,
+                folderDataState = if (resetNeeded) DataState.INITIAL else currentState.folderDataState,
+                messageDataState = if (resetNeeded) DataState.INITIAL else currentState.messageDataState
             )
         }
-        if (error != null) _uiState.update { it.copy(toastMessage = "Auth library init failed.") }
+        if (error != null && isInitialized) { // Show toast only if init finished with error
+            _uiState.update { it.copy(toastMessage = "Authentication Error: ${it.authErrorUserMessage ?: "Unknown error"}") }
+        }
     }
 
+    // Sign In/Out Actions
     fun signIn(activity: Activity) {
         if (!_uiState.value.isAuthInitialized) return _uiState.update { it.copy(toastMessage = "Auth Service not ready.") }
         _uiState.update { it.copy(isLoadingAuthAction = true) }
@@ -125,11 +158,18 @@ class MainViewModel(
     fun signOut(activity: Activity) {
         if (!_uiState.value.isAuthInitialized) return _uiState.update { it.copy(toastMessage = "Auth Service not ready.") }
         _uiState.update { it.copy(isLoadingAuthAction = true) }
+        _uiState.update {
+            it.copy( // Reset UI state immediately
+                folders = null, messages = null, selectedFolder = null,
+                folderError = null, messageError = null,
+                folderDataState = DataState.INITIAL, messageDataState = DataState.INITIAL
+            )
+        }
         microsoftAuthManager.signOut { result ->
-            _uiState.update { it.copy(isLoadingAuthAction = false) }
+            // isAuthLoading handled by onAuthStateChanged
             val message = when (result) {
                 is SignOutResult.Success -> "Signed Out"
-                is SignOutResult.Error -> "Sign Out Error: ${result.exception.message}"
+                is SignOutResult.Error -> "Sign Out Error: ${result.exception.message}" // Keep detailed for now
                 is SignOutResult.NotInitialized -> "Auth Service not ready."
             }
             _uiState.update { it.copy(toastMessage = message) }
@@ -141,20 +181,14 @@ class MainViewModel(
         }
     }
 
+    // Folder/Message Actions
     fun selectFolder(folder: MailFolder, activity: Activity) {
-        if (folder.id == _uiState.value.selectedFolder?.id && _uiState.value.messageDataState != DataState.INITIAL) {
-            Log.d("ViewModel", "Folder ${folder.displayName} already selected and not initial.")
-            // Maybe trigger refresh if user re-selects?
-            // refreshMessages(activity)
-            return
-        }
-        Log.d("ViewModel", "Selecting folder: ${folder.displayName} (ID: ${folder.id})")
+        if (folder.id == _uiState.value.selectedFolder?.id && _uiState.value.messageDataState != DataState.INITIAL) return
+        Log.d("ViewModel", "Selecting folder: ${folder.displayName}")
         _uiState.update {
             it.copy(
-                selectedFolder = folder,
-                messages = null,
-                messageError = null,
-                messageDataState = DataState.LOADING
+                selectedFolder = folder, messages = null, messageError = null,
+                messageDataState = DataState.LOADING // Set loading before fetch
             )
         }
         fetchMessagesInternal(folder.id, activity, isRefresh = false)
@@ -162,27 +196,38 @@ class MainViewModel(
 
     fun refreshFolders(activity: Activity) {
         if (_uiState.value.currentAccount == null || _uiState.value.folderDataState == DataState.LOADING) return
-        Log.d("ViewModel", "Refreshing folders...")
+        Log.d("ViewModel", "Requesting folder refresh...")
+        if (!isOnline()) {
+            val errorMsg = "No internet connection"
+            _uiState.update {
+                it.copy(
+                    folderDataState = DataState.ERROR,
+                    folderError = errorMsg,
+                    toastMessage = errorMsg
+                )
+            }
+            Log.w("ViewModel", "Folder refresh skipped: Offline")
+            return
+        }
         _uiState.update { it.copy(folderDataState = DataState.LOADING, folderError = null) }
         fetchFoldersInternal(activity) { foldersResult ->
             val currentSelectedFolderId = _uiState.value.selectedFolder?.id
             var newSelectedFolder: MailFolder? = null
-            val newFolders = foldersResult.getOrNull() // Get the potentially new list
+            val newFolders = foldersResult.getOrNull()
             if (currentSelectedFolderId != null && newFolders != null) {
                 newSelectedFolder = newFolders.find { it.id == currentSelectedFolderId }
             }
+            val finalError =
+                foldersResult.exceptionOrNull()?.let { e -> mapExceptionToUserMessage(e) }
             _uiState.update {
                 it.copy(
-                    // Update state based on the result
                     folderDataState = if (foldersResult.isSuccess) DataState.SUCCESS else DataState.ERROR,
-                    // Store the new list on success, otherwise keep the old one? Or clear? Let's update on success.
-                    folders = newFolders ?: it.folders,
-                    folderError = foldersResult.exceptionOrNull()
-                        ?.let { e -> mapExceptionToUserMessage(e) },
-                    // Update selected folder reference if found in new list, otherwise keep old
+                    folders = newFolders ?: it.folders, // Keep old list on error
+                    folderError = finalError,
                     selectedFolder = newSelectedFolder ?: it.selectedFolder
                 )
             }
+            if (finalError != null) _uiState.update { state -> state.copy(toastMessage = finalError) }
             Log.d("ViewModel", "Folder refresh complete. Success: ${foldersResult.isSuccess}")
         }
     }
@@ -190,35 +235,38 @@ class MainViewModel(
     fun refreshMessages(activity: Activity) {
         val folderId = _uiState.value.selectedFolder?.id
         if (folderId == null || _uiState.value.currentAccount == null || _uiState.value.messageDataState == DataState.LOADING) return
-        Log.d("ViewModel", "Refreshing messages for folder: $folderId")
+        Log.d("ViewModel", "Requesting message refresh for folder: $folderId")
+        if (!isOnline()) {
+            val errorMsg = "No internet connection"
+            _uiState.update {
+                it.copy(
+                    messageDataState = DataState.ERROR,
+                    messageError = errorMsg,
+                    toastMessage = errorMsg
+                )
+            }
+            Log.w("ViewModel", "Message refresh skipped: Offline")
+            return
+        }
         _uiState.update { it.copy(messageDataState = DataState.LOADING, messageError = null) }
         fetchMessagesInternal(folderId, activity, isRefresh = true)
     }
 
+    // Internal Fetch Logic
     private fun fetchFoldersInternal(
         activity: Activity?,
         onResult: (Result<List<MailFolder>>) -> Unit
     ) {
         if (_uiState.value.currentAccount == null) {
             val errorMsg = "Not signed in."
-            _uiState.update {
-                it.copy(
-                    folderDataState = DataState.ERROR,
-                    folderError = errorMsg
-                )
-            } // Update state immediately
+            _uiState.update { it.copy(folderDataState = DataState.ERROR, folderError = errorMsg) }
             onResult(Result.failure(IllegalStateException(errorMsg)))
             return
         }
         acquireTokenAndExecute(
             activity, mailReadScopes,
             onError = { userErrorMessage ->
-                _uiState.update {
-                    it.copy(
-                        folderDataState = DataState.ERROR,
-                        folderError = userErrorMessage
-                    )
-                }
+                // Don't update state here, let the caller (refreshFolders) do it based on Result
                 onResult(Result.failure(Exception(userErrorMessage)))
             }
         ) { accessToken ->
@@ -234,12 +282,10 @@ class MainViewModel(
         if (_uiState.value.currentAccount == null) {
             val errorMsg = "Not signed in."
             _uiState.update { it.copy(messageDataState = DataState.ERROR, messageError = errorMsg) }
+            if (isRefresh) _uiState.update { it.copy(toastMessage = errorMsg) }
             return
         }
-        // Ensure loading state is set (should already be done by callers selectFolder/refreshMessages)
-        if (_uiState.value.messageDataState != DataState.LOADING) {
-            _uiState.update { it.copy(messageDataState = DataState.LOADING, messageError = null) }
-        }
+        // State should already be LOADING if called from selectFolder or refreshMessages
 
         acquireTokenAndExecute(
             activity, mailReadScopes,
@@ -259,23 +305,20 @@ class MainViewModel(
                     "Got token, fetching messages for folder $folderId from Graph..."
                 )
                 val messagesResult = GraphApiHelper.getMessagesForFolder(
-                    accessToken = accessToken,
-                    folderId = folderId,
-                    selectFields = messageListSelectFields,
-                    top = messageListPageSize
+                    accessToken = accessToken, folderId = folderId,
+                    selectFields = messageListSelectFields, top = messageListPageSize
                 )
                 _uiState.update {
                     it.copy(
-                        // Update state based on result
                         messageDataState = if (messagesResult.isSuccess) DataState.SUCCESS else DataState.ERROR,
-                        messages = messagesResult.getOrNull(), // Set messages on success, null on error
+                        messages = messagesResult.getOrNull(),
                         messageError = messagesResult.exceptionOrNull()
                             ?.let { e -> mapExceptionToUserMessage(e) }
                     )
                 }
                 if (messagesResult.isFailure) Log.e(
                     "ViewModel",
-                    "Failed to get messages for $folderId",
+                    "Failed messages for $folderId",
                     messagesResult.exceptionOrNull()
                 )
                 if (isRefresh) _uiState.update {
@@ -288,33 +331,60 @@ class MainViewModel(
         }
     }
 
-    private fun mapExceptionToUserMessage(exception: Throwable): String {
+    // Error Mapping (Improved cause checking)
+    private fun mapExceptionToUserMessage(exception: Throwable?): String {
         Log.w(
             "ViewModel",
-            "Mapping exception: ${exception::class.java.simpleName} - ${exception.message}"
-        )
+            "Mapping exception: ${exception?.let { it::class.java.simpleName + " - " + it.message } ?: "null"}")
+        var currentException = exception
+        var depth = 0
+        while (currentException != null && depth < 10) { // Limit depth
+            when (currentException) {
+                is UnknownHostException -> return "No internet connection"
+                is IOException -> return "Couldn't reach server"
+            }
+            // Specific check for MSAL exceptions wrapping network issues
+            if (currentException is MsalClientException && currentException.errorCode == MsalClientException.IO_ERROR) {
+                return "Network error during authentication"
+            }
+            if (currentException is MsalServiceException && currentException.cause is IOException) {
+                return "Network error contacting authentication service"
+            }
+            currentException = currentException.cause
+            depth++
+        }
+        // Fallback mapping for original exception if no specific cause found
         return when (exception) {
-            is UnknownHostException -> "No internet connection"
-            is IOException -> "Couldn't reach server"
-            else -> exception.message?.takeIf { it.isNotEmpty() } ?: "An unknown error occurred"
+            is MsalUiRequiredException -> "Session expired. Please retry or sign out/in."
+            is MsalException -> exception.message ?: "Authentication error"
+            else -> exception?.message?.takeIf { it.isNotEmpty() } ?: "An unknown error occurred"
         }
     }
 
+    // Auth Error Mapping (now mostly relies on the general mapper)
     private fun mapAuthExceptionToUserMessage(exception: MsalException): String {
+        val generalMessage = mapExceptionToUserMessage(exception)
+        // Return general mapping if it successfully identified a network issue or provided a message
+        if (generalMessage != "An unknown error occurred" || generalMessage == exception.message) {
+            return generalMessage
+        }
+        // Fallback for specific non-network Auth logical errors
         Log.w(
             "ViewModel",
-            "Mapping auth exception: ${exception::class.java.simpleName} - ${exception.errorCode} - ${exception.message}"
+            "Mapping specific auth exception (fallback): ${exception::class.java.simpleName} - ${exception.errorCode}"
         )
         return when (exception) {
-            is MsalUiRequiredException -> "Session expired. Please retry action or sign out/in."
+            is MsalUiRequiredException -> "Session expired. Please retry or sign out/in."
+            // Add other specific non-network MSAL error codes here if necessary
             else -> exception.message?.takeIf { it.isNotEmpty() } ?: "Authentication failed"
         }
     }
 
+    // Token Acquisition (uses updated error mapping)
     private fun acquireTokenAndExecute(
         activity: Activity?,
         scopes: List<String>,
-        onError: ((String) -> Unit)? = { errorMessage -> _uiState.update { it.copy(toastMessage = errorMessage) } },
+        onError: ((String) -> Unit)?, // The lambda to call with the user-friendly error message
         onSuccess: (String) -> Unit
     ) {
         val currentAccount = _uiState.value.currentAccount
@@ -325,40 +395,51 @@ class MainViewModel(
         microsoftAuthManager.acquireTokenSilent(scopes) { tokenResult ->
             when (tokenResult) {
                 is AcquireTokenResult.Success -> onSuccess(tokenResult.result.accessToken)
-                is AcquireTokenResult.UiRequired -> {
-                    Log.w("ViewModel", "Silent token acquisition failed, UI interaction required.")
-                    onError?.invoke("Session expired. Please retry action.")
-                }
                 is AcquireTokenResult.Error -> {
-                    val userMessage = mapAuthExceptionToUserMessage(tokenResult.exception)
-                    onError?.invoke("Auth Error: $userMessage")
+                    val userMessage =
+                        mapAuthExceptionToUserMessage(tokenResult.exception) // Map first
+                    onError?.invoke(userMessage) // Then call onError with mapped message
                 }
-                is AcquireTokenResult.Cancelled -> onError?.invoke("Token request cancelled.")
-                is AcquireTokenResult.NotInitialized -> onError?.invoke("Auth not ready.")
-                is AcquireTokenResult.NoAccount -> onError?.invoke("Please sign in.")
+
+                is AcquireTokenResult.UiRequired -> {
+                    val userMessage = mapAuthExceptionToUserMessage(
+                        MsalUiRequiredException(
+                            "",
+                            ""
+                        )
+                    ) // Map the type
+                    onError?.invoke(userMessage)
+                }
+
+                is AcquireTokenResult.Cancelled -> onError?.invoke("Action cancelled.")
+                is AcquireTokenResult.NotInitialized -> onError?.invoke("Auth service not ready.")
+                is AcquireTokenResult.NoAccount -> onError?.invoke("Not signed in.")
             }
         }
     }
 
+    // Toast Management
     fun toastMessageShown() {
         _uiState.update { it.copy(toastMessage = null) }
     }
 
+    // Cleanup
     override fun onCleared() {
         super.onCleared()
         microsoftAuthManager.setAuthStateListener(null)
         Log.d("MainViewModel", "ViewModel Cleared.")
     }
 
-    // Companion object for Factory
+    // Factory
     companion object {
         fun provideFactory(
+            appContext: Context, // Expect Application Context
             authManager: MicrosoftAuthManager,
         ): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
                 if (modelClass.isAssignableFrom(MainViewModel::class.java)) {
-                    return MainViewModel(authManager) as T
+                    return MainViewModel(appContext, authManager) as T
                 }
                 throw IllegalArgumentException("Unknown ViewModel class")
             }

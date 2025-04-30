@@ -1,7 +1,5 @@
 package net.melisma.mail
 
-// Ensure this import exists if needed elsewhere, but not for @SuppressLint on MessageListContent now
-// import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
 import android.os.Bundle
@@ -12,8 +10,15 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -29,15 +34,18 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.microsoft.identity.client.exception.MsalException
 import kotlinx.coroutines.launch
 import net.melisma.feature_auth.MicrosoftAuthManager
 import net.melisma.mail.ui.MailDrawerContent
 import net.melisma.mail.ui.MailTopAppBar
 import net.melisma.mail.ui.MessageListContent
-import net.melisma.mail.ui.SignedOutContent
 import net.melisma.mail.ui.theme.MailTheme
+
+// SignedOutContent is now defined within this file
 
 class MainActivity : ComponentActivity() {
 
@@ -49,7 +57,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private val viewModel: MainViewModel by viewModels {
-        MainViewModel.provideFactory(microsoftAuthManager)
+        MainViewModel.provideFactory(applicationContext, microsoftAuthManager)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -79,17 +87,17 @@ fun MainApp(viewModel: MainViewModel, activity: Activity) {
         }
     }
 
-    // Initial Load Logic (with Smart Cast Fixes)
+    // Initial Load Logic
     LaunchedEffect(state.currentAccount, state.folderDataState) {
-        val account = state.currentAccount // Local val for smart cast
+        val account = state.currentAccount
         if (account != null && state.folderDataState == DataState.INITIAL) {
             Log.d("MainApp", "Triggering initial folder fetch.")
             viewModel.refreshFolders(activity)
         }
     }
     LaunchedEffect(state.folders, state.selectedFolder, state.folderDataState) {
-        val currentFolders = state.folders // Local val for smart cast
-        val currentSelectedFolder = state.selectedFolder // Local val for smart cast
+        val currentFolders = state.folders
+        val currentSelectedFolder = state.selectedFolder
         if (state.folderDataState == DataState.SUCCESS && !currentFolders.isNullOrEmpty() && currentSelectedFolder == null) {
             val inboxFolder =
                 currentFolders.find { it.displayName.equals("Inbox", ignoreCase = true) }
@@ -98,7 +106,7 @@ fun MainApp(viewModel: MainViewModel, activity: Activity) {
                 viewModel.selectFolder(inboxFolder, activity)
             } else {
                 Log.w("MainApp", "Folders loaded, but Inbox not found. Selecting first folder.")
-                if (currentFolders.isNotEmpty()) { // Use local val
+                if (currentFolders.isNotEmpty()) {
                     viewModel.selectFolder(currentFolders.first(), activity)
                 }
             }
@@ -126,34 +134,30 @@ fun MainApp(viewModel: MainViewModel, activity: Activity) {
     ) {
         Scaffold(
             topBar = {
-                // Use local variable for selectedFolder in title logic
                 val currentSelectedFolder = state.selectedFolder
                 MailTopAppBar(
                     title = when {
-                        currentSelectedFolder == null && state.folderDataState == DataState.LOADING -> "Loading Folders..."
-                        currentSelectedFolder == null -> "Mail" // Default before selection
-                        state.messageDataState == DataState.LOADING && state.messages == null -> "Loading..." // Initial message load
-                        else -> currentSelectedFolder.displayName // Use local variable
+                        state.folderDataState == DataState.LOADING -> "Loading Folders..."
+                        state.folderDataState == DataState.ERROR -> "Mail"
+                        currentSelectedFolder == null -> "Mail"
+                        state.messageDataState == DataState.LOADING && state.messages == null -> "Loading..."
+                        else -> currentSelectedFolder.displayName
                     },
                     account = state.currentAccount,
                     onNavigationClick = { scope.launch { drawerState.open() } }
                 )
+            },
+            floatingActionButton = {
+                // Placeholder for Compose FAB
             }
-            // floatingActionButton = { ... }
         ) { innerPadding ->
             Box(modifier = Modifier.padding(innerPadding)) {
-                val account = state.currentAccount
-                when {
-                    account == null && !state.isLoadingAuthAction && state.isAuthInitialized -> {
-                        SignedOutContent(
-                            isAuthInitialized = state.isAuthInitialized,
-                            authInitializationError = state.authInitializationError,
-                            onSignInClick = { viewModel.signIn(activity) },
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
+                val account = state.currentAccount // Use local val for checks
 
-                    state.isLoadingAuthAction || (!state.isAuthInitialized && state.authInitializationError == null && account == null) -> {
+                // Restructured when block
+                when {
+                    // Handle Loading States First
+                    state.isLoadingAuthAction || (!state.isAuthInitialized && state.authInitializationError == null) -> {
                         Box(
                             modifier = Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center
@@ -167,12 +171,29 @@ fun MainApp(viewModel: MainViewModel, activity: Activity) {
                             }
                         }
                     }
-
+                    // Handle Auth Init Error State
+                    state.authErrorUserMessage != null && !state.isAuthInitialized -> { // Show auth init error only if not initialized successfully
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(16.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                "Authentication Error:\n${state.authErrorUserMessage}",
+                                color = MaterialTheme.colorScheme.error,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
+                    // Handle Signed In State
                     account != null -> {
                         MessageListContent(
-                            dataState = state.messageDataState,
+                            folderDataState = state.folderDataState,
+                            folderError = state.folderError,
+                            messageDataState = state.messageDataState,
                             messages = state.messages,
-                            error = state.messageError,
+                            messageError = state.messageError,
                             onRefresh = { viewModel.refreshMessages(activity) },
                             onMessageClick = { messageId ->
                                 showToast(
@@ -182,21 +203,20 @@ fun MainApp(viewModel: MainViewModel, activity: Activity) {
                             }
                         )
                     }
-                    state.authInitializationError != null -> {
-                        Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                "Error initializing authentication: ${state.authInitializationError?.message}",
-                                color = MaterialTheme.colorScheme.error
-                            )
-                        }
+                    // Handle Signed Out State (The only remaining possibility is account == null and no errors/loading)
+                    else -> {
+                        SignedOutContent(
+                            isAuthInitialized = state.isAuthInitialized, // Should be true here if no error
+                            authInitializationError = state.authInitializationError, // Likely null here
+                            authErrorUserMessage = state.authErrorUserMessage, // Likely null here
+                            onSignInClick = { viewModel.signIn(activity) },
+                            modifier = Modifier.fillMaxSize()
+                        )
                     }
-                }
-            }
-        }
-    }
+                } // End when
+            } // End Box
+        } // End Scaffold
+    } // End ModalNavigationDrawer
 }
 
 
@@ -213,4 +233,57 @@ private fun showToast(context: Context, message: String?) {
     Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
 }
 
-// --- Previews --- (Should be in individual UI files)
+// SignedOutContent defined here needs MsalException import
+@Composable
+fun SignedOutContent(
+    isAuthInitialized: Boolean,
+    authInitializationError: MsalException?, // Raw error type
+    authErrorUserMessage: String?, // Mapped user-friendly message
+    onSignInClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Box(modifier = modifier, contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text("Welcome to Melisma Mail")
+            Spacer(modifier = Modifier.height(16.dp))
+            Button(
+                onClick = onSignInClick,
+                // Only enable if initialized AND there isn't a persistent auth init error shown
+                enabled = isAuthInitialized // && authErrorUserMessage == null
+            ) {
+                Text("Sign In with Microsoft")
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Show initialization status or error
+            if (!isAuthInitialized && authInitializationError == null) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                    Text("(Initializing Auth...)", style = MaterialTheme.typography.bodySmall)
+                }
+                // Use the mapped user message if available for auth init errors
+            } else if (authErrorUserMessage != null && !isAuthInitialized) { // Check !isAuthInitialized to distinguish from transient errors after sign-in
+                Text(
+                    "(Authentication Failed: $authErrorUserMessage)",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+            }
+            // Fallback to raw error message only if mapping failed and not initialized
+            else if (authInitializationError != null && !isAuthInitialized) {
+                Text(
+                    "(Authentication Failed: ${authInitializationError.message ?: "Unknown error"})",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+            }
+        }
+    }
+}
+
+// --- Previews --- (Should be in respective UI files)
