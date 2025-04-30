@@ -1,3 +1,26 @@
 <resources>
     <string name="app_name">Mail</string>
+
+    <string name="unknown_user">Unknown User</string>
+    <string name="sign_out">Sign Out</string>
+    <string name="error_unknown_occurred">An unknown error occurred.</string>
+
+    <string name="folders_header">Folders</string>
+    <string name="cd_error_loading_folders">Error loading folders icon</string>
+    <string name="error_could_not_load_folders">Couldn\'t load folders</string>
+    <string name="error_check_connection_refresh">Check connection and pull down message list to refresh.</string>
+    <string name="cd_no_folders_found">No folders found icon</string>
+    <string name="no_folders_found">No folders found.</string>
+
+    <string name="loading_folders">Loading Folders…</string>
+    <string name="error_loading_folders_title">Error Loading Folders</string>
+    <string name="error_could_not_load_folder_list">Could not load folder list.</string>
+    <string name="cd_select_folder_prompt">Select folder prompt icon</string>
+    <string name="select_a_folder">Select a folder</string>
+    <string name="cd_error_loading_messages">Error loading messages icon</string>
+    <string name="error_loading_messages_title">Error Loading Messages</string>
+    <string name="cd_no_messages">No messages icon</string>
+    <string name="no_messages_title">No Messages</string>
+    <string name="folder_is_empty">This folder is empty.</string>
+
 </resources>

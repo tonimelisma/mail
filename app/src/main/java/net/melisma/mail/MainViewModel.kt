@@ -4,7 +4,6 @@ import android.app.Activity
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
-import android.os.Build
 import android.util.Log
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
@@ -12,7 +11,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.microsoft.identity.client.IAccount
 import com.microsoft.identity.client.exception.MsalClientException
-import com.microsoft.identity.client.exception.MsalException // Ensure this is imported if used for parameter types
+import com.microsoft.identity.client.exception.MsalException
 import com.microsoft.identity.client.exception.MsalServiceException
 import com.microsoft.identity.client.exception.MsalUiRequiredException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -72,24 +71,19 @@ class MainViewModel(
     )
     private val messageListPageSize = 25
 
-    // Connectivity check helper
+    // Connectivity check helper - Simplified as minSdk >= 23 (Android M)
     private fun isOnline(): Boolean {
         val connectivityManager =
             applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            val network = connectivityManager.activeNetwork ?: return false
-            val activeNetwork = connectivityManager.getNetworkCapabilities(network) ?: return false
-            return when {
-                activeNetwork.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> true
-                activeNetwork.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> true
-                activeNetwork.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> true
-                else -> false
-            }
-        } else {
-            @Suppress("DEPRECATION")
-            val networkInfo = connectivityManager.activeNetworkInfo ?: return false
-            @Suppress("DEPRECATION")
-            return networkInfo.isConnected
+        // Since minSdk is 24, we only need the modern approach
+        val network = connectivityManager.activeNetwork ?: return false
+        val activeNetwork = connectivityManager.getNetworkCapabilities(network) ?: return false
+        return when {
+            activeNetwork.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> true
+            activeNetwork.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> true
+            activeNetwork.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> true
+            // Consider adding TRANSPORT_VPN, TRANSPORT_BLUETOOTH depending on needs
+            else -> false
         }
     }
 
@@ -342,6 +336,7 @@ class MainViewModel(
             when (currentException) {
                 is UnknownHostException -> return "No internet connection"
                 is IOException -> return "Couldn't reach server"
+                // Add other specific network-related exceptions if needed
             }
             // Specific check for MSAL exceptions wrapping network issues
             if (currentException is MsalClientException && currentException.errorCode == MsalClientException.IO_ERROR) {
@@ -350,35 +345,52 @@ class MainViewModel(
             if (currentException is MsalServiceException && currentException.cause is IOException) {
                 return "Network error contacting authentication service"
             }
+            // Unwrap the cause for the next iteration
             currentException = currentException.cause
             depth++
         }
         // Fallback mapping for original exception if no specific cause found
         return when (exception) {
             is MsalUiRequiredException -> "Session expired. Please retry or sign out/in."
-            is MsalException -> exception.message ?: "Authentication error"
+            is MsalException -> exception.message
+                ?: "Authentication error" // Use MSAL message if available
             else -> exception?.message?.takeIf { it.isNotEmpty() } ?: "An unknown error occurred"
         }
     }
 
+
     // Auth Error Mapping (now mostly relies on the general mapper)
     private fun mapAuthExceptionToUserMessage(exception: MsalException): String {
         val generalMessage = mapExceptionToUserMessage(exception)
-        // Return general mapping if it successfully identified a network issue or provided a message
-        if (generalMessage != "An unknown error occurred" || generalMessage == exception.message) {
+        // Return general mapping if it successfully identified a network issue or provided a message different from default
+        if (generalMessage != "An unknown error occurred" && generalMessage != "Authentication error") {
             return generalMessage
         }
-        // Fallback for specific non-network Auth logical errors
+        // Fallback for specific non-network Auth logical errors not covered by the general mapper
         Log.w(
             "ViewModel",
             "Mapping specific auth exception (fallback): ${exception::class.java.simpleName} - ${exception.errorCode}"
         )
         return when (exception) {
             is MsalUiRequiredException -> "Session expired. Please retry or sign out/in."
-            // Add other specific non-network MSAL error codes here if necessary
-            else -> exception.message?.takeIf { it.isNotEmpty() } ?: "Authentication failed"
+            // Add other specific non-network MSAL error codes here if necessary based on logs/testing
+            is MsalClientException -> when (exception.errorCode) {
+                // Example: Add specific client error codes if needed
+                // MsalClientException.NO_CURRENT_ACCOUNT -> "No active account found. Please sign in."
+                else -> exception.message ?: "Authentication client error"
+            }
+
+            is MsalServiceException -> when (exception.errorCode) {
+                // Example: Add specific service error codes if needed
+                // "invalid_grant", "interaction_required" are often covered by MsalUiRequiredException
+                else -> exception.message ?: "Authentication service error"
+            }
+
+            else -> exception.message?.takeIf { it.isNotEmpty() }
+                ?: "Authentication failed" // Default auth fallback
         }
     }
+
 
     // Token Acquisition (uses updated error mapping)
     private fun acquireTokenAndExecute(
@@ -398,25 +410,32 @@ class MainViewModel(
                 is AcquireTokenResult.Error -> {
                     val userMessage =
                         mapAuthExceptionToUserMessage(tokenResult.exception) // Map first
+                    Log.e(
+                        "ViewModel",
+                        "acquireTokenSilent failed",
+                        tokenResult.exception
+                    ) // Log raw error
                     onError?.invoke(userMessage) // Then call onError with mapped message
                 }
-
                 is AcquireTokenResult.UiRequired -> {
+                    // Map MsalUiRequiredException specifically for a clearer user message if needed
                     val userMessage = mapAuthExceptionToUserMessage(
-                        MsalUiRequiredException(
-                            "",
-                            ""
+                        MsalUiRequiredException( // Create a representative exception for mapping
+                            MsalUiRequiredException.NO_ACCOUNT_FOUND, // Example error code
+                            "UI interaction required."
                         )
-                    ) // Map the type
+                    )
+                    Log.w("ViewModel", "acquireTokenSilent requires UI interaction.")
                     onError?.invoke(userMessage)
                 }
 
-                is AcquireTokenResult.Cancelled -> onError?.invoke("Action cancelled.")
+                is AcquireTokenResult.Cancelled -> onError?.invoke("Action cancelled.") // Should ideally not happen in silent call
                 is AcquireTokenResult.NotInitialized -> onError?.invoke("Auth service not ready.")
                 is AcquireTokenResult.NoAccount -> onError?.invoke("Not signed in.")
             }
         }
     }
+
 
     // Toast Management
     fun toastMessageShown() {

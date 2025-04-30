@@ -10,17 +10,20 @@ android {
 
     defaultConfig {
         applicationId = "net.melisma.mail"
-        minSdk = 24
+        minSdk = 26 // Updated minSdk
         targetSdk = 35
         versionCode = 1
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        vectorDrawables {
+            useSupportLibrary = true
+        }
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = false // Consider enabling for actual releases
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -28,18 +31,23 @@ android {
         }
     }
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions {
-        jvmTarget = "11"
+        jvmTarget = "17"
     }
     buildFeatures {
         compose = true
     }
-    // composeOptions {
-    //     kotlinCompilerExtensionVersion = "..." // Specify if needed
-    // }
+    composeOptions {
+        kotlinCompilerExtensionVersion = libs.versions.composeCompiler.get() // Use alias from TOML
+    }
+    packaging {
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+    }
 }
 
 dependencies {
@@ -53,16 +61,12 @@ dependencies {
     implementation(libs.androidx.ui.graphics)
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
+    implementation(libs.androidx.material.icons.extended) // Added back
 
     // --- ViewModel and Lifecycle Compose Dependencies ---
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7") // Use appropriate version
-    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")  // Use appropriate version
+    implementation(libs.androidx.lifecycle.viewmodel.compose) // Use alias from TOML
+    implementation(libs.androidx.lifecycle.runtime.compose)  // Use alias from TOML
     // --- End ViewModel Dependencies ---
-
-    // --- Material Icons Dependencies ---
-    implementation("androidx.compose.material:material-icons-core:1.7.8") // Use latest stable version
-    implementation("androidx.compose.material:material-icons-extended:1.7.8") // Use latest stable version
-    // --- End Material Icons Dependencies ---
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

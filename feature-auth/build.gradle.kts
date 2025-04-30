@@ -5,10 +5,10 @@ plugins {
 
 android {
     namespace = "net.melisma.feature_auth"
-    compileSdk = 35 // Or your target SDK
+    compileSdk = 35
 
     defaultConfig {
-        minSdk = 24
+        minSdk = 26 // Updated minSdk
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles("consumer-rules.pro")
@@ -24,11 +24,11 @@ android {
         }
     }
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions {
-        jvmTarget = "11"
+        jvmTarget = "17"
     }
 }
 
@@ -36,7 +36,6 @@ dependencies {
 
     // --- MSAL Dependency ---
     api(libs.microsoft.msal)
-    implementation(libs.microsoft.display.mask)
 
     // Core Kotlin extensions
     implementation(libs.androidx.core.ktx)

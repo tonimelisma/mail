@@ -1,8 +1,6 @@
 package net.melisma.mail.ui
 
-// No @SuppressLint import needed here anymore
 // Import M3 Pull To Refresh correctly
-// Other necessary imports
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,10 +26,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource // Import for string resources
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import net.melisma.mail.DataState
 import net.melisma.mail.Message
+import net.melisma.mail.R // Import R class for resources
 
 @OptIn(ExperimentalMaterial3Api::class) // Required for M3 pull-refresh
 @Composable
@@ -46,31 +46,31 @@ fun MessageListContent(
 ) {
     // isRefreshing is true only if message state is LOADING *and* folder state is SUCCESS
     val isRefreshing = messageDataState == DataState.LOADING && folderDataState == DataState.SUCCESS
-    // Note: PullToRefreshBox doesn't use rememberPullToRefreshState by default.
-    // It manages state internally based on isRefreshing and the drag gesture.
-    // We only need the state explicitly if customizing the indicator significantly.
 
     PullToRefreshBox(
         isRefreshing = isRefreshing,
-        onRefresh = onRefresh, // ViewModel handles connectivity check now
+        onRefresh = onRefresh,
         modifier = Modifier.fillMaxSize()
-        // Default indicator is fine for now
     ) {
 
         // Check FOLDER state first
         when (folderDataState) {
             DataState.INITIAL, DataState.LOADING -> {
                 FullScreenMessage(
-                    icon = null,
-                    title = "Loading Folders...",
-                    content = { CircularProgressIndicator() })
+                    icon = null, // No icon needed for generic loading state
+                    iconContentDescription = null, // Pass null as no icon is shown
+                    title = stringResource(R.string.loading_folders), // Use string resource
+                    content = { CircularProgressIndicator() }
+                )
             }
 
             DataState.ERROR -> {
                 FullScreenMessage(
                     icon = Icons.Filled.Folder,
-                    title = "Error Loading Folders",
-                    message = folderError ?: "Could not load folder list."
+                    iconContentDescription = stringResource(R.string.cd_error_loading_folders), // Content description for icon
+                    title = stringResource(R.string.error_loading_folders_title), // Use string resource
+                    message = folderError
+                        ?: stringResource(R.string.error_could_not_load_folder_list) // Use string resource
                 )
             }
 
@@ -78,7 +78,11 @@ fun MessageListContent(
                 // Folders loaded, now check MESSAGE state
                 when (messageDataState) {
                     DataState.INITIAL -> {
-                        FullScreenMessage(icon = null, title = "Select a folder")
+                        FullScreenMessage(
+                            icon = Icons.Filled.Folder,
+                            iconContentDescription = stringResource(R.string.cd_select_folder_prompt),
+                            title = stringResource(R.string.select_a_folder)
+                        )
                     }
 
                     DataState.LOADING -> {
@@ -86,15 +90,18 @@ fun MessageListContent(
                         if (messages != null) {
                             MessageListSuccessContent(messages, onMessageClick)
                         } else {
-                            Spacer(Modifier.fillMaxSize()) // Blank content area, indicator shows at top
+                            // Content area is intentionally blank while loading indicator shows at top via PullToRefreshBox state
+                            Spacer(Modifier.fillMaxSize())
                         }
                     }
 
                     DataState.ERROR -> {
                         FullScreenMessage(
                             icon = Icons.Filled.CloudOff,
-                            title = "Error Loading Messages",
-                            message = messageError ?: "An unknown error occurred."
+                            iconContentDescription = stringResource(R.string.cd_error_loading_messages), // Content description for icon
+                            title = stringResource(R.string.error_loading_messages_title), // Use string resource
+                            message = messageError
+                                ?: stringResource(R.string.error_unknown_occurred) // Use string resource
                             // Retry is via pull gesture
                         )
                     }
@@ -103,8 +110,9 @@ fun MessageListContent(
                         if (messages.isNullOrEmpty()) {
                             FullScreenMessage(
                                 icon = Icons.Filled.Email,
-                                title = "No Messages",
-                                message = "This folder is empty."
+                                iconContentDescription = stringResource(R.string.cd_no_messages), // Content description for icon
+                                title = stringResource(R.string.no_messages_title), // Use string resource
+                                message = stringResource(R.string.folder_is_empty) // Use string resource
                             )
                         } else {
                             MessageListSuccessContent(messages, onMessageClick)
@@ -126,7 +134,7 @@ private fun MessageListSuccessContent(
         items(messages, key = { it.id }) { message ->
             MessageListItem(
                 message = message,
-                onClick = { onMessageClick(message.id) }) // Assumes MessageListItem is defined/imported
+                onClick = { onMessageClick(message.id) })
             HorizontalDivider(thickness = 0.5.dp)
         }
     }
@@ -136,6 +144,7 @@ private fun MessageListSuccessContent(
 @Composable
 private fun FullScreenMessage(
     icon: ImageVector?,
+    iconContentDescription: String?, // Added parameter for icon description
     title: String,
     message: String? = null,
     content: (@Composable () -> Unit)? = null
@@ -152,7 +161,8 @@ private fun FullScreenMessage(
         ) {
             if (icon != null) {
                 Icon(
-                    imageVector = icon, contentDescription = title,
+                    imageVector = icon,
+                    contentDescription = iconContentDescription, // Use passed content description
                     modifier = Modifier.size(64.dp),
                     tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -179,7 +189,3 @@ private fun FullScreenMessage(
         }
     }
 }
-
-// --- Imports assumed present for MessageListItem ---
-// import net.melisma.mail.ui.MessageListItem
-// import androidx.compose.material3.HorizontalDivider

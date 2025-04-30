@@ -29,12 +29,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource // Import for string resources
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import net.melisma.mail.DataState
 import net.melisma.mail.MailFolder
 import net.melisma.mail.MainScreenState
+import net.melisma.mail.R // Import R class for resources
 import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -68,6 +70,7 @@ fun MailDrawerContent(
                 if (!standardFoldersMap.containsKey(sortKey)) {
                     standardFoldersMap[sortKey] = folder
                 } else {
+                    // Handle potential duplicates (e.g., if API returns "Archive" and "archive")
                     otherFolders.add(folder)
                 }
             } else {
@@ -93,7 +96,8 @@ fun MailDrawerContent(
                     )
                 ) {
                     Text(
-                        text = state.currentAccount.username ?: "Unknown User",
+                        text = state.currentAccount.username
+                            ?: stringResource(R.string.unknown_user), // Use string resource
                         style = MaterialTheme.typography.titleMedium,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
@@ -107,7 +111,7 @@ fun MailDrawerContent(
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp)) {
                 Text(
-                    "Folders",
+                    stringResource(R.string.folders_header), // Use string resource
                     style = MaterialTheme.typography.titleSmall,
                     modifier = Modifier.padding(bottom = 8.dp)
                 )
@@ -125,30 +129,29 @@ fun MailDrawerContent(
                         }
                     }
                     DataState.ERROR -> {
-                        // Display user-friendly error message without explicit button
                         Column(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .padding(16.dp), // Fill space
+                                .padding(16.dp),
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.Center
                         ) {
                             Icon(
                                 imageVector = Icons.Filled.CloudOff,
-                                contentDescription = "Error",
+                                contentDescription = stringResource(R.string.cd_error_loading_folders), // Added contentDescription
                                 modifier = Modifier.size(48.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant // Less alarming color
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                             Spacer(modifier = Modifier.height(16.dp))
                             Text(
                                 text = state.folderError
-                                    ?: "Couldn't load folders", // Use mapped error
+                                    ?: stringResource(R.string.error_could_not_load_folders), // Use string resource
                                 style = MaterialTheme.typography.titleMedium,
                                 textAlign = TextAlign.Center
                             )
                             Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = "Check connection and pull down message list to refresh.", // Inform user
+                                text = stringResource(R.string.error_check_connection_refresh), // Use string resource
                                 style = MaterialTheme.typography.bodyMedium,
                                 textAlign = TextAlign.Center,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -167,14 +170,13 @@ fun MailDrawerContent(
                                         icon = {
                                             Icon(
                                                 getIconForFolder(folder.displayName),
-                                                contentDescription = folder.displayName
+                                                contentDescription = folder.displayName // Dynamic description is okay here
                                             )
                                         },
                                         badge = {
                                             if (folder.unreadItemCount > 0) Badge {
-                                                Text(
-                                                    folder.unreadItemCount.toString()
-                                                )
+                                                // Consider accessibility for badge content if complex
+                                                Text(folder.unreadItemCount.toString())
                                             }
                                         }
                                     )
@@ -190,13 +192,13 @@ fun MailDrawerContent(
                             ) {
                                 Icon(
                                     Icons.Filled.Folder,
-                                    contentDescription = "Empty",
+                                    contentDescription = stringResource(R.string.cd_no_folders_found), // Added contentDescription
                                     modifier = Modifier.size(48.dp),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                                 Spacer(modifier = Modifier.height(8.dp))
                                 Text(
-                                    "No folders found.",
+                                    stringResource(R.string.no_folders_found), // Use string resource
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -210,15 +212,13 @@ fun MailDrawerContent(
             if (state.currentAccount != null) {
                 HorizontalDivider(modifier = Modifier.padding(top = 8.dp))
                 NavigationDrawerItem(
-                    label = { Text("Sign Out") },
+                    label = { Text(stringResource(R.string.sign_out)) }, // Use string resource
                     selected = false,
                     onClick = onSignOutClick,
                     modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                    // Optional: Add Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = stringResource(R.string.sign_out))
                 )
             }
         }
     }
 }
-
-// Need Util.kt containing getIconForFolder in the same project.
-// Imports assumed present: androidx.compose.ui.text.style.TextOverflow, etc.

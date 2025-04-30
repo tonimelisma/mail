@@ -14,12 +14,11 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.Mail"
-        tools:targetApi="31">
+        tools:targetApi="35">
 
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:label="@string/app_name"
             android:theme="@style/Theme.Mail">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -35,8 +34,8 @@
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data
-                    android:path="/xiqLcVCeut7uni40h117Xcb0hQg="
                     android:host="net.melisma.mail"
+                    android:path="/xiqLcVCeut7uni40h117Xcb0hQg="
                     android:scheme="msauth" />
             </intent-filter>
         </activity>
