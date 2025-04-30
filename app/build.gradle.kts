@@ -37,9 +37,8 @@ android {
     buildFeatures {
         compose = true
     }
-    // Compose options block might be needed depending on Kotlin/Compose compiler versions
     // composeOptions {
-    //     kotlinCompilerExtensionVersion = "..." // Specify your Compose Compiler version if needed
+    //     kotlinCompilerExtensionVersion = "..." // Specify if needed
     // }
 }
 
@@ -47,7 +46,7 @@ dependencies {
     implementation(project(":feature-auth"))
 
     implementation(libs.androidx.core.ktx)
-    implementation(libs.androidx.lifecycle.runtime.ktx) // Keep this
+    implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.ui)
@@ -55,16 +54,15 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
 
-    // --- Corrected Dependencies for ViewModel and Lifecycle Compose ---
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7") // Adjusted to 2.8.0 based on previous success, update if needed
-    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")  // Adjusted to 2.8.0 based on previous success, update if needed
-    // --- End Corrected Dependencies ---
+    // --- ViewModel and Lifecycle Compose Dependencies ---
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7") // Use appropriate version
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")  // Use appropriate version
+    // --- End ViewModel Dependencies ---
 
-    // --- ADDED Material Icons Dependencies ---
-    implementation("androidx.compose.material:material-icons-core:1.6.7") // Use latest stable version
+    // --- Material Icons Dependencies ---
+    implementation("androidx.compose.material:material-icons-core:1.7.8") // Use latest stable version
     implementation("androidx.compose.material:material-icons-extended:1.7.8") // Use latest stable version
-    // --- End ADDED Material Icons Dependencies ---
-
+    // --- End Material Icons Dependencies ---
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

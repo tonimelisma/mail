@@ -1,6 +1,7 @@
 package net.melisma.mail
 
-// Import composables from the new ui package
+// Ensure this import exists if needed elsewhere, but not for @SuppressLint on MessageListContent now
+// import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
 import android.os.Bundle
@@ -63,7 +64,6 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// Main Application Composable with Scaffold and Navigation Logic
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainApp(viewModel: MainViewModel, activity: Activity) {
@@ -72,7 +72,6 @@ fun MainApp(viewModel: MainViewModel, activity: Activity) {
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
-    // Show toast messages
     LaunchedEffect(state.toastMessage) {
         state.toastMessage?.let { message ->
             showToast(context, message)
@@ -80,31 +79,32 @@ fun MainApp(viewModel: MainViewModel, activity: Activity) {
         }
     }
 
-    // Initial Load Logic
-    LaunchedEffect(state.currentAccount, state.folders, state.isLoadingFolders) {
-        if (state.currentAccount != null && state.folders == null && !state.isLoadingFolders) {
+    // Initial Load Logic (with Smart Cast Fixes)
+    LaunchedEffect(state.currentAccount, state.folderDataState) {
+        val account = state.currentAccount // Local val for smart cast
+        if (account != null && state.folderDataState == DataState.INITIAL) {
             Log.d("MainApp", "Triggering initial folder fetch.")
             viewModel.refreshFolders(activity)
         }
     }
-    LaunchedEffect(state.folders, state.selectedFolder) {
-        val folders = state.folders
-        if (!folders.isNullOrEmpty() && state.selectedFolder == null) {
-            val inboxFolder = folders.find { it.displayName.equals("Inbox", ignoreCase = true) }
+    LaunchedEffect(state.folders, state.selectedFolder, state.folderDataState) {
+        val currentFolders = state.folders // Local val for smart cast
+        val currentSelectedFolder = state.selectedFolder // Local val for smart cast
+        if (state.folderDataState == DataState.SUCCESS && !currentFolders.isNullOrEmpty() && currentSelectedFolder == null) {
+            val inboxFolder =
+                currentFolders.find { it.displayName.equals("Inbox", ignoreCase = true) }
             if (inboxFolder != null) {
                 Log.d("MainApp", "Folders loaded and none selected, selecting Inbox.")
                 viewModel.selectFolder(inboxFolder, activity)
             } else {
                 Log.w("MainApp", "Folders loaded, but Inbox not found. Selecting first folder.")
-                // Avoid potential crash if folders is empty after filtering somehow
-                if (folders.isNotEmpty()) {
-                    viewModel.selectFolder(folders.first(), activity)
+                if (currentFolders.isNotEmpty()) { // Use local val
+                    viewModel.selectFolder(currentFolders.first(), activity)
                 }
             }
         }
     }
 
-    // Main UI Structure
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
@@ -126,23 +126,25 @@ fun MainApp(viewModel: MainViewModel, activity: Activity) {
     ) {
         Scaffold(
             topBar = {
+                // Use local variable for selectedFolder in title logic
+                val currentSelectedFolder = state.selectedFolder
                 MailTopAppBar(
-                    title = if (state.selectedFolder != null && state.messages == null && state.isLoadingMessages) {
-                        "Loading..."
-                    } else {
-                        state.selectedFolder?.displayName ?: "Mail"
+                    title = when {
+                        currentSelectedFolder == null && state.folderDataState == DataState.LOADING -> "Loading Folders..."
+                        currentSelectedFolder == null -> "Mail" // Default before selection
+                        state.messageDataState == DataState.LOADING && state.messages == null -> "Loading..." // Initial message load
+                        else -> currentSelectedFolder.displayName // Use local variable
                     },
                     account = state.currentAccount,
                     onNavigationClick = { scope.launch { drawerState.open() } }
                 )
             }
-            // floatingActionButton = { /* TODO: Add Compose FAB */ }
+            // floatingActionButton = { ... }
         ) { innerPadding ->
             Box(modifier = Modifier.padding(innerPadding)) {
-                // Conditional content based on auth and loading state
+                val account = state.currentAccount
                 when {
-                    // Signed Out
-                    state.currentAccount == null && !state.isLoadingAuthAction && state.isAuthInitialized -> {
+                    account == null && !state.isLoadingAuthAction && state.isAuthInitialized -> {
                         SignedOutContent(
                             isAuthInitialized = state.isAuthInitialized,
                             authInitializationError = state.authInitializationError,
@@ -150,8 +152,8 @@ fun MainApp(viewModel: MainViewModel, activity: Activity) {
                             modifier = Modifier.fillMaxSize()
                         )
                     }
-                    // Loading Auth Action or Initializing Auth
-                    state.isLoadingAuthAction || (!state.isAuthInitialized && state.authInitializationError == null && state.currentAccount == null) -> {
+
+                    state.isLoadingAuthAction || (!state.isAuthInitialized && state.authInitializationError == null && account == null) -> {
                         Box(
                             modifier = Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center
@@ -165,20 +167,21 @@ fun MainApp(viewModel: MainViewModel, activity: Activity) {
                             }
                         }
                     }
-                    // Signed In
-                    state.currentAccount != null -> {
+
+                    account != null -> {
                         MessageListContent(
-                            isLoading = state.isLoadingMessages,
+                            dataState = state.messageDataState,
                             messages = state.messages,
                             error = state.messageError,
                             onRefresh = { viewModel.refreshMessages(activity) },
                             onMessageClick = { messageId ->
-                                showToast(context, "Clicked message ID: $messageId")
-                                // TODO: Navigate to message detail view
+                                showToast(
+                                    context,
+                                    "Clicked: $messageId"
+                                )
                             }
                         )
                     }
-                    // Auth Init Error
                     state.authInitializationError != null -> {
                         Box(
                             modifier = Modifier.fillMaxSize(),
@@ -197,7 +200,7 @@ fun MainApp(viewModel: MainViewModel, activity: Activity) {
 }
 
 
-// Helper function to get Activity context from Composable (keep private here)
+// Keep private helper functions in MainActivity
 @Composable
 private fun findActivity(): Activity {
     val context = LocalContext.current
@@ -205,12 +208,9 @@ private fun findActivity(): Activity {
         ?: throw IllegalStateException("Composable is not hosted in an Activity context")
 }
 
-// Helper function for displaying Toast messages (keep private here)
 private fun showToast(context: Context, message: String?) {
     if (message.isNullOrBlank()) return
     Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
 }
 
-// --- Previews ---
-// Previews for the main app structure are difficult due to dependencies.
-// Keep previews within the individual extracted UI files.
+// --- Previews --- (Should be in individual UI files)
