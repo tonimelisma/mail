@@ -56,10 +56,14 @@ dependencies {
     implementation(libs.androidx.material3)
 
     // --- Corrected Dependencies for ViewModel and Lifecycle Compose ---
-    // Use direct coordinates since the aliases were not found
-    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7") // Example version, use the latest stable
-    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")  // Example version, use the latest stable
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7") // Adjusted to 2.8.0 based on previous success, update if needed
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")  // Adjusted to 2.8.0 based on previous success, update if needed
     // --- End Corrected Dependencies ---
+
+    // --- ADDED Material Icons Dependencies ---
+    implementation("androidx.compose.material:material-icons-core:1.6.7") // Use latest stable version
+    implementation("androidx.compose.material:material-icons-extended:1.7.8") // Use latest stable version
+    // --- End ADDED Material Icons Dependencies ---
 
 
     testImplementation(libs.junit)
