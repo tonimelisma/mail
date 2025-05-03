@@ -1,3 +1,5 @@
+// File: feature-auth/build.gradle.kts (No Hilt changes needed here)
+
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
@@ -35,6 +37,9 @@ android {
 dependencies {
 
     // --- MSAL Dependency ---
+    // Use 'api' if other modules consuming feature-auth need MSAL types directly.
+    // Use 'implementation' if MSAL types are fully hidden by this module's API.
+    // 'api' is often safer for auth libraries shared across modules.
     api(libs.microsoft.msal)
 
     // Core Kotlin extensions

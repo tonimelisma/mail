@@ -13,6 +13,8 @@ import com.microsoft.identity.client.exception.MsalClientException
 import com.microsoft.identity.client.exception.MsalException
 import com.microsoft.identity.client.exception.MsalServiceException
 import com.microsoft.identity.client.exception.MsalUiRequiredException
+import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
@@ -28,8 +30,7 @@ import net.melisma.feature_auth.MicrosoftAuthManager
 import net.melisma.feature_auth.RemoveAccountResult
 import java.io.IOException
 import java.net.UnknownHostException
-
-// Removed: import kotlin.coroutines.cancellation.CancellationException // Removed ambiguous import
+import javax.inject.Inject
 
 // Represents the possible states for asynchronous data loading operations.
 enum class DataState {
@@ -89,13 +90,18 @@ data class MainScreenState(
 
 /**
  * The ViewModel responsible for managing the state and business logic for the main
- * email browsing interface of the application. It coordinates authentication,
- * data fetching (folders, messages), and UI state updates.
+ * email Browse interface.
+ * Marked with @HiltViewModel to allow Hilt to provide instances of this ViewModel
+ * and inject its dependencies.
+ *
+ * @property applicationContext Provided by Hilt, used for system services like ConnectivityManager.
+ * @property microsoftAuthManager Provided by Hilt (via AuthModule), handles interactions with MSAL.
  */
-class MainViewModel(
-    // Application context is required for system services like ConnectivityManager.
-    private val applicationContext: Context,
-    // The authentication manager handles interactions with the MSAL library.
+@HiltViewModel
+class MainViewModel @Inject constructor(
+    // Use @ApplicationContext to tell Hilt to inject the application context.
+    @ApplicationContext private val applicationContext: Context,
+    // Hilt will inject this dependency based on the @Provides function in a Hilt Module (e.g., AuthModule).
     private val microsoftAuthManager: MicrosoftAuthManager
 ) : ViewModel(), AuthStateListener {
 
@@ -140,10 +146,11 @@ class MainViewModel(
         }
     }
 
+    // The init block runs when the ViewModel is created.
     init {
-        // Register this ViewModel to listen for changes in authentication state from the MicrosoftAuthManager.
+        // Register this ViewModel to listen for changes in authentication state from the injected MicrosoftAuthManager.
         microsoftAuthManager.setAuthStateListener(this)
-        Log.d(TAG, "ViewModel Initialized.")
+        Log.d(TAG, "ViewModel Initialized by Hilt.")
     }
 
     /**
@@ -235,6 +242,7 @@ class MainViewModel(
                 val currentState = _uiState.value.foldersByAccountId[account.id]
                 if (currentState == null || currentState is FolderFetchState.Error) {
                     // Launch and track the job. `launchFolderFetch` handles preventing duplicates.
+                    // Pass null activity as this is triggered internally, not direct user action requiring UI.
                     val job = launchFolderFetch(account, activity = null, forceRefresh = false)
                     fetchJobs.add(job)
                 }
@@ -260,7 +268,6 @@ class MainViewModel(
                     )
                     try {
                         // Wait for all the launched folder fetch jobs to complete.
-                        // Because launchFolderFetch now waits correctly, this join will work as expected.
                         fetchJobs.forEach { it.join() }
                         Log.d(
                             TAG_DEBUG_DEFAULT_SELECT,
@@ -279,9 +286,9 @@ class MainViewModel(
                             "initialFolderLoadJob: Error joining fetch jobs.",
                             e
                         )
-                        // Decide if we should still attempt selection or not, maybe not if joining failed.
+                        // Error joining, likely cannot select default folder reliably.
                     }
-                    // Attempt default selection now that the initial fetches are complete.
+                    // Attempt default selection now that the initial fetches are complete (or failed).
                     selectDefaultFolderIfNeeded()
                 }
             } else if (needsDefaultFolderSelection) {
@@ -304,14 +311,13 @@ class MainViewModel(
 
     /**
      * Launches a coroutine job to fetch mail folders for a given account.
-     * This job will only complete after token acquisition and the Graph API call are finished.
-     * It uses a CompletableDeferred to signal completion from within async callbacks.
-     * Updates the UI state ([FolderFetchState]) throughout the process.
+     * This job manages its own lifecycle, updates UI state ([FolderFetchState]),
+     * and handles token acquisition and Graph API calls internally.
      *
      * @param account The account for which to fetch folders.
      * @param activity The Activity context, potentially needed for interactive token acquisition.
      * @param forceRefresh If true, cancels any ongoing fetch for this account and starts a new one.
-     * @return The [Job] representing the entire asynchronous fetch operation (including waiting).
+     * @return The [Job] representing the fetch operation.
      */
     private fun launchFolderFetch(
         account: IAccount,
@@ -321,16 +327,15 @@ class MainViewModel(
         val accountId = account.id
         // If forcing a refresh, cancel any existing job for this account first.
         if (forceRefresh) {
-            // Provide a reason for cancellation for better debugging.
             folderFetchJobs[accountId]?.cancel(CancellationException("Forced refresh requested"))
         }
-        // If a job is already active for this account and we are not forcing a refresh, return the existing job.
+        // If a job is already active for this account and not forcing refresh, return the existing job.
         if (folderFetchJobs[accountId]?.isActive == true) {
             Log.d(TAG, "Folder fetch already in progress for ${account.username}")
             return folderFetchJobs[accountId]!!
         }
         val currentFolderState = _uiState.value.foldersByAccountId[accountId]
-        // If folders are already successfully loaded and not forcing refresh, do nothing and return a completed job.
+        // If folders are already successfully loaded and not forcing refresh, return a completed job.
         if (!forceRefresh && currentFolderState is FolderFetchState.Success) {
             Log.d(TAG, "Folders already loaded for ${account.username}, skipping fetch.")
             return Job().apply { complete() } // Represents an already completed operation.
@@ -340,24 +345,21 @@ class MainViewModel(
         // Update the state for this account to Loading.
         _uiState.update { it.copy(foldersByAccountId = it.foldersByAccountId + (accountId to FolderFetchState.Loading)) }
 
-        // Launch the main coroutine for this fetch operation.
+        // Launch the coroutine for the fetch operation.
         val job = viewModelScope.launch {
-            // Create a Deferred that will signal the completion of the *entire* async process inside.
             val completionSignal = CompletableDeferred<Unit>()
             val jobDescription = "FolderFetch Job for ${account.username}"
             Log.d(TAG_DEBUG_DEFAULT_SELECT, "$jobDescription: Outer job started.")
 
             try {
-                // Ensure network connectivity before attempting API calls.
                 if (!isOnline()) {
                     throw IOException("No internet connection")
                 }
-
-                // Call acquireTokenAndExecute. Its callbacks will complete the deferred.
+                // Acquire token and execute the Graph API call inside the success lambda.
                 acquireTokenAndExecute(
                     account = account, activity = activity, scopes = mailReadScopes,
                     onError = { userErrorMessage ->
-                        // This block runs if token acquisition or the subsequent action fails.
+                        // Update state to Error on failure.
                         _uiState.update { s ->
                             s.copy(
                                 foldersByAccountId = s.foldersByAccountId + (accountId to FolderFetchState.Error(
@@ -370,23 +372,21 @@ class MainViewModel(
                             TAG_DEBUG_DEFAULT_SELECT,
                             "$jobDescription: Completing deferred due to error."
                         )
-                        completionSignal.complete(Unit) // Signal completion (failure case).
+                        completionSignal.complete(Unit) // Signal completion (failure).
                     }
                 ) { accessToken ->
-                    // This block runs if token acquisition succeeds.
+                    // Token acquired successfully, now fetch folders.
                     Log.d(TAG, "Got token for ${account.username}, fetching folders from Graph...")
-                    // Perform the actual Graph API call.
                     val foldersResult = GraphApiHelper.getMailFolders(accessToken)
-                    // Determine the new state based on the API call result.
+                    // Determine the new state based on the API result.
                     val newState = if (foldersResult.isSuccess) {
                         FolderFetchState.Success(foldersResult.getOrThrow())
                     } else {
                         FolderFetchState.Error(mapExceptionToUserMessage(foldersResult.exceptionOrNull()))
                     }
-                    // Update the UI state map with the result for this account.
+                    // Update UI state with the result.
                     _uiState.update { s -> s.copy(foldersByAccountId = s.foldersByAccountId + (accountId to newState)) }
 
-                    // Log success or failure of the API call.
                     if (foldersResult.isSuccess) {
                         Log.d(
                             TAG_DEBUG_DEFAULT_SELECT,
@@ -398,27 +398,24 @@ class MainViewModel(
                             "$jobDescription: API Call Error. Completing deferred. Error: ${foldersResult.exceptionOrNull()?.message}"
                         )
                     }
-                    completionSignal.complete(Unit) // Signal completion (success or handled failure case).
+                    completionSignal.complete(Unit) // Signal completion (success or handled failure).
                 }
-
-                // Wait here until the deferred is completed by one of the callbacks inside acquireTokenAndExecute.
+                // Wait for the callback within acquireTokenAndExecute to complete the Deferred.
                 Log.d(TAG_DEBUG_DEFAULT_SELECT, "$jobDescription: Waiting for completion signal...")
-                completionSignal.await() // This makes the outer job wait.
+                completionSignal.await()
                 Log.d(TAG_DEBUG_DEFAULT_SELECT, "$jobDescription: Completion signal received.")
 
             } catch (e: CancellationException) {
-                // Catch cancellation specific to this outer job (e.g., forced refresh, ViewModel cleared).
                 Log.w(TAG_DEBUG_DEFAULT_SELECT, "$jobDescription: Outer job cancelled.", e)
-                // Ensure deferred is completed exceptionally if cancellation happens before callbacks.
-                completionSignal.completeExceptionally(e)
-                throw e // Re-throw cancellation for proper coroutine handling.
+                completionSignal.completeExceptionally(e) // Ensure deferred completes on cancellation
+                throw e // Re-throw cancellation
             } catch (e: Exception) {
-                // Catch any other exceptions (like the IOException from isOnline check).
                 Log.e(
                     TAG_DEBUG_DEFAULT_SELECT,
                     "$jobDescription: Outer job exception: ${e.message}",
                     e
                 )
+                // Update state to Error on unexpected exceptions.
                 _uiState.update { s ->
                     s.copy(
                         foldersByAccountId = s.foldersByAccountId + (accountId to FolderFetchState.Error(
@@ -426,17 +423,13 @@ class MainViewModel(
                         ))
                     )
                 }
-                // Ensure deferred is completed exceptionally on other errors.
-                completionSignal.completeExceptionally(e)
+                completionSignal.completeExceptionally(e) // Ensure deferred completes on exception
             } finally {
-                // This block executes regardless of whether the job completed successfully, failed, or was cancelled.
                 Log.d(
                     TAG_DEBUG_DEFAULT_SELECT,
                     "$jobDescription: Outer job finished (finally block)."
                 )
-                // Remove the job reference from the tracking map.
-                // Check if the job instance being removed is the one currently stored for this account ID
-                // to prevent race conditions if a new job was started very quickly.
+                // Remove the job reference only if it's the same instance, avoiding race conditions.
                 if (folderFetchJobs[accountId] == coroutineContext[Job]) {
                     folderFetchJobs.remove(accountId)
                     Log.d(
@@ -446,44 +439,35 @@ class MainViewModel(
                 }
             }
         }
-        // Store and return the reference to the outer job, which now correctly waits.
+        // Store the job reference for tracking.
         folderFetchJobs[accountId] = job
         return job
     }
 
 
     /**
-     * Attempts to select a default folder if none is currently selected.
-     * Prioritizes selecting a folder named "Inbox" (case-insensitive) from any account.
-     * If no "Inbox" is found, it selects the first folder found in the first account
-     * that has successfully loaded its folders.
-     * This function is intended to be called *after* initial folder fetches have completed.
+     * Attempts to select a default folder (preferring "Inbox") if none is currently selected.
+     * This is called after initial authentication state is confirmed and folder fetches initiated.
      */
     private fun selectDefaultFolderIfNeeded() {
         Log.d(TAG_DEBUG_DEFAULT_SELECT, "selectDefaultFolderIfNeeded: Entered.")
-
-        // Only proceed if no folder is currently selected and there are accounts available.
+        // Only proceed if no folder is selected and there are accounts.
         if (_uiState.value.selectedFolder == null && _uiState.value.accounts.isNotEmpty()) {
             Log.d(
                 TAG_DEBUG_DEFAULT_SELECT,
                 "selectDefaultFolderIfNeeded: Condition met (no folder selected, accounts exist)."
             )
-
             var folderToSelect: MailFolder? = null
             var accountForFolder: IAccount? = null
 
-            // --- Prioritize finding an "Inbox" folder ---
-            // Iterate through each authenticated account.
+            // Prioritize finding an "Inbox" folder in any account with successfully loaded folders.
             for (account in _uiState.value.accounts) {
-                // Get the folder fetch state for the current account.
                 val folderState = _uiState.value.foldersByAccountId[account.id]
                 Log.d(
                     TAG_DEBUG_DEFAULT_SELECT,
                     "selectDefaultFolderIfNeeded: Checking account ${account.username}. FolderState: ${folderState?.javaClass?.simpleName}"
                 )
-                // Only consider accounts where folders loaded successfully.
                 if (folderState is FolderFetchState.Success) {
-                    // Find the first folder named "Inbox" (case-insensitive).
                     val inbox = folderState.folders.find {
                         it.displayName.equals(
                             "Inbox",
@@ -497,43 +481,37 @@ class MainViewModel(
                             TAG_DEBUG_DEFAULT_SELECT,
                             "selectDefaultFolderIfNeeded: Found Inbox in account ${account.username}"
                         )
-                        break // Found the preferred folder, no need to check other accounts.
+                        break // Found preferred folder
                     }
                 }
             }
 
-            // --- Fallback: Select the first available folder ---
-            // If no "Inbox" was found across all accounts.
+            // Fallback: If no Inbox found, select the first folder from the first account with loaded folders.
             if (folderToSelect == null) {
                 Log.d(
                     TAG_DEBUG_DEFAULT_SELECT,
                     "selectDefaultFolderIfNeeded: Inbox not found, searching for first available folder."
                 )
-                // Iterate through accounts again.
                 for (account in _uiState.value.accounts) {
                     val folderState = _uiState.value.foldersByAccountId[account.id]
-                    // Consider accounts with successfully loaded folders that are not empty.
                     if (folderState is FolderFetchState.Success && folderState.folders.isNotEmpty()) {
-                        // Select the very first folder from this account's list.
                         folderToSelect = folderState.folders.first()
                         accountForFolder = account
                         Log.i(
                             TAG_DEBUG_DEFAULT_SELECT,
                             "selectDefaultFolderIfNeeded: Found first folder '${folderToSelect.displayName}' in account ${account.username}"
                         )
-                        break // Found a folder, stop searching.
+                        break // Found a fallback folder
                     }
                 }
             }
 
-            // --- Perform Selection ---
-            // If a suitable folder (Inbox or fallback) was identified.
+            // If a folder was found (either Inbox or fallback), select it.
             if (folderToSelect != null && accountForFolder != null) {
                 Log.i(
                     TAG_DEBUG_DEFAULT_SELECT,
                     "selectDefaultFolderIfNeeded: Attempting to select folder '${folderToSelect.displayName}' from account ${accountForFolder.username}"
                 )
-                // Call the main selection function to update state and fetch messages.
                 selectFolder(folderToSelect, accountForFolder)
             } else {
                 Log.w(
@@ -552,21 +530,18 @@ class MainViewModel(
     // --- Account Management Functions (exposed to UI, e.g., SettingsScreen) ---
 
     /**
-     * Initiates the interactive flow to add a new Microsoft account using [MicrosoftAuthManager].
-     * Updates UI state to indicate loading and shows toast messages based on the result.
-     * Folder fetching for the new account is automatically handled by [onAuthStateChanged].
+     * Initiates the interactive flow to add a new Microsoft account.
+     * Delegates the call to the injected [MicrosoftAuthManager].
+     * Updates UI state for loading feedback and shows results via toast messages.
      */
     fun addAccount(activity: Activity) {
-        // Prevent action if authentication library isn't ready.
         if (!_uiState.value.isAuthInitialized) {
             _uiState.update { it.copy(toastMessage = "Authentication system not ready.") }
             return
         }
-        // Set loading state for UI feedback.
         _uiState.update { it.copy(isLoadingAuthAction = true) }
-        // Delegate the action to the authentication manager.
+        // Delegate to the authentication manager injected by Hilt.
         microsoftAuthManager.addAccount(activity, mailReadScopes) { result ->
-            // Process the result of the add account attempt.
             val message = when (result) {
                 is AddAccountResult.Success -> "Account added: ${result.account.username}"
                 is AddAccountResult.Error -> "Error adding account: ${
@@ -575,20 +550,19 @@ class MainViewModel(
                     )
                 }"
                 is AddAccountResult.Cancelled -> "Account addition cancelled."
-                is AddAccountResult.NotInitialized -> "Authentication system not ready." // Should be caught by initial guard
+                is AddAccountResult.NotInitialized -> "Authentication system not ready."
             }
-            // Show result message to the user. isLoadingAuthAction is cleared by onAuthStateChanged.
+            // isLoadingAuthAction is cleared by onAuthStateChanged triggered by the manager.
             _uiState.update { it.copy(toastMessage = message) }
         }
     }
 
     /**
-     * Initiates the process to remove an existing Microsoft account using [MicrosoftAuthManager].
-     * Updates UI state to indicate loading and shows toast messages based on the result.
-     * UI state regarding account list and selected folder is automatically handled by [onAuthStateChanged].
+     * Initiates the process to remove an existing Microsoft account.
+     * Delegates the call to the injected [MicrosoftAuthManager].
+     * Updates UI state for loading feedback and shows results via toast messages.
      */
     fun removeAccount(activity: Activity, accountToRemove: IAccount?) {
-        // Prevent action if authentication library isn't ready or no account is specified.
         if (!_uiState.value.isAuthInitialized) {
             _uiState.update { it.copy(toastMessage = "Authentication system not ready.") }
             return
@@ -597,11 +571,9 @@ class MainViewModel(
             _uiState.update { it.copy(toastMessage = "No account specified for removal.") }
             return
         }
-        // Set loading state for UI feedback.
         _uiState.update { it.copy(isLoadingAuthAction = true) }
-        // Delegate the action to the authentication manager.
+        // Delegate to the authentication manager injected by Hilt.
         microsoftAuthManager.removeAccount(accountToRemove) { result ->
-            // Process the result of the remove account attempt.
             val message = when (result) {
                 is RemoveAccountResult.Success -> "Account removed: ${accountToRemove.username}"
                 is RemoveAccountResult.Error -> "Error removing account: ${
@@ -609,10 +581,11 @@ class MainViewModel(
                         result.exception
                     )
                 }"
-                is RemoveAccountResult.NotInitialized -> "Authentication system not ready." // Should be caught by initial guard
-                is RemoveAccountResult.AccountNotFound -> "Account to remove not found." // Should be caught by null check
+
+                is RemoveAccountResult.NotInitialized -> "Authentication system not ready."
+                is RemoveAccountResult.AccountNotFound -> "Account to remove not found."
             }
-            // Show result message. isLoadingAuthAction and account list updates are handled by onAuthStateChanged.
+            // isLoadingAuthAction and account list updates are handled by onAuthStateChanged.
             _uiState.update { it.copy(toastMessage = message) }
         }
     }
@@ -621,25 +594,20 @@ class MainViewModel(
 
     /**
      * Updates the application state to select a specific mail folder.
-     * This clears previous messages and initiates fetching messages for the new folder.
-     *
-     * @param folder The [MailFolder] object representing the folder to be selected.
-     * @param account The [IAccount] that owns the specified folder.
+     * Clears previous messages and initiates fetching messages for the new folder.
      */
     fun selectFolder(folder: MailFolder, account: IAccount) {
         Log.i(
             TAG_DEBUG_DEFAULT_SELECT,
             "selectFolder: Called for '${folder.displayName}' in account ${account.username}. Current selected: ${_uiState.value.selectedFolder?.displayName}"
         )
-
-        // Avoid re-selecting the same folder to prevent unnecessary state updates and fetches.
+        // Avoid re-selecting the same folder.
         if (folder.id == _uiState.value.selectedFolder?.id && account.id == _uiState.value.selectedFolderAccountId) {
             Log.d(TAG, "Folder ${folder.displayName} already selected.")
             return
         }
-
         Log.d(TAG, "Selecting folder: ${folder.displayName} for account ${account.username}")
-        // Update the state: set the selected folder and account ID, clear previous messages/errors, set message state to LOADING.
+        // Update state: set selection, clear messages, set loading state.
         _uiState.update {
             it.copy(
                 selectedFolder = folder,
@@ -649,64 +617,52 @@ class MainViewModel(
                 messageDataState = DataState.LOADING
             )
         }
-        // Trigger the internal function to fetch messages for this folder. Pass null activity as it's not user-interactive.
+        // Trigger message fetch for the newly selected folder.
         fetchMessagesInternal(folder.id, account, isRefresh = false, activity = null)
     }
 
     /**
      * Initiates a forced refresh of mail folders for all authenticated accounts.
-     * Useful for a manual "sync all" action.
-     *
-     * @param activity The Activity context, potentially needed for interactive token acquisition if tokens expired.
      */
     fun refreshAllFolders(activity: Activity?) {
         Log.d(TAG, "Requesting refresh for ALL folders...")
-        // Iterate through all current accounts and launch a folder fetch job with forceRefresh = true.
         _uiState.value.accounts.forEach { account ->
+            // Force refresh for each account's folders.
             launchFolderFetch(account, activity, forceRefresh = true)
         }
     }
 
     /**
      * Initiates a refresh of the messages within the currently selected folder.
-     * Does nothing if no folder is selected or if a refresh is already in progress.
-     * Checks for network connectivity before proceeding.
-     *
-     * @param activity The Activity context, potentially needed for interactive token acquisition.
      */
     fun refreshMessages(activity: Activity?) {
         val folderId = _uiState.value.selectedFolder?.id
         val accountId = _uiState.value.selectedFolderAccountId
-        // Find the IAccount object corresponding to the selected folder's account ID.
         val account = _uiState.value.accounts.find { it.id == accountId }
 
-        // Ensure a folder and corresponding account are actually selected.
         if (account == null || folderId == null) {
             Log.w(TAG, "Refresh messages called but no folder/account selected.")
-            _uiState.update { it.copy(toastMessage = "Select a folder first.") } // Provide user feedback.
+            _uiState.update { it.copy(toastMessage = "Select a folder first.") }
             return
         }
-        // Prevent triggering multiple refreshes simultaneously for the same folder.
         if (_uiState.value.messageDataState == DataState.LOADING) {
             Log.d(TAG, "Refresh messages skipped: Already loading.")
             return
         }
         Log.d(TAG, "Requesting message refresh for folder: $folderId, account: ${account.username}")
-        // Check for internet connection before attempting a network operation.
         if (!isOnline()) {
             _uiState.update {
                 it.copy(
                     toastMessage = "No internet connection.",
-                    // Also update message state to Error immediately for UI feedback.
                     messageDataState = DataState.ERROR,
                     messageError = "No internet connection"
                 )
             }
             return
         }
-        // Set the message state to LOADING and clear any previous error message.
+        // Set loading state and clear previous error.
         _uiState.update { it.copy(messageDataState = DataState.LOADING, messageError = null) }
-        // Trigger the internal function to fetch messages, marking it as a refresh.
+        // Trigger internal message fetch, marking it as a refresh.
         fetchMessagesInternal(folderId, account, isRefresh = true, activity = activity)
     }
 
@@ -714,14 +670,7 @@ class MainViewModel(
 
     /**
      * Fetches messages for a specific folder after ensuring an access token is available.
-     * Uses [acquireTokenAndExecute] for token handling and [GraphApiHelper] for the API call.
-     * Updates the [MainScreenState] with the fetched messages or an error.
-     * Checks if the selected folder context is still valid before applying state updates.
-     *
-     * @param folderId The ID of the folder whose messages are to be fetched.
-     * @param account The account owning the folder.
-     * @param isRefresh Indicates if this fetch is a user-initiated refresh (affects toast messages).
-     * @param activity The Activity context, potentially needed for interactive token acquisition.
+     * Handles context checks to avoid updating state for a no-longer-selected folder.
      */
     private fun fetchMessagesInternal(
         folderId: String,
@@ -729,10 +678,7 @@ class MainViewModel(
         isRefresh: Boolean,
         activity: Activity?
     ) {
-        // --- Context Check ---
-        // Before proceeding with the fetch (which involves async operations like token acquisition),
-        // verify that the folder/account we *intend* to fetch for is still the one selected in the UI state.
-        // This prevents updating the UI with data for a folder the user has already navigated away from.
+        // Context Check: Ensure the folder/account we're fetching for is still selected.
         if (account.id != _uiState.value.selectedFolderAccountId || folderId != _uiState.value.selectedFolder?.id) {
             Log.w(
                 TAG,
@@ -741,57 +687,48 @@ class MainViewModel(
             return
         }
 
-        // Step 1: Acquire Token, executing the API call in the onSuccess lambda.
+        // Acquire token and execute the Graph API call in the success lambda.
         acquireTokenAndExecute(
             account = account, activity = activity, scopes = mailReadScopes,
             onError = { userErrorMessage ->
-                // --- Context Check (within callback) ---
-                // Critical: Check context *again* inside the async callback before updating state.
+                // Context Check inside callback: Update state only if selection hasn't changed.
                 if (_uiState.value.selectedFolderAccountId == account.id && _uiState.value.selectedFolder?.id == folderId) {
-                    // Update state to ERROR if token acquisition fails.
                     _uiState.update {
                         it.copy(
                             messageDataState = DataState.ERROR,
                             messageError = userErrorMessage
                         )
                     }
-                    // Show a toast only if it was a user-initiated refresh that failed at the token step.
                     if (isRefresh) _uiState.update { it.copy(toastMessage = userErrorMessage) }
                 } else {
-                    // Log if the context changed between starting the token request and getting the error.
                     Log.w(
                         TAG,
                         "Message fetch token error received, but context changed before state update."
                     )
                 }
             }
-        ) { accessToken -> // Step 2: This block executes if token acquisition is successful.
-            // --- Context Check (within callback) ---
-            // Critical: Check context *again* inside the async callback before updating state.
+        ) { accessToken -> // Token acquired successfully.
+            // Context Check inside callback: Update state only if selection hasn't changed.
             if (_uiState.value.selectedFolderAccountId == account.id && _uiState.value.selectedFolder?.id == folderId) {
                 Log.d(
                     TAG,
                     "Got token for ${account.username}, fetching messages for folder $folderId from Graph..."
                 )
-                // Perform the Graph API call to get messages.
+                // Perform the Graph API call.
                 val messagesResult = GraphApiHelper.getMessagesForFolder(
                     accessToken = accessToken, folderId = folderId,
                     selectFields = messageListSelectFields, top = messageListPageSize
                 )
-
-                // Update the UI state based on the API call result (Success or Failure).
+                // Update UI state based on the API result.
                 _uiState.update {
                     it.copy(
                         messageDataState = if (messagesResult.isSuccess) DataState.SUCCESS else DataState.ERROR,
-                        // Provide the message list on success, null on failure (or keep previous list if desired). Empty list if success but no messages.
                         messages = messagesResult.getOrNull()
                             ?: if (messagesResult.isFailure) null else emptyList(),
-                        // Extract and map the error message on failure.
                         messageError = messagesResult.exceptionOrNull()
                             ?.let { e -> mapExceptionToUserMessage(e) }
                     )
                 }
-                // Log errors from the API call.
                 if (messagesResult.isFailure) {
                     Log.e(
                         TAG,
@@ -799,14 +736,13 @@ class MainViewModel(
                         messagesResult.exceptionOrNull()
                     )
                 }
-                // Provide feedback via toast for user-initiated refreshes.
+                // Show toast feedback for user-initiated refreshes.
                 if (isRefresh) {
                     val toastMsg =
                         if (messagesResult.isSuccess) "Messages refreshed" else "Refresh failed: ${_uiState.value.messageError}"
                     _uiState.update { it.copy(toastMessage = toastMsg) }
                 }
             } else {
-                // Log if the context changed between getting the token and getting the API result.
                 Log.w(
                     TAG,
                     "Message fetch result received, but context changed before state update."
@@ -816,47 +752,36 @@ class MainViewModel(
     }
 
     /**
-     * A helper function that abstracts the common pattern of acquiring an MSAL access token
-     * (silently first, then interactively if necessary and possible) and then executing
-     * a given suspendable action upon success.
-     * It centralizes the logic for handling different `AcquireTokenResult` states.
-     *
-     * @param account The target [IAccount] for token acquisition.
-     * @param activity The [Activity] context, required for interactive flows. Can be null if only silent acquisition is acceptable.
-     * @param scopes The list of permission scopes required for the `onSuccess` action.
-     * @param onError A lambda invoked with a user-friendly error message if token acquisition ultimately fails.
-     * @param onSuccess A suspendable lambda invoked with the obtained access token if acquisition succeeds.
+     * Helper function to acquire an MSAL access token (silently first, then interactively).
+     * Executes the provided suspendable [onSuccess] action with the token upon success.
+     * Calls [onError] with a user-friendly message upon failure.
      */
     private fun acquireTokenAndExecute(
         account: IAccount?,
         activity: Activity?,
         scopes: List<String>,
-        onError: ((String) -> Unit)?, // Callback for errors
-        onSuccess: suspend (String) -> Unit // Suspend function to run on success
+        onError: ((String) -> Unit)?,
+        onSuccess: suspend (String) -> Unit
     ) {
-        // Ensure an account is provided.
         if (account == null) {
             onError?.invoke("No account specified for operation.")
             return
         }
-        // Start with a silent token request.
+        // Request token silently from the injected auth manager.
         microsoftAuthManager.acquireTokenSilent(account, scopes) { tokenResult ->
-            // Handle the result within the ViewModel's scope for structured concurrency.
-            viewModelScope.launch { // This launch handles the result callback
+            // Handle the result within the ViewModel's scope.
+            viewModelScope.launch {
                 when (tokenResult) {
-                    // --- Silent Success ---
                     is AcquireTokenResult.Success -> {
                         Log.d(TAG, "Silent token acquired successfully for ${account.username}.")
                         try {
-                            // Execute the main action with the obtained token.
+                            // Execute the action with the acquired token.
                             onSuccess(tokenResult.result.accessToken)
                         } catch (e: CancellationException) {
-                            // Catch cancellation specific to the onSuccess block execution
                             Log.w(TAG, "Operation cancelled during onSuccess execution", e)
                             onError?.invoke("Operation cancelled.")
-                            throw e // Re-throw cancellation
+                            throw e // Re-throw
                         } catch (e: Exception) {
-                            // Catch other exceptions thrown by the onSuccess block itself.
                             Log.e(
                                 TAG,
                                 "Exception within onSuccess block after silent token success",
@@ -871,41 +796,36 @@ class MainViewModel(
                             )
                         }
                     }
-                    // --- Silent Failure: UI Interaction Required ---
                     is AcquireTokenResult.UiRequired -> {
-                        // Only attempt interactive flow if an Activity context is available.
+                        // Silent failed, try interactive if activity is available.
                         if (activity != null) {
                             Log.i(
                                 TAG,
                                 "Silent token acquisition failed (UI Required for ${account.username}). Trying interactive."
                             )
-                            // Delegate to the interactive token acquisition method.
                             microsoftAuthManager.acquireTokenInteractive(
                                 activity,
                                 account,
                                 scopes
                             ) { interactiveResult ->
-                                // Handle the interactive result in a new coroutine.
-                                viewModelScope.launch { // This launch handles the interactive callback result
+                                viewModelScope.launch {
                                     when (interactiveResult) {
-                                        // --- Interactive Success ---
                                         is AcquireTokenResult.Success -> {
                                             Log.d(
                                                 TAG,
                                                 "Interactive token acquired successfully for ${account.username}."
                                             )
                                             try {
-                                                // Execute the main action with the interactively obtained token.
+                                                // Execute action with the interactively acquired token.
                                                 onSuccess(interactiveResult.result.accessToken)
                                             } catch (e: CancellationException) {
-                                                // Catch cancellation specific to the onSuccess block execution
                                                 Log.w(
                                                     TAG,
                                                     "Operation cancelled during onSuccess execution (after interactive)",
                                                     e
                                                 )
                                                 onError?.invoke("Operation cancelled.")
-                                                throw e // Re-throw cancellation
+                                                throw e // Re-throw
                                             } catch (e: Exception) {
                                                 Log.e(
                                                     TAG,
@@ -921,7 +841,7 @@ class MainViewModel(
                                                 )
                                             }
                                         }
-                                        // --- Interactive Failure Cases ---
+                                        // Handle interactive failure cases.
                                         is AcquireTokenResult.Error -> {
                                             Log.e(
                                                 TAG,
@@ -948,7 +868,8 @@ class MainViewModel(
                                             )
                                             onError?.invoke("Authentication system not ready.")
                                         }
-                                        else -> { // Catch-all for unexpected interactive results
+
+                                        else -> {
                                             Log.e(
                                                 TAG,
                                                 "Unexpected interactive token result for ${account.username}: $interactiveResult"
@@ -959,15 +880,15 @@ class MainViewModel(
                                 } // End launch for interactive result
                             } // End interactive callback
                         } else {
-                            // UI interaction is required, but we don't have an Activity to start it.
+                            // UI Required but no activity available for interactive flow.
                             Log.w(
                                 TAG,
                                 "UI Required for token for ${account.username}, but no activity provided."
                             )
-                            onError?.invoke("Session expired. Please refresh or try again.") // User-friendly message
+                            onError?.invoke("Session expired. Please refresh or try again.")
                         }
                     }
-                    // --- Other Silent Failure Cases ---
+                    // Handle other silent failure cases.
                     is AcquireTokenResult.Error -> {
                         Log.e(
                             TAG,
@@ -976,14 +897,16 @@ class MainViewModel(
                         )
                         onError?.invoke(mapAuthExceptionToUserMessage(tokenResult.exception))
                     }
-                    is AcquireTokenResult.NoAccountProvided -> { // Should not happen due to initial null check
+
+                    is AcquireTokenResult.NoAccountProvided -> {
                         Log.e(
                             TAG,
                             "Internal error: No account provided for silent token acquisition."
                         )
                         onError?.invoke("Internal error: Account not provided.")
                     }
-                    is AcquireTokenResult.Cancelled -> { // Should not happen for silent flow
+
+                    is AcquireTokenResult.Cancelled -> {
                         Log.w(TAG, "Silent token acquisition cancelled? Unexpected.")
                         onError?.invoke("Authentication cancelled.")
                     }
@@ -999,65 +922,53 @@ class MainViewModel(
 
     /**
      * Maps common exceptions (network, MSAL) to user-friendly error strings.
-     * Prioritizes network errors and specific MSAL conditions like UI required.
-     *
-     * @param exception The throwable to map.
-     * @return A user-understandable error message string.
      */
     private fun mapExceptionToUserMessage(exception: Throwable?): String {
         Log.w(
             TAG,
             "Mapping exception: ${exception?.let { it::class.java.simpleName + " - " + it.message } ?: "null"}")
-        // Check the cause chain for common network exceptions first (up to 10 levels deep).
         var currentException = exception
         var depth = 0
         while (currentException != null && depth < 10) {
             when (currentException) {
-                is UnknownHostException -> return "No internet connection" // Specific DNS/Host error
-                is IOException -> return "Couldn't reach server" // More general network I/O error
+                is UnknownHostException -> return "No internet connection"
+                is IOException -> return "Couldn't reach server"
             }
-            // Check for specific MSAL error codes related to network issues.
             if (currentException is MsalClientException && currentException.errorCode == MsalClientException.IO_ERROR) return "Network error during authentication"
             if (currentException is MsalServiceException && currentException.cause is IOException) return "Network error contacting authentication service"
 
             currentException = currentException.cause
             depth++
         }
-        // If no network error found in chain, map based on the top-level exception type.
         return when (exception) {
             is MsalUiRequiredException -> "Session expired. Please retry or sign out/in."
-            is MsalException -> exception.message
-                ?: "Authentication error" // Use MSAL's message if available.
-            // Fallback for non-MSAL exceptions or those without messages.
-            else -> exception?.message?.takeIf { it.isNotEmpty() } ?: "An unknown error occurred"
+            is MsalException -> exception.message?.takeIf { it.isNotBlank() }
+                ?: "Authentication error"
+
+            else -> exception?.message?.takeIf { it.isNotBlank() } ?: "An unknown error occurred"
         }
     }
 
     /**
      * Maps MSAL-specific exceptions to user-friendly messages, providing more context
      * than the general mapping if possible. Falls back to [mapExceptionToUserMessage].
-     *
-     * @param exception The [MsalException] to map.
-     * @return A user-understandable error message string.
      */
     private fun mapAuthExceptionToUserMessage(exception: MsalException): String {
-        // Attempt general mapping first (catches network errors, UI required).
         val generalMessage = mapExceptionToUserMessage(exception)
-        // If the general mapping provided a specific message (not a generic fallback), use it.
-        if (generalMessage != "An unknown error occurred" && generalMessage != "Authentication error") {
+        if (generalMessage != "An unknown error occurred" && generalMessage != "Authentication error" && generalMessage != "Authentication failed") {
             return generalMessage
         }
-        // Log the specific MSAL error type and code for debugging if using fallback.
         Log.w(
             TAG,
             "Mapping specific auth exception (fallback): ${exception::class.java.simpleName} - ${exception.errorCode}"
         )
-        // Provide more specific messages based on MSAL exception type as a fallback.
         return when (exception) {
             is MsalUiRequiredException -> "Session expired. Please retry or sign out/in." // Redundant but safe
-            is MsalClientException -> exception.message ?: "Authentication client error"
-            is MsalServiceException -> exception.message ?: "Authentication service error"
-            // Generic fallback if MSAL exception has no message.
+            is MsalClientException -> exception.message?.takeIf { it.isNotBlank() }
+                ?: "Authentication client error"
+
+            is MsalServiceException -> exception.message?.takeIf { it.isNotBlank() }
+                ?: "Authentication service error"
             else -> exception.message?.takeIf { it.isNotEmpty() } ?: "Authentication failed"
         }
     }
@@ -1065,8 +976,8 @@ class MainViewModel(
     // --- Toast Management ---
 
     /**
-     * Should be called by the UI layer after a toast message from the state has been displayed,
-     * to prevent it from being shown again on recomposition.
+     * Called by the UI after a toast message from the state has been displayed,
+     * to clear the message and prevent it from being shown again on recomposition.
      */
     fun toastMessageShown() {
         // Update the state to clear the toast message.
@@ -1087,7 +998,7 @@ class MainViewModel(
         folderFetchJobs.clear()
         // Cancel the job waiting for initial folder loads.
         initialFolderLoadJob?.cancel()
-        // Unregister the auth state listener to avoid potential leaks if the manager holds a strong reference.
+        // Unregister the auth state listener from the injected manager to prevent potential leaks.
         microsoftAuthManager.setAuthStateListener(null)
     }
 }

@@ -38,29 +38,34 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.microsoft.identity.client.exception.MsalException
+import com.microsoft.identity.client.exception.MsalException // Keep this import if used directly here, otherwise can remove
+import dagger.hilt.android.AndroidEntryPoint // Import Hilt annotation
 import kotlinx.coroutines.launch
-import net.melisma.feature_auth.MicrosoftAuthManager
+// Removed MicrosoftAuthManager import as it's no longer directly initialized here
 import net.melisma.mail.ui.MailDrawerContent
 import net.melisma.mail.ui.MailTopAppBar
 import net.melisma.mail.ui.MessageListContent
 import net.melisma.mail.ui.settings.SettingsScreen
 import net.melisma.mail.ui.theme.MailTheme
 
+/**
+ * The main activity of the application, serving as the entry point for the UI.
+ * Marked with @AndroidEntryPoint to enable Hilt dependency injection for Android components.
+ * Hilt will generate the necessary code to inject dependencies requested by this Activity
+ * or Fragments/Views hosted within it.
+ */
+@AndroidEntryPoint // Enable Hilt injection for this Activity
 class MainActivity : ComponentActivity() {
 
-    // Lazily initialize MicrosoftAuthManager, providing context and config resource ID.
-    private val microsoftAuthManager: MicrosoftAuthManager by lazy {
-        MicrosoftAuthManager(context = applicationContext, configResId = R.raw.auth_config)
-    }
+    // Removed lazy initialization of MicrosoftAuthManager - Hilt will provide it to ViewModel
 
-    // Obtain the MainViewModel using the activity-ktx delegate.
-    // The ViewModel is scoped to this Activity's lifecycle.
-    // We provide a custom factory (MainViewModelFactory) because the ViewModel
-    // requires dependencies (context, authManager) in its constructor.
-    private val viewModel: MainViewModel by viewModels {
-        MainViewModelFactory(applicationContext, microsoftAuthManager)
-    }
+    /**
+     * Obtain the MainViewModel using the activity-ktx delegate `viewModels()`.
+     * Because MainViewModel is annotated with @HiltViewModel and MainActivity with @AndroidEntryPoint,
+     * Hilt will automatically provide the necessary factory and inject dependencies into the ViewModel.
+     * The custom MainViewModelFactory is no longer needed.
+     */
+    private val viewModel: MainViewModel by viewModels() // Hilt handles ViewModel creation
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -68,18 +73,21 @@ class MainActivity : ComponentActivity() {
         setContent {
             // Apply the app's theme.
             MailTheme {
+                // Use LocalContext.current to get the Activity context within Compose scope.
                 val activity = LocalContext.current as Activity
                 // State to control whether the Settings screen is shown.
                 var showSettings by remember { mutableStateOf(false) }
 
                 // Display either the Settings screen or the main app content.
                 if (showSettings) {
+                    // Pass the Hilt-provided ViewModel to the SettingsScreen.
                     SettingsScreen(
                         viewModel = viewModel,
                         activity = activity,
                         onNavigateUp = { showSettings = false } // Callback to close settings.
                     )
                 } else {
+                    // Pass the Hilt-provided ViewModel to the MainApp composable.
                     MainApp(
                         viewModel = viewModel,
                         activity = activity,
@@ -95,6 +103,7 @@ class MainActivity : ComponentActivity() {
 
 /**
  * The main application Composable, including the navigation drawer and scaffold.
+ * Receives the ViewModel instance provided by Hilt via MainActivity.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -109,6 +118,7 @@ fun MainApp(
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     // Remember a CoroutineScope bound to this Composable's lifecycle.
     val scope = rememberCoroutineScope()
+    // Get context within Compose scope if needed for non-ViewModel actions (like Toasts).
     val context = LocalContext.current
 
     // Effect to show toast messages when they appear in the state.
@@ -141,7 +151,7 @@ fun MainApp(
         // Provides standard app layout structure (app bar, content area, FAB).
         Scaffold(
             topBar = {
-                // Determine the title for the app bar.
+                // Determine the title for the app bar based on ViewModel state.
                 val title = state.selectedFolder?.displayName ?: stringResource(R.string.app_name)
                 MailTopAppBar(
                     title = title,
@@ -151,9 +161,9 @@ fun MainApp(
             },
             floatingActionButton = { /* Placeholder for potential FAB */ }
         ) { innerPadding ->
-            // Content area of the Scaffold.
+            // Content area of the Scaffold, applying padding provided by Scaffold.
             Box(modifier = Modifier.padding(innerPadding)) {
-                // Determine which main content UI to show based on the current state.
+                // Determine which main content UI to show based on the current state from ViewModel.
                 when {
                     // Show loading indicator during auth initialization or actions.
                     state.isLoadingAuthAction || (!state.isAuthInitialized && state.authInitializationError == null) -> {
@@ -168,17 +178,17 @@ fun MainApp(
                     }
                     // Show prompt to add account if auth is ready but no accounts exist.
                     state.accounts.isEmpty() && state.isAuthInitialized -> {
-                        SignedOutContent(
-                            isAuthInitialized = true,
-                            authInitializationError = null,
-                            authErrorUserMessage = null,
+                        SignedOutContent( // This composable now represents the "No Accounts" state
+                            isAuthInitialized = true, // We know auth is initialized here
+                            authInitializationError = null, // No init error if we reached here
+                            authErrorUserMessage = null, // No specific auth error message here
                             onAddAccountClick = onNavigateToSettings, // Navigate to Settings to add account.
                             modifier = Modifier.fillMaxSize()
                         )
                     }
                     // Show message list if a folder is selected.
                     state.selectedFolder != null -> {
-                        // Find the account associated with the selected folder.
+                        // Find the account associated with the selected folder from ViewModel state.
                         val accountForMessages =
                             state.accounts.find { it.id == state.selectedFolderAccountId }
                         MessageListContent(
@@ -214,20 +224,21 @@ fun MainApp(
 
 // --- Helper Composables ---
 
-/** Displays a centered loading indicator and status text. */
+/** Displays a centered loading indicator and status text based on flags. */
 @Composable
 private fun LoadingIndicator(isInitializing: Boolean, isAuthenticating: Boolean) {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             CircularProgressIndicator()
             Spacer(Modifier.height(16.dp))
+            // Display appropriate text based on the current loading state.
             if (isInitializing) Text(stringResource(R.string.status_initializing_auth))
             else if (isAuthenticating) Text(stringResource(R.string.status_authenticating))
         }
     }
 }
 
-/** Displays a centered error message for authentication initialization failures. */
+/** Displays a centered error message specifically for authentication initialization failures. */
 @Composable
 private fun AuthInitErrorContent(state: MainScreenState) {
     Box(
@@ -236,6 +247,7 @@ private fun AuthInitErrorContent(state: MainScreenState) {
             .padding(16.dp), contentAlignment = Alignment.Center
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            // Display the main error title.
             Text(
                 stringResource(R.string.error_auth_init_failed),
                 style = MaterialTheme.typography.titleMedium,
@@ -243,7 +255,7 @@ private fun AuthInitErrorContent(state: MainScreenState) {
                 textAlign = TextAlign.Center
             )
             Spacer(Modifier.height(8.dp))
-            // Display specific error details if available.
+            // Display specific error details if available from the ViewModel state.
             val errorText = state.authErrorUserMessage ?: state.authInitializationError?.message
             ?: stringResource(id = R.string.error_unknown_occurred)
             Text(
@@ -256,20 +268,31 @@ private fun AuthInitErrorContent(state: MainScreenState) {
     }
 }
 
-/** Displays content shown when authentication is initialized but no accounts are added. */
+/**
+ * Displays content shown when authentication is initialized but no accounts are added yet.
+ * Prompts the user to add an account via the Settings screen.
+ */
 @Composable
-fun SignedOutContent( // Now means "No Accounts" state
-    isAuthInitialized: Boolean, authInitializationError: MsalException?,
-    authErrorUserMessage: String?, onAddAccountClick: () -> Unit, modifier: Modifier = Modifier
+fun SignedOutContent( // Now clearly represents the "No Accounts" state post-initialization
+    isAuthInitialized: Boolean, // Should always be true when this composable is shown via MainActivity logic
+    authInitializationError: MsalException?, // Should be null when shown
+    authErrorUserMessage: String?, // Should be null when shown
+    onAddAccountClick: () -> Unit, // Callback to navigate to where accounts can be added
+    modifier: Modifier = Modifier
 ) {
     Box(modifier = modifier, contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            // Welcome message.
             Text(stringResource(R.string.welcome_message))
             Spacer(modifier = Modifier.height(8.dp))
+            // Prompt explaining the next step.
             Text(stringResource(R.string.prompt_add_account), textAlign = TextAlign.Center)
             Spacer(modifier = Modifier.height(16.dp))
-            // Button to navigate to where accounts can be managed/added.
-            Button(onClick = onAddAccountClick, enabled = isAuthInitialized) {
+            // Button to navigate to where accounts can be managed/added (likely Settings).
+            Button(
+                onClick = onAddAccountClick,
+                enabled = isAuthInitialized
+            ) { // Button enabled state depends on auth init
                 Text(stringResource(R.string.manage_accounts_button))
             }
         }
@@ -278,8 +301,9 @@ fun SignedOutContent( // Now means "No Accounts" state
 
 // --- Utility Function ---
 
-/** Shows a short toast message. */
+/** Shows a short toast message using the provided context. */
 private fun showToast(context: Context, message: String?) {
+    // Avoid showing empty toasts.
     if (message.isNullOrBlank()) return
     Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
 }
