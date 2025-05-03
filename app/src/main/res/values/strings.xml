@@ -1,17 +1,14 @@
 <resources>
     <string name="app_name">Mail</string>
-
     <string name="unknown_user">Unknown User</string>
     <string name="sign_out">Sign Out</string>
     <string name="error_unknown_occurred">An unknown error occurred.</string>
-
     <string name="folders_header">Folders</string>
     <string name="cd_error_loading_folders">Error loading folders icon</string>
     <string name="error_could_not_load_folders">Couldn\'t load folders</string>
     <string name="error_check_connection_refresh">Check connection and pull down message list to refresh.</string>
     <string name="cd_no_folders_found">No folders found icon</string>
     <string name="no_folders_found">No folders found.</string>
-
     <string name="loading_folders">Loading Folders…</string>
     <string name="error_loading_folders_title">Error Loading Folders</string>
     <string name="error_could_not_load_folder_list">Could not load folder list.</string>
@@ -22,5 +19,34 @@
     <string name="cd_no_messages">No messages icon</string>
     <string name="no_messages_title">No Messages</string>
     <string name="folder_is_empty">This folder is empty.</string>
+
+    <string name="accounts_header">Accounts</string>
+    <string name="add_account">Add Account</string>
+    <string name="remove_account">Remove %1$s</string>
+    <string name="remove_account_cd">Remove account %1$s</string>
+    <string name="cd_open_navigation_drawer">Open Navigation Drawer</string>
+    <string name="cd_signed_in_as">Signed in as %1$s</string>
+    <string name="title_initializing">Initializing…</string>
+    <string name="title_loading_messages">Loading Messages…</string>
+    <string name="title_no_accounts">Mail</string>
+    <string name="title_select_account">Select Account</string>
+    <string name="welcome_message">Welcome to Melisma Mail</string>
+    <string name="add_account_button">Sign In / Add Account</string>
+    <string name="manage_accounts_button">Manage Accounts</string>
+    <string name="status_initializing_auth">(Initializing Auth…)</string>
+    <string name="status_authenticating">(Authenticating…)</string>
+    <string name="status_auth_failed">(Authentication Failed: %1$s)</string>
+    <string name="error_auth_init_failed">Authentication Setup Failed</string>
+    <string name="settings_title">Settings</string>
+    <string name="account_context_label">Account: %1$s</string>
+    <string name="prompt_select_folder">Select a folder from the drawer</string>
+    <string name="prompt_add_account">Add an account via Settings to get started.</string>
+    <string name="manage_accounts_header">Manage Accounts</string>
+    <string name="no_accounts_added">No accounts have been added yet.</string>
+    <string name="remove_account_confirm_title">Remove Account?</string>
+    <string name="remove_account_confirm_message">Are you sure you want to remove the account %1$s? You will need to sign in again to access its mail.</string>
+    <string name="remove_action">Remove</string>
+    <string name="cancel_action">Cancel</string>
+    <string name="cd_navigate_up">Navigate Up</string>
 
 </resources>

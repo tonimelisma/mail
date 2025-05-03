@@ -1,9 +1,9 @@
 package net.melisma.mail
 
+// Assuming SettingsScreen is in this package based on previous step
 import android.app.Activity
 import android.content.Context
 import android.os.Bundle
-import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -11,13 +11,10 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
@@ -30,10 +27,14 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -43,175 +44,166 @@ import net.melisma.feature_auth.MicrosoftAuthManager
 import net.melisma.mail.ui.MailDrawerContent
 import net.melisma.mail.ui.MailTopAppBar
 import net.melisma.mail.ui.MessageListContent
+import net.melisma.mail.ui.settings.SettingsScreen
 import net.melisma.mail.ui.theme.MailTheme
-
-// SignedOutContent is now defined within this file
 
 class MainActivity : ComponentActivity() {
 
+    // Lazily initialize MicrosoftAuthManager, providing context and config resource ID.
     private val microsoftAuthManager: MicrosoftAuthManager by lazy {
-        MicrosoftAuthManager(
-            context = applicationContext,
-            configResId = R.raw.auth_config
-        )
+        MicrosoftAuthManager(context = applicationContext, configResId = R.raw.auth_config)
     }
 
+    // Obtain the MainViewModel using the activity-ktx delegate.
+    // The ViewModel is scoped to this Activity's lifecycle.
+    // We provide a custom factory (MainViewModelFactory) because the ViewModel
+    // requires dependencies (context, authManager) in its constructor.
     private val viewModel: MainViewModel by viewModels {
-        MainViewModel.provideFactory(applicationContext, microsoftAuthManager)
+        MainViewModelFactory(applicationContext, microsoftAuthManager)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        enableEdgeToEdge() // Enable drawing behind system bars.
         setContent {
+            // Apply the app's theme.
             MailTheme {
                 val activity = LocalContext.current as Activity
-                MainApp(viewModel = viewModel, activity = activity)
+                // State to control whether the Settings screen is shown.
+                var showSettings by remember { mutableStateOf(false) }
+
+                // Display either the Settings screen or the main app content.
+                if (showSettings) {
+                    SettingsScreen(
+                        viewModel = viewModel,
+                        activity = activity,
+                        onNavigateUp = { showSettings = false } // Callback to close settings.
+                    )
+                } else {
+                    MainApp(
+                        viewModel = viewModel,
+                        activity = activity,
+                        onNavigateToSettings = {
+                            showSettings = true // Callback to open settings.
+                        }
+                    )
+                }
             }
         }
     }
 }
 
+/**
+ * The main application Composable, including the navigation drawer and scaffold.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun MainApp(viewModel: MainViewModel, activity: Activity) {
+fun MainApp(
+    viewModel: MainViewModel,
+    activity: Activity,
+    onNavigateToSettings: () -> Unit
+) {
+    // Collect the UI state from the ViewModel in a lifecycle-aware manner.
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    // Remember the state for the navigation drawer (open/closed).
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    // Remember a CoroutineScope bound to this Composable's lifecycle.
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
+    // Effect to show toast messages when they appear in the state.
     LaunchedEffect(state.toastMessage) {
         state.toastMessage?.let { message ->
             showToast(context, message)
+            // Notify the ViewModel that the message has been shown.
             viewModel.toastMessageShown()
         }
     }
 
-    // Initial Load Logic
-    LaunchedEffect(state.currentAccount, state.folderDataState) {
-        val account = state.currentAccount
-        if (account != null && state.folderDataState == DataState.INITIAL) {
-            Log.d("MainApp", "Triggering initial folder fetch.")
-            viewModel.refreshFolders(activity)
-        }
-    }
-    LaunchedEffect(state.folders, state.selectedFolder, state.folderDataState) {
-        val currentFolders = state.folders
-        val currentSelectedFolder = state.selectedFolder
-        if (state.folderDataState == DataState.SUCCESS && !currentFolders.isNullOrEmpty() && currentSelectedFolder == null) {
-            val inboxFolder =
-                currentFolders.find { it.displayName.equals("Inbox", ignoreCase = true) }
-            if (inboxFolder != null) {
-                Log.d("MainApp", "Folders loaded and none selected, selecting Inbox.")
-                viewModel.selectFolder(inboxFolder, activity)
-            } else {
-                Log.w("MainApp", "Folders loaded, but Inbox not found. Selecting first folder.")
-                if (currentFolders.isNotEmpty()) {
-                    viewModel.selectFolder(currentFolders.first(), activity)
-                }
-            }
-        }
-    }
-
+    // Root Composable for the navigation drawer pattern.
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
+            // Content of the drawer (account list, folders, settings).
             MailDrawerContent(
                 state = state,
-                onFolderSelected = { folder ->
-                    scope.launch { drawerState.close() }
-                    viewModel.selectFolder(folder, activity)
+                onFolderSelected = { folder, account ->
+                    scope.launch { drawerState.close() } // Close drawer on selection.
+                    viewModel.selectFolder(folder, account) // Notify ViewModel.
                 },
-                onSignOutClick = {
-                    scope.launch { drawerState.close() }
-                    viewModel.signOut(activity)
-                },
-                onRefreshFolders = {
-                    viewModel.refreshFolders(activity)
+                onSettingsClicked = {
+                    scope.launch { drawerState.close() } // Close drawer.
+                    onNavigateToSettings() // Navigate to Settings screen.
                 }
             )
         }
     ) {
+        // Provides standard app layout structure (app bar, content area, FAB).
         Scaffold(
             topBar = {
-                val currentSelectedFolder = state.selectedFolder
+                // Determine the title for the app bar.
+                val title = state.selectedFolder?.displayName ?: stringResource(R.string.app_name)
                 MailTopAppBar(
-                    title = when {
-                        state.folderDataState == DataState.LOADING -> "Loading Folders..."
-                        state.folderDataState == DataState.ERROR -> "Mail"
-                        currentSelectedFolder == null -> "Mail"
-                        state.messageDataState == DataState.LOADING && state.messages == null -> "Loading..."
-                        else -> currentSelectedFolder.displayName
-                    },
-                    account = state.currentAccount,
+                    title = title,
+                    // Action to open the navigation drawer.
                     onNavigationClick = { scope.launch { drawerState.open() } }
                 )
             },
-            floatingActionButton = {
-                // Placeholder for Compose FAB
-            }
+            floatingActionButton = { /* Placeholder for potential FAB */ }
         ) { innerPadding ->
+            // Content area of the Scaffold.
             Box(modifier = Modifier.padding(innerPadding)) {
-                val account = state.currentAccount // Use local val for checks
-
-                // Restructured when block
+                // Determine which main content UI to show based on the current state.
                 when {
-                    // Handle Loading States First
+                    // Show loading indicator during auth initialization or actions.
                     state.isLoadingAuthAction || (!state.isAuthInitialized && state.authInitializationError == null) -> {
+                        LoadingIndicator(
+                            isInitializing = !state.isAuthInitialized && state.authInitializationError == null,
+                            isAuthenticating = state.isLoadingAuthAction
+                        )
+                    }
+                    // Show error if authentication initialization failed.
+                    !state.isAuthInitialized && state.authInitializationError != null -> {
+                        AuthInitErrorContent(state = state)
+                    }
+                    // Show prompt to add account if auth is ready but no accounts exist.
+                    state.accounts.isEmpty() && state.isAuthInitialized -> {
+                        SignedOutContent(
+                            isAuthInitialized = true,
+                            authInitializationError = null,
+                            authErrorUserMessage = null,
+                            onAddAccountClick = onNavigateToSettings, // Navigate to Settings to add account.
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                    // Show message list if a folder is selected.
+                    state.selectedFolder != null -> {
+                        // Find the account associated with the selected folder.
+                        val accountForMessages =
+                            state.accounts.find { it.id == state.selectedFolderAccountId }
+                        MessageListContent(
+                            messageDataState = state.messageDataState,
+                            messages = state.messages,
+                            messageError = state.messageError,
+                            accountContext = accountForMessages, // Pass the account for context header.
+                            onRefresh = { viewModel.refreshMessages(activity) }, // Trigger refresh in ViewModel.
+                            onMessageClick = { messageId ->
+                                // Placeholder action for clicking a message.
+                                showToast(context, "Clicked: $messageId")
+                            }
+                        )
+                    }
+                    // Default case: Auth ready, accounts exist, but no folder selected yet.
+                    else -> {
                         Box(
                             modifier = Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center
                         ) {
-                            CircularProgressIndicator()
-                            if (!state.isAuthInitialized && state.authInitializationError == null) {
-                                Text(
-                                    "Initializing Auth...",
-                                    modifier = Modifier.padding(top = 60.dp)
-                                )
-                            }
-                        }
-                    }
-                    // Handle Auth Init Error State
-                    state.authErrorUserMessage != null && !state.isAuthInitialized -> { // Show auth init error only if not initialized successfully
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(16.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
                             Text(
-                                "Authentication Error:\n${state.authErrorUserMessage}",
-                                color = MaterialTheme.colorScheme.error,
-                                textAlign = TextAlign.Center
+                                stringResource(R.string.prompt_select_folder),
+                                style = MaterialTheme.typography.bodyLarge
                             )
                         }
-                    }
-                    // Handle Signed In State
-                    account != null -> {
-                        MessageListContent(
-                            folderDataState = state.folderDataState,
-                            folderError = state.folderError,
-                            messageDataState = state.messageDataState,
-                            messages = state.messages,
-                            messageError = state.messageError,
-                            onRefresh = { viewModel.refreshMessages(activity) },
-                            onMessageClick = { messageId ->
-                                showToast(
-                                    context,
-                                    "Clicked: $messageId"
-                                )
-                            }
-                        )
-                    }
-                    // Handle Signed Out State (The only remaining possibility is account == null and no errors/loading)
-                    else -> {
-                        SignedOutContent(
-                            isAuthInitialized = state.isAuthInitialized, // Should be true here if no error
-                            authInitializationError = state.authInitializationError, // Likely null here
-                            authErrorUserMessage = state.authErrorUserMessage, // Likely null here
-                            onSignInClick = { viewModel.signIn(activity) },
-                            modifier = Modifier.fillMaxSize()
-                        )
                     }
                 } // End when
             } // End Box
@@ -220,70 +212,74 @@ fun MainApp(viewModel: MainViewModel, activity: Activity) {
 }
 
 
-// Keep private helper functions in MainActivity
+// --- Helper Composables ---
+
+/** Displays a centered loading indicator and status text. */
 @Composable
-private fun findActivity(): Activity {
-    val context = LocalContext.current
-    return context as? Activity
-        ?: throw IllegalStateException("Composable is not hosted in an Activity context")
+private fun LoadingIndicator(isInitializing: Boolean, isAuthenticating: Boolean) {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            CircularProgressIndicator()
+            Spacer(Modifier.height(16.dp))
+            if (isInitializing) Text(stringResource(R.string.status_initializing_auth))
+            else if (isAuthenticating) Text(stringResource(R.string.status_authenticating))
+        }
+    }
 }
 
-private fun showToast(context: Context, message: String?) {
-    if (message.isNullOrBlank()) return
-    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+/** Displays a centered error message for authentication initialization failures. */
+@Composable
+private fun AuthInitErrorContent(state: MainScreenState) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp), contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(
+                stringResource(R.string.error_auth_init_failed),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.error,
+                textAlign = TextAlign.Center
+            )
+            Spacer(Modifier.height(8.dp))
+            // Display specific error details if available.
+            val errorText = state.authErrorUserMessage ?: state.authInitializationError?.message
+            ?: stringResource(id = R.string.error_unknown_occurred)
+            Text(
+                errorText,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+                textAlign = TextAlign.Center
+            )
+        }
+    }
 }
 
-// SignedOutContent defined here needs MsalException import
+/** Displays content shown when authentication is initialized but no accounts are added. */
 @Composable
-fun SignedOutContent(
-    isAuthInitialized: Boolean,
-    authInitializationError: MsalException?, // Raw error type
-    authErrorUserMessage: String?, // Mapped user-friendly message
-    onSignInClick: () -> Unit,
-    modifier: Modifier = Modifier
+fun SignedOutContent( // Now means "No Accounts" state
+    isAuthInitialized: Boolean, authInitializationError: MsalException?,
+    authErrorUserMessage: String?, onAddAccountClick: () -> Unit, modifier: Modifier = Modifier
 ) {
     Box(modifier = modifier, contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("Welcome to Melisma Mail")
-            Spacer(modifier = Modifier.height(16.dp))
-            Button(
-                onClick = onSignInClick,
-                // Only enable if initialized AND there isn't a persistent auth init error shown
-                enabled = isAuthInitialized // && authErrorUserMessage == null
-            ) {
-                Text("Sign In with Microsoft")
-            }
+            Text(stringResource(R.string.welcome_message))
             Spacer(modifier = Modifier.height(8.dp))
-
-            // Show initialization status or error
-            if (!isAuthInitialized && authInitializationError == null) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                    Spacer(Modifier.width(8.dp))
-                    Text("(Initializing Auth...)", style = MaterialTheme.typography.bodySmall)
-                }
-                // Use the mapped user message if available for auth init errors
-            } else if (authErrorUserMessage != null && !isAuthInitialized) { // Check !isAuthInitialized to distinguish from transient errors after sign-in
-                Text(
-                    "(Authentication Failed: $authErrorUserMessage)",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(horizontal = 16.dp)
-                )
-            }
-            // Fallback to raw error message only if mapping failed and not initialized
-            else if (authInitializationError != null && !isAuthInitialized) {
-                Text(
-                    "(Authentication Failed: ${authInitializationError.message ?: "Unknown error"})",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(horizontal = 16.dp)
-                )
+            Text(stringResource(R.string.prompt_add_account), textAlign = TextAlign.Center)
+            Spacer(modifier = Modifier.height(16.dp))
+            // Button to navigate to where accounts can be managed/added.
+            Button(onClick = onAddAccountClick, enabled = isAuthInitialized) {
+                Text(stringResource(R.string.manage_accounts_button))
             }
         }
     }
 }
 
-// --- Previews --- (Should be in respective UI files)
+// --- Utility Function ---
+
+/** Shows a short toast message. */
+private fun showToast(context: Context, message: String?) {
+    if (message.isNullOrBlank()) return
+    Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
+}

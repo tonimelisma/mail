@@ -3,7 +3,8 @@
   "authorization_user_agent": "DEFAULT",
   "redirect_uri": "msauth://net.melisma.mail/xiqLcVCeut7uni40h117Xcb0hQg%3D",
   "broker_redirect_uri_registered": true,
-  "account_mode": "SINGLE",
+  "account_mode": "MULTIPLE",
+  // <--- Changed from SINGLE
   "authorities": [
     {
       "type": "AAD",
