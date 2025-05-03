@@ -1,5 +1,11 @@
-package net.melisma.mail.ui.settings // New subpackage for settings UI
+// File: app/src/main/java/net/melisma/mail/ui/settings/SettingsScreen.kt
+// Updated to use generic Account type
 
+package net.melisma.mail.ui.settings
+
+// Import the generic Account type
+// Remove IAccount import if no longer directly used
+// import com.microsoft.identity.client.IAccount
 import android.app.Activity
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -42,8 +48,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.microsoft.identity.client.IAccount
 import kotlinx.coroutines.launch
+import net.melisma.mail.Account
 import net.melisma.mail.MainViewModel
 import net.melisma.mail.R
 
@@ -54,13 +60,18 @@ fun SettingsScreen(
     activity: Activity,
     onNavigateUp: () -> Unit // Callback to navigate back
 ) {
+    // Collect the state which now contains List<Account>
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
-    var showRemoveDialog by remember { mutableStateOf<IAccount?>(null) }
+    // State for the confirmation dialog, holding the generic Account to remove
+    var showRemoveDialog by remember { mutableStateOf<Account?>(null) }
 
+    // Observe toast message changes (remains the same)
     LaunchedEffect(state.toastMessage) {
         state.toastMessage?.let { message ->
+            // Added more specific check based on repository messages if needed,
+            // but checking for keywords is okay for now.
             if (message.contains("Account added") || message.contains("Account removed") || message.contains(
                     "Error"
                 )
@@ -88,14 +99,17 @@ fun SettingsScreen(
         },
         floatingActionButton = {
             Button(
+                // Trigger add account action in ViewModel
                 onClick = { viewModel.addAccount(activity) },
-                enabled = !state.isLoadingAuthAction
+                // Use isLoadingAccountAction from the updated state
+                enabled = !state.isLoadingAccountAction
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Show loading indicator inside button if auth action is happening
-                    if (state.isLoadingAuthAction && state.accounts.size == state.accounts.size) { // Heuristic: assume loading is for add if no remove is pending
+                    // Show loading indicator based on isLoadingAccountAction
+                    // Heuristic check needs updating if we distinguish add/remove loading
+                    if (state.isLoadingAccountAction) {
                         CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp), // Corrected: Import added
+                            modifier = Modifier.size(20.dp),
                             strokeWidth = 2.dp,
                             color = MaterialTheme.colorScheme.onPrimary
                         )
@@ -123,6 +137,7 @@ fun SettingsScreen(
                 )
             }
 
+            // Check the generic accounts list from state
             if (state.accounts.isEmpty()) {
                 item {
                     Text(
@@ -132,29 +147,31 @@ fun SettingsScreen(
                     )
                 }
             } else {
-                items(state.accounts, key = { it.id }) { account ->
+                // Iterate through the generic Account list
+                items(state.accounts, key = { it.id }) { account -> // Use generic Account
                     ListItem(
                         headlineContent = {
-                            Text(
-                                account.username ?: stringResource(R.string.unknown_user)
-                            )
+                            // Use username from generic Account
+                            Text(account.username)
                         },
                         leadingContent = {
                             Icon(
                                 Icons.Filled.AccountCircle,
-                                contentDescription = "Account"
+                                contentDescription = "Account" // Generic description
                             )
                         },
                         trailingContent = {
                             IconButton(
+                                // Set the generic Account to be removed when clicked
                                 onClick = { showRemoveDialog = account },
-                                enabled = !state.isLoadingAuthAction
+                                // Use isLoadingAccountAction from state
+                                enabled = !state.isLoadingAccountAction
                             ) {
                                 Icon(
                                     Icons.Filled.DeleteOutline,
                                     contentDescription = stringResource(
                                         R.string.remove_account_cd,
-                                        account.username ?: ""
+                                        account.username // Use username from generic Account
                                     ),
                                     tint = MaterialTheme.colorScheme.error
                                 )
@@ -165,13 +182,13 @@ fun SettingsScreen(
                 }
             }
 
-            item { Spacer(modifier = Modifier.height(80.dp)) } // Space for FAB/Button
+            item { Spacer(modifier = Modifier.height(80.dp)) } // Space for FAB
 
         } // End LazyColumn
 
-        // Confirmation Dialog for Removing Account
+        // Confirmation Dialog uses the generic Account stored in showRemoveDialog state
         if (showRemoveDialog != null) {
-            val accountToRemove = showRemoveDialog!!
+            val accountToRemove = showRemoveDialog!! // Now holds a generic Account
             AlertDialog(
                 onDismissRequest = { showRemoveDialog = null },
                 title = { Text(stringResource(R.string.remove_account_confirm_title)) },
@@ -179,17 +196,19 @@ fun SettingsScreen(
                     Text(
                         stringResource(
                             R.string.remove_account_confirm_message,
-                            accountToRemove.username ?: ""
+                            accountToRemove.username // Use username from generic Account
                         )
                     )
                 },
                 confirmButton = {
                     TextButton(
                         onClick = {
+                            // Call the updated removeAccount in ViewModel with generic Account
                             viewModel.removeAccount(activity, accountToRemove)
                             showRemoveDialog = null
                         },
-                        enabled = !state.isLoadingAuthAction
+                        // Use isLoadingAccountAction from state
+                        enabled = !state.isLoadingAccountAction
                     ) {
                         Text(stringResource(R.string.remove_action).uppercase())
                     }
