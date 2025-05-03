@@ -1,11 +1,8 @@
 // File: app/src/main/java/net/melisma/mail/MainActivity.kt
-// Cleaned: Removed duplicate composables, fixed imports and state usage
+// Updated for Step 2: FolderRepository (ViewModel signature change)
 
 package net.melisma.mail
 
-// Import necessary Compose components that were missing
-// Keep MsalException if used in AuthInitErrorContent display logic
-// Import generic Account (no longer need IAccount here)
 import android.app.Activity
 import android.content.Context
 import android.os.Bundle
@@ -55,34 +52,49 @@ import net.melisma.mail.ui.theme.MailTheme
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
-    // Use Hilt's delegate - MainViewModelFactory MUST be deleted
+    // Use Hilt's delegate for ViewModel injection
     private val viewModel: MainViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        enableEdgeToEdge() // Enable drawing behind system bars
         setContent {
-            MailTheme {
+            MailTheme { // Apply the application theme
                 val context = LocalContext.current
-                val activity = context as? Activity // Safe cast
+                // Use remember to manage navigation state between main app and settings
+                var showSettings by remember { mutableStateOf(false) }
 
-                if (activity == null) {
-                    Log.e("MainActivity", "Error: Context is not an Activity.")
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("Critical Error: Cannot get Activity context.")
-                    }
-                } else {
-                    var showSettings by remember { mutableStateOf(false) }
-                    if (showSettings) {
+                // Conditionally display SettingsScreen or MainApp
+                if (showSettings) {
+                    // Ensure activity context is correctly passed if needed by screen/VM actions
+                    val activity = context as? Activity
+                    if (activity != null) {
                         SettingsScreen(
                             viewModel = viewModel,
-                            activity = activity,
-                            onNavigateUp = { showSettings = false })
+                            activity = activity, // Pass activity for account actions
+                            onNavigateUp = {
+                                showSettings = false
+                            } // Callback to return to main app
+                        )
                     } else {
+                        // Handle error case where context is not an Activity (shouldn't happen in standard scenarios)
+                        Log.e("MainActivity", "Error: Context is not an Activity in Settings path.")
+                        ErrorDisplay("Critical Error: Cannot get Activity context.") // Show error UI
+                    }
+                } else {
+                    // Pass activity context to MainApp if needed for actions like refresh triggers
+                    val activity = context as? Activity
+                    if (activity != null) {
                         MainApp(
                             viewModel = viewModel,
-                            activity = activity,
-                            onNavigateToSettings = { showSettings = true })
+                            activity = activity, // Pass activity for potential refresh triggers
+                            onNavigateToSettings = {
+                                showSettings = true
+                            } // Callback to navigate to settings
+                        )
+                    } else {
+                        Log.e("MainActivity", "Error: Context is not an Activity in MainApp path.")
+                        ErrorDisplay("Critical Error: Cannot get Activity context.") // Show error UI
                     }
                 }
             }
@@ -90,141 +102,158 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/**
+ * The main application composable, including navigation drawer, scaffold, and content switching.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainApp(
     viewModel: MainViewModel,
-    activity: Activity,
+    activity: Activity, // Receive activity for potential actions
     onNavigateToSettings: () -> Unit
 ) {
-    val state by viewModel.uiState.collectAsStateWithLifecycle() // Collects the new MainScreenState
+    // Collect the latest UI state from the ViewModel lifecycle-awarely
+    val state by viewModel.uiState.collectAsStateWithLifecycle()
+    // State for managing the navigation drawer (open/closed)
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    // Coroutine scope bound to the Composable's lifecycle
     val scope = rememberCoroutineScope()
-    val context = LocalContext.current
+    val context = LocalContext.current // Get current context for showing toasts
 
+    // Effect to show toast messages when the state indicates one is available
     LaunchedEffect(state.toastMessage) {
         state.toastMessage?.let { message ->
-            showToast(context, message)
-            viewModel.toastMessageShown()
+            showToast(context, message) // Show the toast
+            viewModel.toastMessageShown() // Notify ViewModel the message has been shown
         }
     }
 
+    // Root composable for the navigation drawer pattern
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
+            // Content of the navigation drawer, defined in MailDrawerContent.kt
             MailDrawerContent(
-                state = state, // Pass the NEW state object
-                onFolderSelected = { folder, account -> // account is generic Account
-                    scope.launch { drawerState.close() }
-                    // Use internal helper to get IAccount for the temporary selectFolder signature
-                    val msalAccount = viewModel.getMsalAccountById(account.id)
-                    if (msalAccount != null) {
-                        viewModel.selectFolder(folder, msalAccount)
-                    } else {
-                        Log.e(
-                            "MainApp",
-                            "Could not find IAccount for selected Account ${account.id}"
-                        )
-                        showToast(context, "Error selecting folder: Account data mismatch.")
-                    }
+                state = state, // Pass the full UI state
+                onFolderSelected = { folder, account -> // Lambda called when a folder is clicked
+                    scope.launch { drawerState.close() } // Close drawer smoothly
+                    // Call ViewModel's selectFolder with the generic Account object
+                    viewModel.selectFolder(folder, account)
                 },
-                onSettingsClicked = { scope.launch { drawerState.close() }; onNavigateToSettings() }
+                onSettingsClicked = { // Lambda called when Settings item is clicked
+                    scope.launch { drawerState.close() } // Close drawer
+                    onNavigateToSettings() // Trigger navigation to SettingsScreen
+                }
             )
         }
     ) {
+        // Main screen structure using Scaffold
         Scaffold(
             topBar = {
+                // Determine title based on selected folder or app name
                 val title = state.selectedFolder?.displayName ?: stringResource(R.string.app_name)
-                // Use the separate MailTopAppBar composable
+                // Reusable top app bar component
                 MailTopAppBar(
                     title = title,
-                    onNavigationClick = { scope.launch { drawerState.open() } }
+                    onNavigationClick = { scope.launch { drawerState.open() } } // Open drawer on click
                 )
             },
-            floatingActionButton = { /* Placeholder */ }
-        ) { innerPadding ->
+            floatingActionButton = { /* Placeholder for future FAB (e.g., Compose) */ }
+        ) { innerPadding -> // Content area padding provided by Scaffold
             Box(modifier = Modifier.padding(innerPadding)) {
-                // Read state into local variable for when clause
-                val currentAuthState = state.authState
+                // Main content switching based on the authentication state
+                val currentAuthState = state.authState // Read state for clarity
 
                 when (currentAuthState) {
                     is AuthState.Initializing -> {
-                        // Use the single LoadingIndicator composable defined below
-                        LoadingIndicator(isInitializing = true, isAuthenticating = false)
+                        // Show loading indicator during auth initialization
+                        LoadingIndicator(statusText = stringResource(R.string.status_initializing_auth))
                     }
 
                     is AuthState.InitializationError -> {
-                        // Use the single AuthInitErrorContent composable defined below
+                        // Show error message if auth initialization failed
                         AuthInitErrorContent(errorState = currentAuthState)
                     }
 
                     is AuthState.Initialized -> {
+                        // Auth is ready, decide content based on account actions or selected folder
                         when {
                             state.isLoadingAccountAction -> {
-                                LoadingIndicator(isInitializing = false, isAuthenticating = true)
+                                // Show loading indicator during account add/remove operations
+                                LoadingIndicator(statusText = stringResource(R.string.status_authenticating))
                             }
 
                             state.accounts.isEmpty() -> {
-                                // Use the single SignedOutContent composable defined below
+                                // Show prompt to add account if none exist
                                 SignedOutContent(
-                                    onAddAccountClick = onNavigateToSettings,
+                                    onAddAccountClick = onNavigateToSettings, // Navigate to settings to add account
                                     modifier = Modifier.fillMaxSize()
                                 )
                             }
 
                             state.selectedFolder != null -> {
+                                // If a folder is selected, show the message list
+                                // Find the account context (needed for potential header/info)
                                 val accountForMessages =
                                     state.accounts.find { it.id == state.selectedFolderAccountId }
-                                // MessageListContent now correctly receives Account?
+                                // MessageListContent composable displays the emails
                                 MessageListContent(
-                                    messageDataState = state.messageDataState,
-                                    messages = state.messages,
-                                    messageError = state.messageError,
-                                    accountContext = accountForMessages, // Pass generic Account
-                                    onRefresh = { viewModel.refreshMessages(activity) },
+                                    messageDataState = state.messageDataState, // Pass message loading state
+                                    messages = state.messages, // Pass list of messages
+                                    messageError = state.messageError, // Pass any message loading error
+                                    accountContext = accountForMessages, // Pass the selected account details
+                                    onRefresh = { viewModel.refreshMessages(activity) }, // Lambda for pull-to-refresh
                                     onMessageClick = { messageId ->
+                                        // TODO: Implement navigation to single message view
                                         showToast(
                                             context,
-                                            "Clicked: $messageId"
+                                            "Clicked Message ID: $messageId (View not implemented)"
                                         )
                                     }
                                 )
                             }
 
                             else -> {
+                                // If initialized but no folder selected (e.g., after initial load)
+                                // Show prompt to select a folder from the drawer
                                 Box(
                                     modifier = Modifier.fillMaxSize(),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Text(
                                         stringResource(R.string.prompt_select_folder),
-                                        style = MaterialTheme.typography.bodyLarge
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        textAlign = TextAlign.Center,
+                                        modifier = Modifier.padding(16.dp)
                                     )
                                 }
                             }
                         }
                     }
                 } // End when (currentAuthState)
-            } // End Box
+            } // End Box (main content area)
         } // End Scaffold
     } // End ModalNavigationDrawer
 }
 
 
-// --- Helper Composables (Single Definitions) ---
+// --- Helper Composables (Single Definitions within MainActivity for simplicity) ---
 
+/** Displays a centered CircularProgressIndicator with optional status text. */
 @Composable
-private fun LoadingIndicator(isInitializing: Boolean, isAuthenticating: Boolean) {
+private fun LoadingIndicator(statusText: String?) {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             CircularProgressIndicator()
-            Spacer(Modifier.height(16.dp))
-            if (isInitializing) Text(stringResource(R.string.status_initializing_auth))
-            else if (isAuthenticating) Text(stringResource(R.string.status_authenticating))
+            if (statusText != null) {
+                Spacer(Modifier.height(16.dp))
+                Text(statusText, style = MaterialTheme.typography.bodyMedium)
+            }
         }
     }
 }
 
+/** Displays a centered error message for authentication initialization failures. */
 @Composable
 private fun AuthInitErrorContent(errorState: AuthState.InitializationError) {
     Box(modifier = Modifier
@@ -238,6 +267,7 @@ private fun AuthInitErrorContent(errorState: AuthState.InitializationError) {
                 textAlign = TextAlign.Center
             )
             Spacer(Modifier.height(8.dp))
+            // Display the specific error message from the exception, or a generic fallback
             val errorText =
                 errorState.error?.message ?: stringResource(id = R.string.error_unknown_occurred)
             Text(
@@ -250,23 +280,53 @@ private fun AuthInitErrorContent(errorState: AuthState.InitializationError) {
     }
 }
 
+/** Displays content shown when the user is authenticated but has no accounts added. */
 @Composable
 private fun SignedOutContent(onAddAccountClick: () -> Unit, modifier: Modifier = Modifier) {
     Box(modifier = modifier, contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(stringResource(R.string.welcome_message))
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(stringResource(R.string.prompt_add_account), textAlign = TextAlign.Center)
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(16.dp)
+        ) {
+            Text(
+                stringResource(R.string.welcome_message),
+                style = MaterialTheme.typography.headlineSmall
+            )
             Spacer(modifier = Modifier.height(16.dp))
-            Button(onClick = onAddAccountClick) { Text(stringResource(R.string.manage_accounts_button)) }
+            Text(
+                stringResource(R.string.prompt_add_account),
+                textAlign = TextAlign.Center,
+                style = MaterialTheme.typography.bodyLarge
+            )
+            Spacer(modifier = Modifier.height(24.dp))
+            // Button to navigate to where accounts can be added (Settings)
+            Button(onClick = onAddAccountClick) {
+                Text(stringResource(R.string.manage_accounts_button)) // Reuse settings button text
+            }
         }
     }
 }
 
-// showToast remains the same
+/** Displays a generic error message centered on the screen. */
+@Composable
+private fun ErrorDisplay(message: String) {
+    Box(modifier = Modifier
+        .fillMaxSize()
+        .padding(16.dp), contentAlignment = Alignment.Center) {
+        Text(
+            text = message,
+            color = MaterialTheme.colorScheme.error,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+
+/** Utility function to show an Android Toast message. */
 private fun showToast(context: Context, message: String?) {
+    // Ensure message is not null or blank before showing
     if (message.isNullOrBlank()) return
     Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
 }
 
-// Removed duplicated MailTopAppBar - ensure MailTopAppBar.kt exists and has imports
+// Note: MailTopAppBar composable is assumed to be in its own file (MailTopAppBar.kt)

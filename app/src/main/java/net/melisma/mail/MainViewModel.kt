@@ -1,8 +1,9 @@
 // File: app/src/main/java/net/melisma/mail/MainViewModel.kt
-// Complete, Corrected Version for Step 1.4
+// Corrected AccountRepository import path
 
 package net.melisma.mail
 
+// *** CORRECTED IMPORT PATH ***
 import android.app.Activity
 import android.content.Context
 import android.net.ConnectivityManager
@@ -16,11 +17,9 @@ import com.microsoft.identity.client.exception.MsalClientException
 import com.microsoft.identity.client.exception.MsalException
 import com.microsoft.identity.client.exception.MsalServiceException
 import com.microsoft.identity.client.exception.MsalUiRequiredException
+import com.microsoft.identity.client.exception.MsalUserCancelException
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CompletableDeferred
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -30,24 +29,26 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import net.melisma.feature_auth.AcquireTokenResult
 import net.melisma.feature_auth.MicrosoftAuthManager
+import net.melisma.mail.data.repositories.FolderRepository
+import net.melisma.mail.model.FolderFetchState
 import java.io.IOException
 import java.net.UnknownHostException
 import javax.inject.Inject
 
+
 // --- State Definitions ---
+
+/** Enum representing the fetch state specifically for the message list. */
 enum class DataState { INITIAL, LOADING, SUCCESS, ERROR }
 
-sealed class FolderFetchState {
-    data object Loading : FolderFetchState()
-    data class Success(val folders: List<MailFolder>) : FolderFetchState()
-    data class Error(val error: String) : FolderFetchState()
-}
-
+/**
+ * Immutable data class representing the complete state for the main mail screen UI.
+ */
 @Immutable
 data class MainScreenState(
     val authState: AuthState = AuthState.Initializing,
-    val accounts: List<Account> = emptyList(), // Generic Account list
-    val isLoadingAccountAction: Boolean = false, // Loading state for add/remove
+    val accounts: List<Account> = emptyList(),
+    val isLoadingAccountAction: Boolean = false,
     val foldersByAccountId: Map<String, FolderFetchState> = emptyMap(),
     val selectedFolderAccountId: String? = null,
     val selectedFolder: MailFolder? = null,
@@ -55,13 +56,20 @@ data class MainScreenState(
     val messages: List<Message>? = null,
     val messageError: String? = null,
     val toastMessage: String? = null
-)
+) {
+    val isAnyFolderLoading: Boolean
+        get() = foldersByAccountId.values.any { it is FolderFetchState.Loading }
+}
 
+/**
+ * ViewModel for the main mail screen.
+ */
 @HiltViewModel
 class MainViewModel @Inject constructor(
     @ApplicationContext private val applicationContext: Context,
-    private val accountRepository: AccountRepository,
-    // Keep MicrosoftAuthManager ONLY for acquireTokenAndExecute helper (temporary)
+    private val accountRepository: AccountRepository, // Now correctly resolved
+    private val folderRepository: FolderRepository,
+    // TODO: Remove direct dependency on MicrosoftAuthManager
     private val microsoftAuthManager: MicrosoftAuthManager
 ) : ViewModel() {
 
@@ -71,9 +79,7 @@ class MainViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(MainScreenState())
     val uiState: StateFlow<MainScreenState> = _uiState.asStateFlow()
 
-    private val folderFetchJobs = mutableMapOf<String, Job>()
-    private var initialFolderLoadJob: Job? = null
-
+    // Config for message fetching (TODO: move)
     private val mailReadScopes = listOf("User.Read", "Mail.Read")
     private val messageListSelectFields = listOf(
         "id", "receivedDateTime", "subject", "sender", "isRead", "bodyPreview"
@@ -82,62 +88,57 @@ class MainViewModel @Inject constructor(
 
     // --- Initialization ---
     init {
-        Log.d(TAG, "ViewModel Initializing - Observing AccountRepository")
-        observeRepositoryAuthState()
-        observeRepositoryAccounts()
-        observeRepositoryLoadingState()
-        observeRepositoryMessages()
-        // Trigger initial check (safe to call even if state isn't fully ready yet)
-        triggerInitialFolderFetchesIfNeeded(accountRepository.accounts.value)
+        Log.d(TAG, "ViewModel Initializing")
+        observeAccountRepository()
+        observeFolderRepository()
+
+        viewModelScope.launch {
+            val initialAccounts = accountRepository.accounts.value
+            Log.d(TAG, "Initializing FolderRepository with ${initialAccounts.size} accounts.")
+            folderRepository.manageObservedAccounts(initialAccounts)
+            selectDefaultFolderIfNeeded(_uiState.value)
+        }
     }
 
     // --- Repository Flow Observation ---
-    private fun observeRepositoryAuthState() {
+
+    /** Observes AccountRepository flows. */
+    private fun observeAccountRepository() {
+        // Observe Auth State
         accountRepository.authState
             .onEach { newAuthState ->
-                Log.d(TAG, "Repo AuthState: $newAuthState")
-                val previousInitialized = _uiState.value.authState is AuthState.Initialized
-                val currentlyInitialized = newAuthState is AuthState.Initialized
+                Log.d(TAG, "AccountRepo AuthState Changed: $newAuthState")
+                val wasInitialized = _uiState.value.authState is AuthState.Initialized
+                val isInitialized = newAuthState is AuthState.Initialized
                 _uiState.update { currentState ->
-                    val clearSelectedFolder = (!currentlyInitialized && previousInitialized) ||
+                    val clearSelection = (!isInitialized && wasInitialized) ||
                             (newAuthState is AuthState.InitializationError) ||
-                            (newAuthState is AuthState.Initializing && previousInitialized)
+                            (newAuthState is AuthState.Initializing && wasInitialized)
                     currentState.copy(
                         authState = newAuthState,
-                        selectedFolder = if (clearSelectedFolder) null else currentState.selectedFolder,
-                        selectedFolderAccountId = if (clearSelectedFolder) null else currentState.selectedFolderAccountId,
-                        messageDataState = if (clearSelectedFolder) DataState.INITIAL else currentState.messageDataState,
-                        messages = if (clearSelectedFolder) null else currentState.messages,
-                        messageError = if (clearSelectedFolder) null else currentState.messageError,
-                        foldersByAccountId = if (!currentlyInitialized) emptyMap() else currentState.foldersByAccountId
+                        selectedFolder = if (clearSelection) null else currentState.selectedFolder,
+                        selectedFolderAccountId = if (clearSelection) null else currentState.selectedFolderAccountId,
+                        messageDataState = if (clearSelection) DataState.INITIAL else currentState.messageDataState,
+                        messages = if (clearSelection) null else currentState.messages,
+                        messageError = if (clearSelection) null else currentState.messageError
                     )
                 }
-                if (currentlyInitialized) {
-                    // Trigger folder fetches if needed (accounts might have changed before state)
-                    triggerInitialFolderFetchesIfNeeded(accountRepository.accounts.value)
-                } else {
-                    cancelAllFolderFetches()
-                }
-            }
-            .launchIn(viewModelScope)
-    }
+            }.launchIn(viewModelScope)
 
-    private fun observeRepositoryAccounts() {
+        // Observe Account list
         accountRepository.accounts
             .onEach { newAccountList ->
-                Log.d(TAG, "Repo Accounts: ${newAccountList.size} accounts")
+                Log.d(TAG, "AccountRepo Accounts Changed: ${newAccountList.size} accounts")
                 val previousAccounts = _uiState.value.accounts
                 val previousSelectedAccountId = _uiState.value.selectedFolderAccountId
+                folderRepository.manageObservedAccounts(newAccountList) // Inform FolderRepo
                 _uiState.update { currentState ->
                     val removedAccountIds =
                         previousAccounts.map { it.id } - newAccountList.map { it.id }.toSet()
                     val selectedAccountRemoved =
                         previousSelectedAccountId != null && previousSelectedAccountId in removedAccountIds
-                    val newFoldersByAccount =
-                        currentState.foldersByAccountId.filterKeys { it !in removedAccountIds }
                     currentState.copy(
                         accounts = newAccountList,
-                        foldersByAccountId = newFoldersByAccount,
                         selectedFolder = if (selectedAccountRemoved) null else currentState.selectedFolder,
                         selectedFolderAccountId = if (selectedAccountRemoved) null else currentState.selectedFolderAccountId,
                         messageDataState = if (selectedAccountRemoved) DataState.INITIAL else currentState.messageDataState,
@@ -145,37 +146,58 @@ class MainViewModel @Inject constructor(
                         messageError = if (selectedAccountRemoved) null else currentState.messageError
                     )
                 }
-                if (_uiState.value.authState is AuthState.Initialized) {
-                    val removedAccountIds =
-                        previousAccounts.map { it.id } - newAccountList.map { it.id }.toSet()
-                    removedAccountIds.forEach { cancelFolderFetch(it) }
-                    triggerInitialFolderFetchesIfNeeded(newAccountList)
+                if (_uiState.value.selectedFolder == null) {
+                    selectDefaultFolderIfNeeded(_uiState.value)
                 }
-            }
-            .launchIn(viewModelScope)
-    }
+            }.launchIn(viewModelScope)
 
-    private fun observeRepositoryLoadingState() {
+        // Observe account action loading state
         accountRepository.isLoadingAccountAction
             .onEach { isLoading ->
-                Log.d(TAG, "Repo isLoadingAccountAction: $isLoading")
-                _uiState.update { it.copy(isLoadingAccountAction = isLoading) }
-            }
-            .launchIn(viewModelScope)
-    }
+                if (_uiState.value.isLoadingAccountAction != isLoading) {
+                    Log.d(TAG, "AccountRepo isLoadingAccountAction: $isLoading")
+                    _uiState.update { it.copy(isLoadingAccountAction = isLoading) }
+                }
+            }.launchIn(viewModelScope)
 
-    private fun observeRepositoryMessages() {
+        // Observe account action messages (for toasts)
         accountRepository.accountActionMessage
             .onEach { message ->
-                Log.d(TAG, "Repo accountActionMessage: $message")
-                _uiState.update { it.copy(toastMessage = message) }
-            }
-            .launchIn(viewModelScope)
+                if (_uiState.value.toastMessage != message) {
+                    Log.d(TAG, "AccountRepo accountActionMessage: $message")
+                    _uiState.update { it.copy(toastMessage = message) }
+                }
+            }.launchIn(viewModelScope)
     }
 
-    // --- Account Actions (Delegated) ---
+    /** Observes FolderRepository state. */
+    private fun observeFolderRepository() {
+        folderRepository.observeFoldersState()
+            .onEach { folderStatesMap ->
+                val previousFolderMap = _uiState.value.foldersByAccountId
+                if (previousFolderMap != folderStatesMap) {
+                    Log.d(
+                        TAG,
+                        "FolderRepo State Changed: ${folderStatesMap.entries.joinToString { "${it.key}=${it.value::class.simpleName}" }}"
+                    )
+                    _uiState.update {
+                        it.copy(foldersByAccountId = folderStatesMap)
+                    }
+                    val justLoaded = folderStatesMap.any { (id, state) ->
+                        state !is FolderFetchState.Loading && previousFolderMap[id] is FolderFetchState.Loading
+                    }
+                    if (justLoaded && _uiState.value.selectedFolder == null) {
+                        selectDefaultFolderIfNeeded(_uiState.value)
+                    }
+                }
+            }.launchIn(viewModelScope)
+    }
+
+
+    // --- Account Actions ---
     fun addAccount(activity: Activity) {
         viewModelScope.launch {
+            Log.d(TAG, "Add account action triggered.")
             accountRepository.addAccount(activity, mailReadScopes)
         }
     }
@@ -183,9 +205,7 @@ class MainViewModel @Inject constructor(
     fun removeAccount(activity: Activity, accountToRemove: Account?) {
         if (accountToRemove == null) {
             Log.e(TAG, "Remove account called with null account object.")
-            // Clear any previous message from repo and show specific error
-            viewModelScope.launch { accountRepository.clearAccountActionMessage() }
-            _uiState.update { it.copy(toastMessage = "Cannot remove null account.") }
+            tryEmitToastMessage("Cannot remove null account.")
             return
         }
         Log.d(
@@ -200,458 +220,278 @@ class MainViewModel @Inject constructor(
     // --- Toast Management ---
     fun toastMessageShown() {
         if (_uiState.value.toastMessage != null) {
-            Log.d(TAG, "Toast message shown, clearing state and notifying repository.")
+            Log.d(TAG, "Toast message shown, clearing UI state message.")
             _uiState.update { it.copy(toastMessage = null) }
             accountRepository.clearAccountActionMessage()
         }
     }
 
-    // --- Folder/Message Fetching Logic (Temporary state using IAccount) ---
-    private fun triggerInitialFolderFetchesIfNeeded(currentAccounts: List<Account>) {
-        if (uiState.value.authState !is AuthState.Initialized) return
+    // --- Folder/Message Fetching Logic ---
 
-        Log.d(
-            TAG_DEBUG_DEFAULT_SELECT,
-            "triggerInitialFolderFetchesIfNeeded checking ${currentAccounts.size} accounts"
-        )
-        val fetchJobs = mutableListOf<Job>()
-        val accountsWeAreFetchingFor = mutableListOf<Account>()
-
-        currentAccounts.forEach { account ->
-            val currentState = _uiState.value.foldersByAccountId[account.id]
-            // Fetch only if not already loaded or failed previously
-            if (currentState == null /*|| currentState is FolderFetchState.Error */) { // Optionally retry errors here too
-                val msalAccount = getMsalAccountById(account.id) // Use helper
-                if (msalAccount != null) {
-                    Log.d(TAG, "Queueing folder fetch for ${account.username}")
-                    val job = launchFolderFetch(msalAccount, activity = null, forceRefresh = false)
-                    fetchJobs.add(job)
-                    accountsWeAreFetchingFor.add(account)
-                } else {
-                    Log.w(
-                        TAG,
-                        "Cannot fetch folders for account ${account.username}, IAccount not found (ViewModel refactor needed)."
-                    )
-                    // Update state to show error for this account's folders?
-                    _uiState.update { s ->
-                        s.copy(
-                            foldersByAccountId = s.foldersByAccountId + (account.id to FolderFetchState.Error(
-                                "Internal account data missing"
-                            ))
-                        )
-                    }
-                }
-            }
-        }
-
-        val needsDefaultSelection = _uiState.value.selectedFolder == null &&
-                currentAccounts.isNotEmpty() // Already checked auth state earlier
-
-        if (needsDefaultSelection && fetchJobs.isNotEmpty()) {
-            initialFolderLoadJob?.cancel()
-            Log.d(
-                TAG_DEBUG_DEFAULT_SELECT,
-                "Launching initialFolderLoadJob to wait for ${fetchJobs.size} jobs."
-            )
-            initialFolderLoadJob = viewModelScope.launch {
-                try {
-                    fetchJobs.forEach { it.join() }
-                    Log.d(
-                        TAG_DEBUG_DEFAULT_SELECT,
-                        "initialFolderLoadJob: Fetch jobs joined successfully."
-                    )
-                } catch (e: Exception) {
-                    Log.e(
-                        TAG_DEBUG_DEFAULT_SELECT,
-                        "initialFolderLoadJob: Error joining fetch jobs.",
-                        e
-                    )
-                }
-                // Attempt selection using the list we just tried fetching for
-                selectDefaultFolderIfNeeded(accountsWeAreFetchingFor)
-            }
-        } else if (needsDefaultSelection) {
-            Log.d(
-                TAG_DEBUG_DEFAULT_SELECT,
-                "triggerInitialFolderFetchesIfNeeded: No new fetch jobs needed, calling selectDefaultFolderIfNeeded directly."
-            )
-            // Attempt selection using the full current list if no fetches were started
-            selectDefaultFolderIfNeeded(currentAccounts)
-        }
-    }
-
-    private fun launchFolderFetch(
-        account: IAccount,
-        activity: Activity?,
-        forceRefresh: Boolean = false
-    ): Job {
-        val accountId = account.id ?: return Job().apply {
-            completeExceptionally(
-                IllegalArgumentException("Account ID missing")
-            )
-        }
-
-        if (forceRefresh) {
-            folderFetchJobs[accountId]?.cancel(CancellationException("Forced refresh requested"))
-        }
-        // Re-check active job *after* potential cancellation
-        if (folderFetchJobs[accountId]?.isActive == true) {
-            Log.d(TAG, "Folder fetch already in progress for ${account.username}")
-            return folderFetchJobs[accountId]!!
-        }
-
-        val currentFolderState = _uiState.value.foldersByAccountId[accountId]
-        // Skip if successfully loaded and not forcing refresh
-        if (!forceRefresh && currentFolderState is FolderFetchState.Success) {
-            Log.d(TAG, "Folders already loaded for ${account.username}, skipping fetch.")
-            return Job().apply { complete() }
-        }
-
-        Log.d(TAG, "Starting folder fetch for ${account.username} (Force: $forceRefresh)")
-        // Set loading state *before* launching async work
-        _uiState.update { it.copy(foldersByAccountId = it.foldersByAccountId + (accountId to FolderFetchState.Loading)) }
-
-        val job = viewModelScope.launch {
-            val completionSignal = CompletableDeferred<Unit>()
-            val jobDescription = "FolderFetch Job for ${account.username}"
-            Log.d(TAG_DEBUG_DEFAULT_SELECT, "$jobDescription: Outer job started.")
-
-            try {
-                if (!isOnline()) throw IOException("No internet connection")
-
-                acquireTokenAndExecute(
-                    account = account, activity = activity, scopes = mailReadScopes,
-                    onError = { userErrorMessage ->
-                        // Update state only if still relevant
-                        if (shouldUpdateStateFor(accountId, forceRefresh)) {
-                            _uiState.update { s ->
-                                s.copy(
-                                    foldersByAccountId = s.foldersByAccountId + (accountId to FolderFetchState.Error(
-                                        userErrorMessage
-                                    ))
-                                )
-                            }
-                            Log.e(TAG, "$jobDescription: Error (Token) - $userErrorMessage")
-                        } else {
-                            Log.w(
-                                TAG,
-                                "$jobDescription: Token Error received but state no longer Loading/relevant for $accountId."
-                            )
-                        }
-                        Log.e(
-                            TAG_DEBUG_DEFAULT_SELECT,
-                            "$jobDescription: Completing deferred due to token error."
-                        )
-                        completionSignal.complete(Unit) // Signal completion on error
-                    }
-                ) { accessToken -> // Token acquired successfully
-                    Log.d(TAG, "Got token for ${account.username}, fetching folders from Graph...")
-                    // Assume GraphApiHelper is available directly or injected later
-                    val foldersResult = GraphApiHelper.getMailFolders(accessToken)
-
-                    // Update state only if still relevant
-                    if (shouldUpdateStateFor(accountId, forceRefresh)) {
-                        val newState = if (foldersResult.isSuccess) {
-                            FolderFetchState.Success(foldersResult.getOrThrow())
-                        } else {
-                            FolderFetchState.Error(mapGraphExceptionToUserMessage(foldersResult.exceptionOrNull()))
-                        }
-                        _uiState.update { s -> s.copy(foldersByAccountId = s.foldersByAccountId + (accountId to newState)) }
-
-                        if (foldersResult.isSuccess) {
-                            Log.d(TAG_DEBUG_DEFAULT_SELECT, "$jobDescription: API Call Success.")
-                        } else {
-                            Log.e(
-                                TAG_DEBUG_DEFAULT_SELECT,
-                                "$jobDescription: API Call Error: ${foldersResult.exceptionOrNull()?.message}"
-                            )
-                        }
-                    } else {
-                        Log.w(
-                            TAG,
-                            "$jobDescription: API Result received but state no longer Loading/relevant for $accountId."
-                        )
-                    }
-                    Log.d(
-                        TAG_DEBUG_DEFAULT_SELECT,
-                        "$jobDescription: Completing deferred after API call."
-                    )
-                    completionSignal.complete(Unit) // Signal completion after API call
-                }
-
-                Log.d(TAG_DEBUG_DEFAULT_SELECT, "$jobDescription: Waiting for completion signal...")
-                completionSignal.await() // Wait for callback to complete the deferred
-                Log.d(TAG_DEBUG_DEFAULT_SELECT, "$jobDescription: Completion signal received.")
-
-            } catch (e: CancellationException) {
-                Log.w(TAG_DEBUG_DEFAULT_SELECT, "$jobDescription: Outer job cancelled.", e)
-                // Ensure deferred completes if cancelled before callbacks do
-                completionSignal.completeExceptionally(e)
-                // Reset state only if it was cancelled while actively loading
-                if (shouldResetStateOnCancel(accountId)) {
-                    _uiState.update { s -> s.copy(foldersByAccountId = s.foldersByAccountId - accountId) }
-                }
-                throw e // Re-throw cancellation
-            } catch (e: Exception) { // Catch other exceptions like IOException
-                Log.e(
-                    TAG_DEBUG_DEFAULT_SELECT,
-                    "$jobDescription: Outer job exception: ${e.message}",
-                    e
-                )
-                // Ensure deferred completes if exception occurs before callbacks do
-                completionSignal.completeExceptionally(e)
-                // Update state only if still relevant
-                if (shouldUpdateStateFor(accountId, forceRefresh)) {
-                    _uiState.update { s ->
-                        s.copy(
-                            foldersByAccountId = s.foldersByAccountId + (accountId to FolderFetchState.Error(
-                                mapGraphExceptionToUserMessage(e)
-                            ))
-                        )
-                    }
-                }
-            } finally {
-                Log.d(
-                    TAG_DEBUG_DEFAULT_SELECT,
-                    "$jobDescription: Outer job finished (finally block)."
-                )
-                // Clean up job reference only if it's the current job instance
-                if (folderFetchJobs[accountId] == coroutineContext[Job]) {
-                    folderFetchJobs.remove(accountId)
-                    Log.d(
-                        TAG_DEBUG_DEFAULT_SELECT,
-                        "$jobDescription: Removed job reference from map."
-                    )
-                }
-            }
-        }
-        folderFetchJobs[accountId] = job
-        return job
-    }
-
-    private fun shouldUpdateStateFor(accountId: String, forceRefresh: Boolean): Boolean {
-        // Update if forced, or if the current state for this ID is still Loading
-        return forceRefresh || _uiState.value.foldersByAccountId[accountId] is FolderFetchState.Loading
-    }
-
-    private fun shouldResetStateOnCancel(accountId: String): Boolean {
-        // Reset (remove entry) only if cancelled while Loading
-        return _uiState.value.foldersByAccountId[accountId] is FolderFetchState.Loading
-    }
-
-    private fun cancelFolderFetch(accountId: String) {
-        folderFetchJobs[accountId]?.apply {
-            Log.d(TAG, "Cancelling folder fetch job for account $accountId")
-            cancel(CancellationException("Account removed or auth state changed"))
-        }
-        folderFetchJobs.remove(accountId) // Remove reference regardless
-    }
-
-    private fun cancelAllFolderFetches() {
-        if (folderFetchJobs.isNotEmpty()) {
-            Log.d(TAG, "Cancelling ALL active folder fetch jobs.")
-            // Create a copy of keys to avoid ConcurrentModificationException
-            val accountIds = folderFetchJobs.keys.toList()
-            accountIds.forEach { cancelFolderFetch(it) } // Cancel and remove each
-        }
-        initialFolderLoadJob?.cancel(CancellationException("Auth state lost"))
-        initialFolderLoadJob = null
-    }
-
-    private fun selectDefaultFolderIfNeeded(accountsToCheck: List<Account>) {
-        Log.d(
-            TAG_DEBUG_DEFAULT_SELECT,
-            "selectDefaultFolderIfNeeded: Checking ${accountsToCheck.size} accounts."
-        )
-        if (_uiState.value.selectedFolder == null && _uiState.value.authState is AuthState.Initialized) {
+    /** Selects a default folder if needed. */
+    private fun selectDefaultFolderIfNeeded(currentState: MainScreenState) {
+        Log.d(TAG_DEBUG_DEFAULT_SELECT, "Checking if default folder selection is needed...")
+        if (currentState.authState is AuthState.Initialized &&
+            currentState.accounts.isNotEmpty() &&
+            currentState.selectedFolder == null &&
+            !currentState.isAnyFolderLoading
+        ) {
+            Log.d(TAG_DEBUG_DEFAULT_SELECT, "Attempting default folder selection...")
             var folderToSelect: MailFolder? = null
-            var msalAccountForFolder: IAccount? = null // Still need IAccount for selectFolder
+            var accountForFolder: Account? = null
 
             // Prioritize Inbox
-            for (account in accountsToCheck) {
-                val folderState = _uiState.value.foldersByAccountId[account.id]
+            for (account in currentState.accounts) {
+                val folderState = currentState.foldersByAccountId[account.id]
                 if (folderState is FolderFetchState.Success) {
-                    val inbox = folderState.folders.find {
-                        it.displayName.equals(
-                            "Inbox",
-                            ignoreCase = true
-                        )
+                    val inbox = folderState.folders.find { folder: MailFolder ->
+                        folder.displayName.equals("Inbox", ignoreCase = true)
                     }
                     if (inbox != null) {
-                        val msalAccount = getMsalAccountById(account.id) // Use helper
-                        if (msalAccount != null) {
-                            folderToSelect = inbox; msalAccountForFolder = msalAccount; break
-                        } else Log.w(
+                        folderToSelect = inbox
+                        accountForFolder = account
+                        Log.d(
                             TAG_DEBUG_DEFAULT_SELECT,
-                            "Found Inbox for ${account.username} but IAccount mapping failed."
+                            "Found Inbox in account ${account.username}"
                         )
+                        break
                     }
                 }
             }
+
             // Fallback: First available folder
             if (folderToSelect == null) {
-                for (account in accountsToCheck) {
-                    val folderState = _uiState.value.foldersByAccountId[account.id]
+                Log.d(
+                    TAG_DEBUG_DEFAULT_SELECT,
+                    "Inbox not found, checking for first available folder."
+                )
+                for (account in currentState.accounts) {
+                    val folderState = currentState.foldersByAccountId[account.id]
                     if (folderState is FolderFetchState.Success && folderState.folders.isNotEmpty()) {
-                        val msalAccount = getMsalAccountById(account.id) // Use helper
-                        if (msalAccount != null) {
-                            folderToSelect = folderState.folders.first(); msalAccountForFolder =
-                                msalAccount; break
-                        } else Log.w(
+                        folderToSelect = folderState.folders.firstOrNull()
+                        accountForFolder = account
+                        Log.d(
                             TAG_DEBUG_DEFAULT_SELECT,
-                            "Found folder for ${account.username} but IAccount mapping failed."
+                            "Found first folder '${folderToSelect?.displayName}' in account ${account.username}"
                         )
+                        break
                     }
                 }
             }
+
             // Select if found
-            if (folderToSelect != null && msalAccountForFolder != null) {
+            if (folderToSelect != null && accountForFolder != null) {
                 Log.i(
                     TAG_DEBUG_DEFAULT_SELECT,
-                    "Selecting default folder '${folderToSelect.displayName}' from ${msalAccountForFolder.username}"
+                    "Selecting default folder '${folderToSelect.displayName}' from account ${accountForFolder.username}"
                 )
-                selectFolder(folderToSelect, msalAccountForFolder) // Use IAccount here
-            } else Log.w(
-                TAG_DEBUG_DEFAULT_SELECT,
-                "selectDefaultFolderIfNeeded: No suitable folder found."
-            )
+                selectFolder(folderToSelect, accountForFolder)
+            } else {
+                Log.w(
+                    TAG_DEBUG_DEFAULT_SELECT,
+                    "No suitable default folder found after checking states."
+                )
+            }
+        } else {
+            Log.d(TAG_DEBUG_DEFAULT_SELECT, "Default folder selection skipped.")
         }
     }
 
-    // selectFolder still takes IAccount
-    fun selectFolder(folder: MailFolder, account: IAccount) {
-        val accountId = account.id ?: return // Use IAccount's ID
+
+    /** Handles user selecting a folder. */
+    fun selectFolder(folder: MailFolder, account: Account) {
+        val accountId = account.id
         Log.i(
-            TAG_DEBUG_DEFAULT_SELECT,
-            "selectFolder: User selected '${folder.displayName}' from account ${account.username}"
+            TAG,
+            "Folder selected: '${folder.displayName}' from account ${account.username} (ID: $accountId)"
         )
+
         if (folder.id == _uiState.value.selectedFolder?.id && accountId == _uiState.value.selectedFolderAccountId) {
-            Log.d(TAG, "Folder ${folder.displayName} already selected.")
+            Log.d(TAG, "Folder ${folder.displayName} already selected. Skipping.")
             return
         }
+
         _uiState.update {
             it.copy(
-                selectedFolder = folder, selectedFolderAccountId = accountId,
-                messages = null, messageError = null, messageDataState = DataState.LOADING
+                selectedFolder = folder,
+                selectedFolderAccountId = accountId,
+                messages = null,
+                messageError = null,
+                messageDataState = DataState.LOADING
             )
         }
-        // Fetch messages still needs IAccount
-        fetchMessagesInternal(folder.id, account, isRefresh = false, activity = null)
+
+        // --- Trigger message fetching (Temporary IAccount logic) ---
+        // TODO: Replace when MessageRepository is implemented.
+        val msalAccount = getMsalAccountById(accountId)
+        if (msalAccount != null) {
+            fetchMessagesInternal(folder.id, msalAccount, isRefresh = false, activity = null)
+        } else {
+            Log.e(TAG, "Cannot fetch messages: Failed to find IAccount for Account ID: $accountId")
+            _uiState.update {
+                it.copy(
+                    messageDataState = DataState.ERROR,
+                    messageError = "Internal account data error."
+                )
+            }
+            tryEmitToastMessage("Error loading messages: Account mismatch.")
+        }
+        // --- End Temporary Block ---
     }
 
-    // refreshAllFolders needs to map generic Account back to IAccount
+    /** Requests FolderRepository to refresh all folders. */
     fun refreshAllFolders(activity: Activity?) {
-        Log.d(TAG, "Requesting refresh for ALL folders...")
-        _uiState.value.accounts.forEach { genericAccount ->
-            val msalAccount = getMsalAccountById(genericAccount.id) // Get IAccount
-            if (msalAccount != null) launchFolderFetch(msalAccount, activity, forceRefresh = true)
-            else Log.w(
-                TAG,
-                "Cannot refresh folders for ${genericAccount.username}, IAccount not found."
-            )
+        Log.d(TAG, "Requesting refresh for ALL folders via FolderRepository...")
+        viewModelScope.launch {
+            folderRepository.refreshAllFolders(activity)
         }
     }
 
-    // refreshMessages needs to get IAccount from ID
+    /** Refreshes messages for the currently selected folder. */
     fun refreshMessages(activity: Activity?) {
-        val folderId = _uiState.value.selectedFolder?.id
-        val accountId = _uiState.value.selectedFolderAccountId
-        val account = getMsalAccountById(accountId) // Use helper
+        val currentSelectedFolder = _uiState.value.selectedFolder
+        val currentSelectedAccountId = _uiState.value.selectedFolderAccountId
 
-        if (account == null || folderId == null) {
-            Log.w(
-                TAG,
-                "Refresh messages called but no folder/account selected or IAccount mapping failed."
-            )
-            _uiState.update { it.copy(toastMessage = "Select a folder first or account data missing.") }
+        if (currentSelectedFolder == null || currentSelectedAccountId == null) {
+            Log.w(TAG, "Refresh messages called but no folder/account selected.")
+            tryEmitToastMessage("Select a folder first.")
             return
         }
         if (_uiState.value.messageDataState == DataState.LOADING) {
-            Log.d(TAG, "Refresh skipped: Already loading."); return
+            Log.d(TAG, "Refresh skipped: Already loading messages."); return
         }
         if (!isOnline()) {
             _uiState.update {
                 it.copy(
-                    toastMessage = "No internet connection.",
                     messageDataState = DataState.ERROR,
-                    messageError = "No internet connection"
+                    messageError = "No internet connection."
                 )
-            }; return
+            }
+            tryEmitToastMessage("No internet connection.")
+            return
         }
 
-        Log.d(TAG, "Requesting message refresh for folder: $folderId, account: ${account.username}")
+        // --- Trigger message fetching (Temporary IAccount logic) ---
+        // TODO: Replace when MessageRepository is implemented.
+        val msalAccount = getMsalAccountById(currentSelectedAccountId)
+        if (msalAccount == null) {
+            Log.e(
+                TAG,
+                "Cannot refresh messages: Failed to find IAccount for Account ID: $currentSelectedAccountId"
+            )
+            _uiState.update {
+                it.copy(
+                    messageDataState = DataState.ERROR,
+                    messageError = "Internal account data error."
+                )
+            }
+            tryEmitToastMessage("Error refreshing messages: Account mismatch.")
+            return
+        }
+        Log.d(
+            TAG,
+            "Requesting message refresh for folder: ${currentSelectedFolder.id}, account: ${msalAccount.username}"
+        )
         _uiState.update { it.copy(messageDataState = DataState.LOADING, messageError = null) }
-        // Fetch messages still needs IAccount
-        fetchMessagesInternal(folderId, account, isRefresh = true, activity = activity)
+        fetchMessagesInternal(
+            currentSelectedFolder.id,
+            msalAccount,
+            isRefresh = true,
+            activity = activity
+        )
+        // --- End Temporary Block ---
     }
 
-    // fetchMessagesInternal still takes IAccount
+    /**
+     * Internal function to fetch messages.
+     * TODO: Move this to MessageRepository.
+     */
     private fun fetchMessagesInternal(
         folderId: String,
-        account: IAccount,
+        account: IAccount, // Takes IAccount temporarily
         isRefresh: Boolean,
         activity: Activity?
     ) {
-        val accountId = account.id ?: return // Use IAccount ID
-        // Context Check: Ensure the folder/account we're fetching for is still selected.
+        val accountId = account.id ?: run {
+            Log.e(TAG, "fetchMessagesInternal: IAccount ID is null.")
+            _uiState.update {
+                it.copy(
+                    messageDataState = DataState.ERROR,
+                    messageError = "Internal account error."
+                )
+            }
+            return
+        }
         if (accountId != _uiState.value.selectedFolderAccountId || folderId != _uiState.value.selectedFolder?.id) {
             Log.w(TAG, "fetchMessagesInternal ignored for $folderId/$accountId, selection changed.")
+            if (_uiState.value.messageDataState == DataState.LOADING) {
+                _uiState.update { it.copy(messageDataState = DataState.INITIAL) }
+            }
             return
         }
         Log.d(TAG, "Fetching messages for $folderId/${account.username}")
+
+        // Use the temporary token acquisition helper.
         acquireTokenAndExecute(
-            account = account, // Use IAccount
-            activity = activity, scopes = mailReadScopes,
+            account = account,
+            activity = activity,
+            scopes = mailReadScopes,
             onError = { errorMsg ->
                 // Context Check inside callback
                 if (_uiState.value.selectedFolderAccountId == accountId && _uiState.value.selectedFolder?.id == folderId) {
+                    Log.e(TAG, "Error fetching messages (token/other): $errorMsg")
                     _uiState.update {
                         it.copy(
                             messageDataState = DataState.ERROR,
                             messageError = errorMsg
                         )
                     }
-                    if (isRefresh) tryEmitToastMessage(errorMsg) // Use helper
-                } else Log.w(TAG, "Message fetch token error received, but context changed.")
+                    if (isRefresh) tryEmitToastMessage("Refresh failed: $errorMsg")
+                } else {
+                    Log.w(TAG, "Message fetch token error received, but context changed.")
+                }
             }
         ) { accessToken -> // Token acquired successfully.
             // Context Check inside callback
             if (_uiState.value.selectedFolderAccountId == accountId && _uiState.value.selectedFolder?.id == folderId) {
-                Log.d(
-                    TAG,
-                    "Got token for ${account.username}, fetching messages for folder $folderId from Graph..."
-                )
-                // Use GraphApiHelper directly for now
+                Log.d(TAG, "Got token for ${account.username}, fetching messages from Graph...")
+                // Use GraphApiHelper directly (TODO: move to MessageRepository).
                 val messagesResult = GraphApiHelper.getMessagesForFolder(
-                    accessToken,
-                    folderId,
-                    messageListSelectFields,
-                    messageListPageSize
+                    accessToken, folderId, messageListSelectFields, messageListPageSize
                 )
-                _uiState.update {
-                    it.copy(
-                        messageDataState = if (messagesResult.isSuccess) DataState.SUCCESS else DataState.ERROR,
-                        messages = messagesResult.getOrNull()
-                            ?: if (messagesResult.isFailure) null else emptyList(),
-                        messageError = messagesResult.exceptionOrNull()
-                            ?.let { e -> mapGraphExceptionToUserMessage(e) }
+                // Context Check *again* after network call.
+                if (_uiState.value.selectedFolderAccountId == accountId && _uiState.value.selectedFolder?.id == folderId) {
+                    _uiState.update { currentState ->
+                        currentState.copy(
+                            messageDataState = if (messagesResult.isSuccess) DataState.SUCCESS else DataState.ERROR,
+                            messages = messagesResult.getOrNull(),
+                            messageError = messagesResult.exceptionOrNull()
+                                ?.let { mapGraphExceptionToUserMessage(it) }
+                        )
+                    }
+                    if (messagesResult.isFailure) Log.e(
+                        TAG,
+                        "Failed fetch msg for $folderId",
+                        messagesResult.exceptionOrNull()
                     )
+                    if (isRefresh) {
+                        val toastMsg =
+                            if (messagesResult.isSuccess) "Messages refreshed" else "Refresh failed: ${_uiState.value.messageError}"
+                        tryEmitToastMessage(toastMsg)
+                    }
+                } else {
+                    Log.w(TAG, "Message fetch graph result received, but context changed.")
                 }
-                if (messagesResult.isFailure) Log.e(
-                    TAG,
-                    "Failed fetch msg for $folderId",
-                    messagesResult.exceptionOrNull()
-                )
-                if (isRefresh) {
-                    val toastMsg =
-                        if (messagesResult.isSuccess) "Messages refreshed" else "Refresh failed: ${_uiState.value.messageError}"
-                    tryEmitToastMessage(toastMsg) // Use helper
-                }
-            } else Log.w(TAG, "Message fetch result received, but context changed.")
+            } else {
+                Log.w(TAG, "Message fetch token success callback ignored, context changed.")
+            }
         }
     }
 
-    // --- acquireTokenAndExecute Helper (Fixed duplicate 'when' branch) ---
+
+    // --- Temporary acquireTokenAndExecute Helper ---
+    // TODO: Remove when MessageRepository handles token acquisition.
+    /** Acquires token using MicrosoftAuthManager and executes an action. */
     private fun acquireTokenAndExecute(
         account: IAccount?, activity: Activity?, scopes: List<String>,
         onError: ((String) -> Unit)?, onSuccess: suspend (String) -> Unit
@@ -666,13 +506,17 @@ class MainViewModel @Inject constructor(
                         try {
                             onSuccess(tokenResult.result.accessToken)
                         } catch (e: Exception) {
-                            Log.e(TAG, "onSuccess err(silent):", e); onError?.invoke(
+                            Log.e(TAG, "onSuccess (silent) failed:", e); onError?.invoke(
                                 mapGraphExceptionToUserMessage(e)
                             )
                         }
                     }
                     is AcquireTokenResult.UiRequired -> {
                         if (activity != null) {
+                            Log.w(
+                                TAG,
+                                "UI required for token, attempting interactive for ${account.username}"
+                            )
                             microsoftAuthManager.acquireTokenInteractive(
                                 activity,
                                 account,
@@ -686,7 +530,7 @@ class MainViewModel @Inject constructor(
                                             } catch (e: Exception) {
                                                 Log.e(
                                                     TAG,
-                                                    "onSuccess err(inter):",
+                                                    "onSuccess (interactive) failed:",
                                                     e
                                                 ); onError?.invoke(mapGraphExceptionToUserMessage(e))
                                             }
@@ -696,12 +540,21 @@ class MainViewModel @Inject constructor(
                                             mapAuthExceptionToUserMessage(interactiveResult.exception)
                                         )
 
-                                        is AcquireTokenResult.Cancelled -> onError?.invoke("Authentication cancelled.")
-                                        else -> onError?.invoke("Authentication failed (interactive).")
+                                        is AcquireTokenResult.Cancelled -> onError?.invoke("Authentication cancelled.") // Rely on result type
+                                        else -> {
+                                            Log.e(
+                                                TAG,
+                                                "Unexpected interactive result: $interactiveResult"
+                                            ); onError?.invoke("Authentication failed (interactive).")
+                                        }
                                     }
                                 }
                             }
                         } else {
+                            Log.e(
+                                TAG,
+                                "UI required for token but no Activity provided for ${account.username}"
+                            )
                             onError?.invoke("Session expired. Please refresh or try again.")
                         }
                     }
@@ -711,17 +564,26 @@ class MainViewModel @Inject constructor(
                             tokenResult.exception
                         )
                     )
-
-                    is AcquireTokenResult.Cancelled -> onError?.invoke("Authentication cancelled.") // Should be rare for silent
+                    // Handle cancellation based on the result type
+                    is AcquireTokenResult.Cancelled -> onError?.invoke("Authentication cancelled.")
                     is AcquireTokenResult.NotInitialized -> onError?.invoke("Authentication system not ready.")
                     is AcquireTokenResult.NoAccountProvided -> onError?.invoke("Internal error: Account not provided.")
-                    // UiRequired handled above, no need for duplicate branch
+                    else -> {
+                        Log.e(
+                            TAG,
+                            "Unexpected silent result: $tokenResult"
+                        ); onError?.invoke("Unknown authentication error.")
+                    }
                 }
             }
         }
     }
 
-    // --- Error Mapping Helpers (Single definition) ---
+
+    // --- Error Mapping Helpers ---
+    // TODO: Centralize.
+
+    /** Maps Graph API or network exceptions to user messages. */
     private fun mapGraphExceptionToUserMessage(exception: Throwable?): String {
         Log.w(
             TAG,
@@ -732,56 +594,64 @@ class MainViewModel @Inject constructor(
             else -> exception?.message?.takeIf { it.isNotBlank() } ?: "An unknown error occurred"
         }
     }
+
+    /** Maps MSAL exceptions to user messages. */
     private fun mapAuthExceptionToUserMessage(exception: MsalException): String {
         Log.w(
             TAG,
             "Mapping auth exception: ${exception::class.java.simpleName} - ${exception.errorCode} - ${exception.message}"
         )
+        val code = exception.errorCode ?: "UNKNOWN"
         return when (exception) {
+            // Check for specific exception types first
+            is MsalUserCancelException -> "Authentication cancelled." // Handle specific cancellation type
             is MsalUiRequiredException -> "Session expired. Please retry or sign out/in."
-            is MsalClientException -> exception.message?.takeIf { it.isNotBlank() }
-                ?: "Authentication client error (${exception.errorCode})"
+            is MsalClientException -> when (exception.errorCode) {
+                // Use documented constant for no account found
+                MsalClientException.NO_CURRENT_ACCOUNT -> "Account not found or session invalid."
+                // Add checks for other specific MsalClientException codes based on documentation/needs
+                // MsalClientException.DEVICE_NETWORK_NOT_AVAILABLE -> "No active network is available." // Example
+                // MsalClientException.BROKER_NOT_INSTALLED -> "Broker app required." // Example
+                else -> exception.message?.takeIf { it.isNotBlank() }
+                    ?: "Authentication client error ($code)"
+            }
 
             is MsalServiceException -> exception.message?.takeIf { it.isNotBlank() }
-                ?: "Authentication service error (${exception.errorCode})"
+                ?: "Authentication service error ($code)"
 
-            else -> exception.message?.takeIf { it.isNotBlank() }
-                ?: "Authentication failed (${exception.errorCode})"
+            else -> exception.message?.takeIf { it.isNotBlank() } ?: "Authentication failed ($code)"
         }
     }
 
-    // --- Temporary IAccount Helper (Made internal) ---
-    /** Finds the original IAccount based on ID. Requires direct access to the manager. */
-    internal fun getMsalAccountById(accountId: String?): IAccount? { // Changed to internal
+    // --- Temporary IAccount Helper ---
+    // TODO: Remove when message fetching uses generic Account.
+    /** Finds MSAL IAccount by ID via MicrosoftAuthManager. */
+    internal fun getMsalAccountById(accountId: String?): IAccount? {
         if (accountId == null) return null
         return microsoftAuthManager.accounts.find { it.id == accountId }
     }
 
     // --- Network Check ---
+    /** Checks for active network connection. */
     private fun isOnline(): Boolean {
         val connectivityManager =
             applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         val network = connectivityManager.activeNetwork ?: return false
-        val activeNetwork = connectivityManager.getNetworkCapabilities(network) ?: return false
-        return when {
-            activeNetwork.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> true
-            activeNetwork.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> true
-            activeNetwork.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> true
-            else -> false
-        }
+        val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return false
+        return capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
+                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ||
+                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
     }
 
     // --- ViewModel Cleanup ---
     override fun onCleared() {
         super.onCleared()
         Log.d(TAG, "ViewModel Cleared.")
-        cancelAllFolderFetches()
-        // No listener to remove from manager here anymore
     }
 
-    /** Helper to emit toast message via state update */
+    /** Updates toastMessage state if the message is new. */
     private fun tryEmitToastMessage(message: String?) {
-        if (message != null) {
+        if (message != null && _uiState.value.toastMessage != message) {
             _uiState.update { it.copy(toastMessage = message) }
         }
     }
