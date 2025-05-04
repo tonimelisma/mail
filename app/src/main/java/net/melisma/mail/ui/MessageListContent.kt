@@ -1,9 +1,8 @@
 // File: app/src/main/java/net/melisma/mail/ui/MessageListContent.kt
-// Cleaned: Removed duplicate composables, fixed PullToRefreshBox params, added imports
+// Updated to use MessageDataState
 
 package net.melisma.mail.ui
 
-// Import generic Account
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -33,105 +32,143 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import net.melisma.mail.Account
-import net.melisma.mail.DataState
 import net.melisma.mail.Message
 import net.melisma.mail.R
+import net.melisma.mail.model.MessageDataState
 
+/**
+ * Composable responsible for displaying the list of messages or status indicators
+ * (loading, error, empty) based on the provided state. Includes pull-to-refresh.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MessageListContent(
-    messageDataState: DataState,
-    messages: List<Message>?,
-    messageError: String?,
-    accountContext: Account?, // Uses generic Account
+    messageDataState: MessageDataState, // *** Use MessageDataState ***
+    // messages: List<Message>?, // Messages are now inside MessageDataState.Success
+    // messageError: String?, // Error is now inside MessageDataState.Error
+    accountContext: Account?, // Uses generic Account for context header
+    isRefreshing: Boolean, // Pass refreshing state for PullToRefreshBox indicator
     onRefresh: () -> Unit,
     onMessageClick: (String) -> Unit
 ) {
-    val isRefreshing = messageDataState == DataState.LOADING
+    // val isRefreshing = messageDataState is MessageDataState.Loading // Determine refreshing state
 
     Column(modifier = Modifier.fillMaxSize()) {
+        // Display optional header showing the current account context
         if (accountContext != null) {
-            AccountContextHeader(account = accountContext) // Pass generic Account
+            AccountContextHeader(account = accountContext)
             HorizontalDivider()
         }
 
+        // Pull-to-refresh container wrapping the main content
         PullToRefreshBox(
-            isRefreshing = isRefreshing, // Pass parameter
-            onRefresh = onRefresh,       // Pass parameter
+            isRefreshing = isRefreshing, // Control the indicator visibility
+            onRefresh = onRefresh,       // Action to perform on pull
             modifier = Modifier
                 .fillMaxSize()
-                .weight(1f) // Use weight modifier from ColumnScope
+                .weight(1f) // Ensure it fills available space in the Column
         ) {
+            // Determine content based on the messageDataState
             when (messageDataState) {
-                DataState.INITIAL -> {
-                    if (messages != null) MessageListSuccessContent(messages, onMessageClick)
-                    else FullScreenMessage(null, null, stringResource(R.string.select_a_folder))
-                }
-                DataState.LOADING -> {
-                    if (messages != null) MessageListSuccessContent(messages, onMessageClick)
-                    else Spacer(Modifier.fillMaxSize())
-                }
-                DataState.ERROR -> {
+                // Initial state before loading or after clearing selection
+                is MessageDataState.Initial -> {
                     FullScreenMessage(
-                        Icons.Filled.CloudOff,
-                        stringResource(R.string.cd_error_loading_messages),
-                        stringResource(R.string.error_loading_messages_title),
-                        messageError ?: stringResource(R.string.error_unknown_occurred)
+                        icon = null, // No icon needed for initial prompt
+                        iconContentDescription = null,
+                        title = stringResource(R.string.select_a_folder) // Prompt user
                     )
                 }
-                DataState.SUCCESS -> {
-                    if (messages.isNullOrEmpty()) FullScreenMessage(
-                        Icons.Filled.Email,
-                        stringResource(R.string.cd_no_messages),
-                        stringResource(R.string.no_messages_title),
-                        stringResource(R.string.folder_is_empty)
-                    )
-                    else MessageListSuccessContent(messages, onMessageClick)
+                // Loading state (can happen initially or during refresh)
+                is MessageDataState.Loading -> {
+                    // Show nothing specific during load, PullToRefreshBox shows indicator
+                    // Alternatively, show a centered spinner:
+                    // Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    //     CircularProgressIndicator()
+                    // }
+                    Spacer(Modifier.fillMaxSize()) // Let PullToRefreshBox handle indicator
                 }
-            }
+                // Error state
+                is MessageDataState.Error -> {
+                    FullScreenMessage(
+                        icon = Icons.Filled.CloudOff,
+                        iconContentDescription = stringResource(R.string.cd_error_loading_messages),
+                        title = stringResource(R.string.error_loading_messages_title),
+                        // Get error message from the state object
+                        message = messageDataState.error
+                    )
+                }
+                // Success state
+                is MessageDataState.Success -> {
+                    // Get messages list from the state object
+                    val messages = messageDataState.messages
+                    if (messages.isEmpty()) {
+                        // Show message if folder is empty
+                        FullScreenMessage(
+                            icon = Icons.Filled.Email,
+                            iconContentDescription = stringResource(R.string.cd_no_messages),
+                            title = stringResource(R.string.no_messages_title),
+                            message = stringResource(R.string.folder_is_empty)
+                        )
+                    } else {
+                        // Display the list of messages
+                        MessageListSuccessContent(messages, onMessageClick)
+                    }
+                }
+            } // End when
         } // End PullToRefreshBox
     } // End Column
 }
 
 // --- Helper Composables (Single Definitions) ---
 
+/** Displays the actual list of messages using LazyColumn. */
 @Composable
 private fun MessageListSuccessContent(messages: List<Message>, onMessageClick: (String) -> Unit) {
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         items(messages, key = { it.id }) { message ->
-            // Assumes MessageListItem exists and is correct
+            // Reusable composable for a single message item
             MessageListItem(message = message, onClick = { onMessageClick(message.id) })
-            HorizontalDivider(thickness = 0.5.dp)
+            HorizontalDivider(thickness = 0.5.dp) // Separator between items
         }
     }
 }
 
+/** Displays a centered message, typically used for error or empty states. */
 @Composable
 private fun FullScreenMessage(
-    icon: ImageVector?, iconContentDescription: String?, title: String,
-    message: String? = null, content: (@Composable () -> Unit)? = null
+    icon: ImageVector?,
+    iconContentDescription: String?,
+    title: String,
+    message: String? = null,
+    content: (@Composable () -> Unit)? = null // Optional slot for extra content like buttons
 ) {
-    Box(modifier = Modifier
-        .fillMaxSize()
-        .padding(16.dp), contentAlignment = Alignment.Center) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        contentAlignment = Alignment.Center
+    ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
+            // Display icon if provided
             if (icon != null) {
                 Icon(
                     icon,
                     contentDescription = iconContentDescription,
                     modifier = Modifier.size(64.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant // Use subtle color
                 )
                 Spacer(modifier = Modifier.height(16.dp))
             }
+            // Display the main title text
             Text(
                 text = title,
                 style = MaterialTheme.typography.titleLarge,
                 textAlign = TextAlign.Center
             )
+            // Display optional sub-message text
             if (message != null) {
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
@@ -141,6 +178,7 @@ private fun FullScreenMessage(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+            // Display optional extra content (e.g., a retry button)
             if (content != null) {
                 Spacer(modifier = Modifier.height(24.dp))
                 content()
@@ -149,8 +187,9 @@ private fun FullScreenMessage(
     }
 }
 
+/** Displays a simple header showing the username of the current account context. */
 @Composable
-private fun AccountContextHeader(account: Account) { // Uses generic Account
+private fun AccountContextHeader(account: Account) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -158,7 +197,10 @@ private fun AccountContextHeader(account: Account) { // Uses generic Account
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
-            text = account.username, // Use username from generic Account
+            text = stringResource(
+                R.string.account_context_label,
+                account.username
+            ), // Use formatted string
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )

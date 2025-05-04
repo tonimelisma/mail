@@ -1,8 +1,9 @@
 // File: app/src/main/java/net/melisma/mail/MainActivity.kt
-// Updated for Step 2: FolderRepository (ViewModel signature change)
+// Final Refactor Step 3: Corrected MessageListContent call
 
 package net.melisma.mail
 
+// Import necessary model/UI components
 import android.app.Activity
 import android.content.Context
 import android.os.Bundle
@@ -77,7 +78,7 @@ class MainActivity : ComponentActivity() {
                             } // Callback to return to main app
                         )
                     } else {
-                        // Handle error case where context is not an Activity (shouldn't happen in standard scenarios)
+                        // Handle error case where context is not an Activity
                         Log.e("MainActivity", "Error: Context is not an Activity in Settings path.")
                         ErrorDisplay("Critical Error: Cannot get Activity context.") // Show error UI
                     }
@@ -193,16 +194,17 @@ fun MainApp(
 
                             state.selectedFolder != null -> {
                                 // If a folder is selected, show the message list
-                                // Find the account context (needed for potential header/info)
                                 val accountForMessages =
                                     state.accounts.find { it.id == state.selectedFolderAccountId }
-                                // MessageListContent composable displays the emails
+
+                                // *** CORRECTED CALL to MessageListContent ***
                                 MessageListContent(
-                                    messageDataState = state.messageDataState, // Pass message loading state
-                                    messages = state.messages, // Pass list of messages
-                                    messageError = state.messageError, // Pass any message loading error
-                                    accountContext = accountForMessages, // Pass the selected account details
-                                    onRefresh = { viewModel.refreshMessages(activity) }, // Lambda for pull-to-refresh
+                                    messageDataState = state.messageDataState, // Pass the state object
+                                    // messages = state.messages, // REMOVED - Data is in messageDataState
+                                    // messageError = state.messageError, // REMOVED - Data is in messageDataState
+                                    accountContext = accountForMessages,
+                                    isRefreshing = state.isMessageLoading, // ADDED - Pass refreshing status
+                                    onRefresh = { viewModel.refreshMessages(activity) },
                                     onMessageClick = { messageId ->
                                         // TODO: Implement navigation to single message view
                                         showToast(
@@ -215,7 +217,6 @@ fun MainApp(
 
                             else -> {
                                 // If initialized but no folder selected (e.g., after initial load)
-                                // Show prompt to select a folder from the drawer
                                 Box(
                                     modifier = Modifier.fillMaxSize(),
                                     contentAlignment = Alignment.Center
@@ -237,7 +238,7 @@ fun MainApp(
 }
 
 
-// --- Helper Composables (Single Definitions within MainActivity for simplicity) ---
+// --- Helper Composables ---
 
 /** Displays a centered CircularProgressIndicator with optional status text. */
 @Composable
@@ -267,7 +268,6 @@ private fun AuthInitErrorContent(errorState: AuthState.InitializationError) {
                 textAlign = TextAlign.Center
             )
             Spacer(Modifier.height(8.dp))
-            // Display the specific error message from the exception, or a generic fallback
             val errorText =
                 errorState.error?.message ?: stringResource(id = R.string.error_unknown_occurred)
             Text(
@@ -299,9 +299,8 @@ private fun SignedOutContent(onAddAccountClick: () -> Unit, modifier: Modifier =
                 style = MaterialTheme.typography.bodyLarge
             )
             Spacer(modifier = Modifier.height(24.dp))
-            // Button to navigate to where accounts can be added (Settings)
             Button(onClick = onAddAccountClick) {
-                Text(stringResource(R.string.manage_accounts_button)) // Reuse settings button text
+                Text(stringResource(R.string.manage_accounts_button))
             }
         }
     }
@@ -324,9 +323,6 @@ private fun ErrorDisplay(message: String) {
 
 /** Utility function to show an Android Toast message. */
 private fun showToast(context: Context, message: String?) {
-    // Ensure message is not null or blank before showing
     if (message.isNullOrBlank()) return
     Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
 }
-
-// Note: MailTopAppBar composable is assumed to be in its own file (MailTopAppBar.kt)

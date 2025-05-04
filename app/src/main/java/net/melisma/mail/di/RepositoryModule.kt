@@ -21,7 +21,9 @@ import net.melisma.mail.data.datasources.TokenProvider
 import net.melisma.mail.data.repositories.Dispatcher // Import Dispatcher annotation
 import net.melisma.mail.data.repositories.FolderRepository
 import net.melisma.mail.data.repositories.MailDispatchers // Import MailDispatchers enum
+import net.melisma.mail.data.repositories.MessageRepository // *** ADDED IMPORT ***
 import net.melisma.mail.data.repositories.MicrosoftFolderRepository
+import net.melisma.mail.data.repositories.MicrosoftMessageRepository // *** ADDED IMPORT ***
 import javax.inject.Qualifier
 import javax.inject.Singleton
 
@@ -34,7 +36,6 @@ annotation class ApplicationScope
 
 /**
  * Hilt Module responsible for providing repository implementations and related dependencies.
- * Uses @Binds for interface-implementation bindings and @Provides for concrete instances.
  */
 @Module
 @InstallIn(SingletonComponent::class)
@@ -55,24 +56,27 @@ abstract class RepositoryModule {
     @Singleton
     abstract fun bindTokenProvider(impl: MicrosoftTokenProvider): TokenProvider
 
+    // *** ADDED BINDING for MessageRepository ***
+    @Binds
+    @Singleton
+    abstract fun bindMessageRepository(impl: MicrosoftMessageRepository): MessageRepository
+
     // Companion object is used for @Provides methods within an abstract module.
     companion object {
 
         /** Provides the IO dispatcher for background tasks like network calls. */
         @Provides
-        @Singleton // Ensure single IO dispatcher instance
-        @Dispatcher(MailDispatchers.IO) // Qualify the IO dispatcher
+        @Singleton
+        @Dispatcher(MailDispatchers.IO)
         fun provideIoDispatcher(): CoroutineDispatcher = Dispatchers.IO
 
         /** Provides a singleton CoroutineScope bound to the application's lifecycle. */
-        @ApplicationScope // Use custom qualifier
+        @ApplicationScope
         @Provides
         @Singleton
         fun provideApplicationCoroutineScope(
-            @Dispatcher(MailDispatchers.IO) ioDispatcher: CoroutineDispatcher // Inject qualified dispatcher
+            @Dispatcher(MailDispatchers.IO) ioDispatcher: CoroutineDispatcher
         ): CoroutineScope {
-            // Use SupervisorJob so failure of one child job doesn't cancel the whole scope.
-            // Combine with the injected IO dispatcher.
             return CoroutineScope(SupervisorJob() + ioDispatcher)
         }
 
@@ -80,20 +84,17 @@ abstract class RepositoryModule {
         @Provides
         @Singleton
         fun provideMicrosoftAuthManager(
-            @ApplicationContext appContext: Context // Inject application context
+            @ApplicationContext appContext: Context
         ): MicrosoftAuthManager {
-            // Instantiate the auth manager with context and config resource ID.
             return MicrosoftAuthManager(
                 context = appContext,
-                configResId = R.raw.auth_config // Ensure R.raw.auth_config exists
+                configResId = R.raw.auth_config
             )
         }
 
         /** Provides the GraphApiHelper object (singleton). */
         @Provides
-        // Singleton scope isn't strictly needed for Kotlin objects, but doesn't hurt.
         fun provideGraphApiHelper(): GraphApiHelper {
-            // GraphApiHelper is an object, so we just return the instance.
             return GraphApiHelper
         }
     }
