@@ -14,6 +14,8 @@ materialIcons = "1.7.8"
 hilt = "2.51.1"
 coroutines = "1.8.1" # Or your preferred stable version (e.g., 1.7.3) - ADDED
 orgJson = "20240303" # Or a recent stable version - ADDED
+mockk = "1.13.11"
+turbine = "1.1.0"
 
 [libraries]
 kotlin-stdlib = { group = "org.jetbrains.kotlin", name = "kotlin-stdlib", version.ref = "kotlin" } # *** ADDED ***
@@ -47,6 +49,14 @@ androidx-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-man
 androidx-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
 
 javax-inject = { group = "javax.inject", name = "javax.inject", version = "1" }
+
+mockk-core = { group = "io.mockk", name = "mockk", version.ref = "mockk" }
+mockk-android = { group = "io.mockk", name = "mockk-android", version.ref = "mockk" }
+mockk-agent = { group = "io.mockk", name = "mockk-agent-jvm", version.ref = "mockk" }
+
+kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
+
+turbine = { group = "app.cash.turbine", name = "turbine", version.ref = "turbine" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

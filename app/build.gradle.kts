@@ -52,13 +52,16 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {
     // --- Project Modules ---
-    implementation(project(":feature-auth")) // Now likely pulled transitively via backend-microsoft if needed
+    // implementation(project(":feature-auth")) // <<< REMOVED THIS LINE
     implementation(project(":core-data"))
-    implementation(project(":backend-microsoft")) // *** ADDED DEPENDENCY ***
+    implementation(project(":backend-microsoft")) // Keep or add this
 
     // --- AndroidX Core & Lifecycle ---
     implementation(libs.androidx.core.ktx)
@@ -83,11 +86,16 @@ dependencies {
     // implementation(libs.androidx.hilt.navigation.compose) // Optional Hilt Compose Navigation
     // kapt(libs.androidx.hilt.compiler) // Optional Kapt for Hilt Compose Navigation
 
-    // --- JSON Parsing ---
-    // implementation(libs.org.json) // REMOVED - Moved to :backend-microsoft as GraphApiHelper moved
-
-    // --- Testing ---
+    // --- Unit Testing (test source set) ---
     testImplementation(libs.junit)
+    // testImplementation("junit:junit:4.13.2") // Keep commented out or remove if added previously
+    testImplementation(libs.mockk.core)
+    testImplementation(libs.mockk.android)
+    testImplementation(libs.mockk.agent)
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.turbine)
+
+    // --- Instrumented Testing (androidTest source set) ---
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))

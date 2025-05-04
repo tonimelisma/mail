@@ -1,53 +1,47 @@
 package net.melisma.mail.di
 
-import android.content.Context
+// <<< REMOVE import for MicrosoftAuthManager from feature_auth
+// import net.melisma.feature_auth.MicrosoftAuthManager
+// <<< ADD import for the new AuthConfigProvider interface
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
-import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
+import net.melisma.backend_microsoft.di.AuthConfigProvider
 import net.melisma.core_data.di.ApplicationScope
 import net.melisma.core_data.di.Dispatcher
 import net.melisma.core_data.di.MailDispatchers
-import net.melisma.feature_auth.MicrosoftAuthManager
 import net.melisma.mail.R
 import javax.inject.Singleton
 
 
-// Definition of @ApplicationScope annotation REMOVED from here
-
-
 /**
- * Hilt Module for providing Application-level dependencies like CoroutineScope and AuthManager.
- * Repository bindings are now moved to the specific backend modules (e.g., :backend-microsoft).
+ * Hilt Module for providing Application-level dependencies like CoroutineScope.
+ * The AuthManager provider is now removed, and AuthConfigProvider is added.
  */
 @Module
 @InstallIn(SingletonComponent::class)
 class RepositoryModule {
 
-    // @Binds methods REMOVED
+    // @Binds methods previously REMOVED - stays removed
 
     companion object {
 
-        /**
-         * Provides a singleton [CoroutineScope] tied to the application's lifecycle.
-         * Uses a [SupervisorJob] so failure of one child coroutine doesn't cancel the scope.
-         * Uses the IO dispatcher (provided by another module) as the default context.
-         */
-        @ApplicationScope // Use the qualifier (imported from core-data)
+        // provideApplicationCoroutineScope (No changes needed here)
+        @ApplicationScope
         @Provides
         @Singleton
         fun provideApplicationCoroutineScope(
-            // Inject the dispatcher qualified from core-data, provided by backend-microsoft module
             @Dispatcher(MailDispatchers.IO) ioDispatcher: CoroutineDispatcher
         ): CoroutineScope {
             return CoroutineScope(SupervisorJob() + ioDispatcher)
         }
 
-        /** Provides the singleton instance of [MicrosoftAuthManager] from the :feature-auth module. */
+        // <<< REMOVED: Old provider for MicrosoftAuthManager >>>
+        /*
         @Provides
         @Singleton
         fun provideMicrosoftAuthManager(
@@ -55,11 +49,22 @@ class RepositoryModule {
         ): MicrosoftAuthManager {
             return MicrosoftAuthManager(
                 context = appContext,
-                configResId = R.raw.auth_config
+                configResId = R.raw.auth_config // This was the problem part
             )
         }
+        */
 
-        // provideGraphApiHelper REMOVED
-        // provideIoDispatcher REMOVED
+        // <<< ADDED: Provider for AuthConfigProvider interface >>>
+        /** Provides the implementation for AuthConfigProvider, sourcing the ID from app resources. */
+        @Provides
+        @Singleton
+        fun provideAuthConfigProvider(): AuthConfigProvider {
+            return object : AuthConfigProvider {
+                // Provide the actual resource ID from the :app module's R class
+                override fun getMsalConfigResId(): Int = R.raw.auth_config
+            }
+        }
+
+        // Other providers like provideGraphApiHelper, provideIoDispatcher were previously REMOVED - stay removed
     }
 }

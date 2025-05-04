@@ -1,6 +1,6 @@
 # Melisma Mail - Requirements & Architecture Draft
 
-**Version:** 0.3 (2025-04-29)
+**Version:** 0.4 (2025-05-04) *Updated to include architectural considerations*
 
 ## 1. Overview
 
@@ -142,5 +142,35 @@ The requirements are grouped into Epics, prioritized based on delivering core va
 * **Advanced Organization (Epic 6):** Extends repositories and potentially database queries (`:core-database`, `:core-data`, backend modules). UI changes in `:app`.
 * **Integrations (Epic 8):** May require specific Android Intents to interact with Calendar/Task/Contact apps, or direct API interaction if deeper integration is needed (potentially new modules).
 * **Google Backend (Epic 9):** Add `:backend-google`, update `:feature-auth`, configure DI as planned.
+
+### 3.4. Future Architectural Considerations `[NEW SECTION]`
+
+* **Refactoring Authentication Layer to use Kotlin Flows:**
+    * **Context:** The current authentication implementation (`MicrosoftAuthManager`,
+      `MicrosoftTokenProvider`) relies on bridging callback-based APIs (like MSAL) to coroutines
+      using `CompletableDeferred`. Recent unit testing efforts for `MicrosoftTokenProvider`
+      highlighted complexities and potential timing issues with this approach when using
+      `kotlinx-coroutines-test`.
+    * **Proposal for Evaluation:** As a long-term improvement, consider refactoring the relevant
+      parts of the `:feature-auth` and `:backend-microsoft` (and potentially `:core-data` interfaces
+      like `TokenProvider`) to use Kotlin Flows (`kotlinx.coroutines.flow`). This would involve
+      changing methods like `acquireTokenSilent` and `acquireTokenInteractive` in
+      `MicrosoftAuthManager` to return `Flow<AcquireTokenResult>` (likely using `callbackFlow`), and
+      subsequently updating `MicrosoftTokenProvider` to consume and transform these flows instead of
+      using `CompletableDeferred`.
+    * **Benefits:**
+        * Aligns more closely with idiomatic Kotlin coroutine patterns.
+        * Significantly improves testability, allowing the use of robust Flow testing libraries like
+          Turbine for clearer and more reliable verification of asynchronous behavior.
+        * Enhances composability and readability of asynchronous code.
+    * **Drawbacks:**
+        * Requires non-trivial refactoring of existing, functional code across multiple modules.
+        * Introduces a dependency on Flow knowledge and testing patterns (e.g., Turbine).
+    * **Recommendation:** Keep this refactoring approach under consideration as a potential
+      technical debt item or future improvement task. Evaluate its priority against new feature
+      development based on ongoing maintenance and testing friction with the current
+      callback/deferred approach.
+
+---
 
 This comprehensive backlog covers a feature-rich email client. Remember to tackle it iteratively, focusing on the highest priority epics first to deliver value progressively!

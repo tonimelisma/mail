@@ -2,6 +2,7 @@
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
+    // No Kapt or Hilt plugin needed here if it only contains interfaces, models, and non-Hilt injected classes
 }
 
 android {
@@ -16,7 +17,7 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = true
+            isMinifyEnabled = true // You might want this false for easier debugging initially
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -34,25 +35,41 @@ android {
         jvmTarget = "17"
     }
     buildFeatures {
+        // Keeping these features off seems reasonable for this module
         compose = false
         viewBinding = false
-        androidResources = false
+        // androidResources = false // Keep if you truly have no resources
         buildConfig = false
         aidl = false
         renderScript = false
         resValues = false
         shaders = false
     }
+    // Recommended for MockK testing Android classes in unit tests
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {
-    implementation(libs.kotlin.stdlib)
+    // Kotlin Stdlib (Good practice to include explicitly)
+    implementation(libs.kotlin.stdlib) // Already present in your TOML
 
+    // Coroutines Core (Exported via api)
     api(libs.kotlinx.coroutines.core)
 
+    // Javax Inject (Used for @Inject annotation, needed by Hilt/Dagger users)
     implementation(libs.javax.inject)
 
-    testImplementation(libs.junit)
+    // --- Unit Testing (test source set) --- // ADDED/UPDATED BLOCK
+    testImplementation(libs.junit)                     // Core JUnit
+    testImplementation(libs.mockk.core)                // MockK core library
+    testImplementation(libs.mockk.android)             // MockK extensions for Android classes (even in unit tests)
+    testImplementation(libs.mockk.agent)               // MockK agent for final classes/methods if needed
+    testImplementation(libs.kotlinx.coroutines.test)   // Coroutine testing utilities (runTest, TestDispatchers)
+    testImplementation(libs.turbine)                   // Flow testing helper
+
+    // --- Instrumented Testing (androidTest source set) --- // NO CHANGES HERE
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
 }

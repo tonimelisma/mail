@@ -36,6 +36,5 @@ dependencyResolutionManagement {
 rootProject.name = "Mail"
 // Include all modules in the project build
 include(":app")
-include(":feature-auth")
 include(":core-data")
 include(":backend-microsoft") // *** ADDED :backend-microsoft module ***
