@@ -46,18 +46,12 @@ android {
 }
 
 dependencies {
-    // --- Kotlin Standard Library ---
     implementation(libs.kotlin.stdlib)
 
-    // --- Coroutines Core ---
     api(libs.kotlinx.coroutines.core)
 
-    // --- Javax Inject (for @Qualifier) ---
-    // Hilt usually brings this in transitively, but explicitly adding it
-    // to the module defining the qualifier can sometimes help resolve issues.
-    implementation(libs.javax.inject) // *** ADDED javax.inject ***
+    implementation(libs.javax.inject)
 
-    // --- Testing Dependencies ---
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
