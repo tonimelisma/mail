@@ -3,14 +3,12 @@
 
 package net.melisma.mail
 
-// MSAL/Auth imports only needed for AccountRepository actions now
-// *** CORRECTED IMPORT PATH AGAIN ***
 import android.app.Activity
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.util.Log
-import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.Immutable // If used
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -22,10 +20,15 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import net.melisma.mail.data.repositories.FolderRepository
-import net.melisma.mail.data.repositories.MessageRepository
-import net.melisma.mail.model.FolderFetchState
-import net.melisma.mail.model.MessageDataState
+import net.melisma.core_data.model.Account // Updated
+import net.melisma.core_data.model.AuthState // Updated
+import net.melisma.core_data.model.FolderFetchState // Updated
+import net.melisma.core_data.model.MailFolder // Updated
+import net.melisma.core_data.model.Message // Updated
+import net.melisma.core_data.model.MessageDataState // Updated
+import net.melisma.core_data.repository.AccountRepository // Updated
+import net.melisma.core_data.repository.FolderRepository // Updated
+import net.melisma.core_data.repository.MessageRepository // Updated
 import javax.inject.Inject
 
 

@@ -1,8 +1,9 @@
+// File: app/build.gradle.kts
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
-    // --- Apply Kapt using its ID and Hilt using its alias ---
     id("org.jetbrains.kotlin.kapt") // Apply kapt using its standard ID
     alias(libs.plugins.hilt.gradle)
 }
@@ -13,7 +14,7 @@ android {
 
     defaultConfig {
         applicationId = "net.melisma.mail"
-        minSdk = 26 // Updated minSdk
+        minSdk = 26
         targetSdk = 35
         versionCode = 1
         versionName = "1.0"
@@ -26,7 +27,7 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false // Consider enabling for actual releases
+            isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -34,7 +35,6 @@ android {
         }
     }
     compileOptions {
-        // Hilt requires Java 8 or higher (Project is already on 17)
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -55,7 +55,10 @@ android {
 }
 
 dependencies {
-    implementation(project(":feature-auth"))
+    // --- Project Modules ---
+    implementation(project(":feature-auth")) // Now likely pulled transitively via backend-microsoft if needed
+    implementation(project(":core-data"))
+    implementation(project(":backend-microsoft")) // *** ADDED DEPENDENCY ***
 
     // --- AndroidX Core & Lifecycle ---
     implementation(libs.androidx.core.ktx)
@@ -76,10 +79,12 @@ dependencies {
 
     // --- Hilt ---
     implementation(libs.hilt.android)
-    kapt(libs.hilt.compiler) // Kapt dependency for annotation processing
-    // Optional Hilt extensions (Uncomment if needed later)
-    // implementation(libs.androidx.hilt.navigation.compose)
-    // kapt(libs.androidx.hilt.compiler)
+    kapt(libs.hilt.compiler)
+    // implementation(libs.androidx.hilt.navigation.compose) // Optional Hilt Compose Navigation
+    // kapt(libs.androidx.hilt.compiler) // Optional Kapt for Hilt Compose Navigation
+
+    // --- JSON Parsing ---
+    // implementation(libs.org.json) // REMOVED - Moved to :backend-microsoft as GraphApiHelper moved
 
     // --- Testing ---
     testImplementation(libs.junit)
@@ -91,7 +96,6 @@ dependencies {
     debugImplementation(libs.androidx.ui.test.manifest)
 }
 
-// Configure Kapt if needed (e.g., for error types)
 kapt {
     correctErrorTypes = true
 }

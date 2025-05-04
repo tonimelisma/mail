@@ -3,9 +3,6 @@
 
 package net.melisma.mail.ui.settings
 
-// Import the generic Account type
-// Remove IAccount import if no longer directly used
-// import com.microsoft.identity.client.IAccount
 import android.app.Activity
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -49,7 +46,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
-import net.melisma.mail.Account
+import net.melisma.core_data.model.Account
 import net.melisma.mail.MainViewModel
 import net.melisma.mail.R
 

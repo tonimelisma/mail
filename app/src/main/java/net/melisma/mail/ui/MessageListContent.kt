@@ -31,10 +31,10 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import net.melisma.mail.Account
-import net.melisma.mail.Message
+import net.melisma.core_data.model.Account
+import net.melisma.core_data.model.Message
+import net.melisma.core_data.model.MessageDataState
 import net.melisma.mail.R
-import net.melisma.mail.model.MessageDataState
 
 /**
  * Composable responsible for displaying the list of messages or status indicators

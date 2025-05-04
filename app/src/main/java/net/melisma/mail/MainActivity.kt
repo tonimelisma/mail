@@ -1,5 +1,5 @@
 // File: app/src/main/java/net/melisma/mail/MainActivity.kt
-// Final Refactor Step 3: Corrected MessageListContent call
+// Adds missing import for AuthState
 
 package net.melisma.mail
 
@@ -44,6 +44,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch
+// *** ADDED IMPORT for AuthState ***
+import net.melisma.core_data.model.AuthState
 import net.melisma.mail.ui.MailDrawerContent
 import net.melisma.mail.ui.MailTopAppBar
 import net.melisma.mail.ui.MessageListContent
@@ -165,6 +167,7 @@ fun MainApp(
                 // Main content switching based on the authentication state
                 val currentAuthState = state.authState // Read state for clarity
 
+                // 'when' is now exhaustive because AuthState is correctly resolved
                 when (currentAuthState) {
                     is AuthState.Initializing -> {
                         // Show loading indicator during auth initialization
@@ -231,6 +234,7 @@ fun MainApp(
                             }
                         }
                     }
+                    // No 'else' needed as AuthState is a sealed class and all cases are handled
                 } // End when (currentAuthState)
             } // End Box (main content area)
         } // End Scaffold
@@ -268,6 +272,7 @@ private fun AuthInitErrorContent(errorState: AuthState.InitializationError) {
                 textAlign = TextAlign.Center
             )
             Spacer(Modifier.height(8.dp))
+            // Accessing 'errorState.error' is now valid as AuthState is resolved
             val errorText =
                 errorState.error?.message ?: stringResource(id = R.string.error_unknown_occurred)
             Text(

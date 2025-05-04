@@ -15,11 +15,20 @@ msal = "6.0.0"
 materialIcons = "1.7.8"
 # --- Hilt Version ---
 hilt = "2.51.1"
+# --- Coroutines Version ---
+coroutines = "1.8.1" # Or your preferred stable version (e.g., 1.7.3) - ADDED
+# --- Org JSON (if needed by GraphApiHelper) ---
+orgJson = "20240303" # Or a recent stable version - ADDED
+
 # Optional: AndroidX Hilt extension versions (if used later)
 # hiltExt = "1.2.0"
 # hiltNavCompose = "1.2.0"
 
 [libraries]
+# --- Kotlin ---
+kotlin-stdlib = { group = "org.jetbrains.kotlin", name = "kotlin-stdlib", version.ref = "kotlin" } # *** ADDED ***
+kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" } # *** ADDED ***
+
 # --- AndroidX Core & Lifecycle ---
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycle" }
@@ -46,12 +55,17 @@ hilt-compiler = { group = "com.google.dagger", name = "hilt-compiler", version.r
 # androidx-hilt-compiler = { group = "androidx.hilt", name = "hilt-compiler", version.ref = "hiltExt" }
 # androidx-hilt-navigation-compose = { group = "androidx.hilt", name = "hilt-navigation-compose", version.ref = "hiltNavCompose" }
 
+# --- JSON Parsing ---
+org-json = { group = "org.json", name = "json", version.ref = "orgJson" } # *** ADDED ***
+
 # --- Testing ---
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
 androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-core", version.ref = "espressoCore" }
 androidx-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
 androidx-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
+
+javax-inject = { group = "javax.inject", name = "javax.inject", version = "1" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

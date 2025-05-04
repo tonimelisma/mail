@@ -1,50 +1,57 @@
-package net.melisma.mail.data.datasources
+package net.melisma.backend_microsoft.datasource
 
-// *** ADDED IMPORT ***
 import android.app.Activity
 import android.util.Log
 import com.microsoft.identity.client.IAccount
 import com.microsoft.identity.client.exception.MsalClientException
-import com.microsoft.identity.client.exception.MsalException
-import com.microsoft.identity.client.exception.MsalServiceException
 import com.microsoft.identity.client.exception.MsalUiRequiredException
 import com.microsoft.identity.client.exception.MsalUserCancelException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import net.melisma.core_data.datasource.TokenProvider
+import net.melisma.core_data.model.Account
 import net.melisma.feature_auth.AcquireTokenResult
 import net.melisma.feature_auth.MicrosoftAuthManager
-import net.melisma.mail.Account
 import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Implementation of TokenProvider using MicrosoftAuthManager (MSAL).
- * Responsible for obtaining OAuth2 access tokens for Microsoft accounts.
+ * Implementation of [TokenProvider] using [MicrosoftAuthManager] (MSAL).
+ * Responsible for obtaining OAuth2 access tokens for Microsoft accounts defined by the generic [Account] model.
  */
 @Singleton
 class MicrosoftTokenProvider @Inject constructor(
+    // Inject the MicrosoftAuthManager provided by :feature-auth (via Hilt module in :app)
     private val microsoftAuthManager: MicrosoftAuthManager
-) : TokenProvider {
+) : TokenProvider { // Implement the interface from :core-data
 
     private val TAG = "MicrosoftTokenProvider"
 
     /**
      * Acquires an access token for the specified Microsoft account and scopes.
      * Attempts silent acquisition first, falling back to interactive flow if needed and an Activity is provided.
+     * Ensures the provided account is of type "MS".
+     * Maps underlying MSAL results/exceptions to a standard [Result<String>].
      */
     override suspend fun getAccessToken(
         account: Account,
         scopes: List<String>,
         activity: Activity?
     ): Result<String> {
+        // Ensure this provider only handles Microsoft accounts
         if (account.providerType != "MS") {
+            Log.e(TAG, "Attempted to get MS token for non-MS account type: ${account.providerType}")
             return Result.failure(IllegalArgumentException("Account provider type is not MS: ${account.providerType}"))
         }
+
+        // Find the corresponding MSAL IAccount object using the generic Account ID
         val msalAccount = getMsalAccountById(account.id)
             ?: return Result.failure(IllegalStateException("MSAL IAccount not found for generic Account ID: ${account.id}"))
 
+        // Use CompletableDeferred to bridge the callback-based MSAL API with suspend functions
         val resultDeferred = CompletableDeferred<Result<String>>()
 
+        // Attempt silent token acquisition first
         microsoftAuthManager.acquireTokenSilent(msalAccount, scopes) { silentResult ->
             when (silentResult) {
                 is AcquireTokenResult.Success -> {
@@ -53,6 +60,7 @@ class MicrosoftTokenProvider @Inject constructor(
                 }
 
                 is AcquireTokenResult.UiRequired -> {
+                    // Silent failed, try interactive if Activity is available
                     Log.w(
                         TAG,
                         "Silent token acquisition requires UI interaction for ${account.username}"
@@ -60,14 +68,15 @@ class MicrosoftTokenProvider @Inject constructor(
                     if (activity != null) {
                         acquireTokenInteractive(activity, msalAccount, scopes, resultDeferred)
                     } else {
+                        // Cannot proceed without Activity for interactive flow
                         Log.e(
                             TAG,
                             "Interactive token acquisition needed but Activity is null for ${account.username}"
                         )
                         resultDeferred.complete(
                             Result.failure(
-                                MsalUiRequiredException(
-                                    null,
+                                MsalUiRequiredException( // Return specific MSAL exception
+                                    MsalUiRequiredException.NO_ACCOUNT_FOUND, // Example error code
                                     "UI interaction required, but no Activity provided."
                                 )
                             )
@@ -83,45 +92,44 @@ class MicrosoftTokenProvider @Inject constructor(
                     )
                     resultDeferred.complete(Result.failure(silentResult.exception))
                 }
-                // Handle cancellation based on the Result type
+
                 is AcquireTokenResult.Cancelled -> {
-                    Log.w(TAG, "Silent token acquisition cancelled for ${account.username}")
-                    // Return failure with a CancellationException or a specific custom exception/message
+                    Log.w(TAG, "Silent token acquisition appears cancelled for ${account.username}")
                     resultDeferred.complete(Result.failure(CancellationException("Authentication cancelled by user (silent flow).")))
                 }
 
                 is AcquireTokenResult.NotInitialized -> {
-                    Log.w(TAG, "MSAL not initialized during silent token acquisition.")
-                    // Use a relevant error code or message
+                    Log.e(TAG, "MSAL not initialized during silent token acquisition.")
                     resultDeferred.complete(
                         Result.failure(
                             MsalClientException(
-                                MsalClientException.INVALID_PARAMETER,
+                                MsalClientException.UNKNOWN_ERROR,
                                 "MSAL not initialized."
                             )
                         )
-                    ) // Example using INVALID_PARAMETER
+                    )
                 }
 
                 is AcquireTokenResult.NoAccountProvided -> {
+                    // This shouldn't happen here as we provide an account
                     Log.e(TAG, "Internal error: NoAccountProvided during silent token acquisition.")
-                    // Use the documented error code
                     resultDeferred.complete(
                         Result.failure(
                             MsalClientException(
-                                MsalClientException.NO_CURRENT_ACCOUNT,
-                                "Internal error: Account mapping failed during silent flow."
+                                MsalClientException.UNKNOWN_ERROR,
+                                "Internal error: Account mapping failed."
                             )
                         )
                     )
                 }
             }
         }
+        // Wait for the deferred result (from either silent or interactive flow)
         return resultDeferred.await()
     }
 
     /**
-     * Handles the interactive token acquisition flow using MSAL.
+     * Private helper function to handle the interactive token acquisition flow.
      */
     private fun acquireTokenInteractive(
         activity: Activity,
@@ -151,17 +159,17 @@ class MicrosoftTokenProvider @Inject constructor(
                     )
                     resultDeferred.complete(Result.failure(interactiveResult.exception))
                 }
-                // Handle cancellation based on the Result type
+
                 is AcquireTokenResult.Cancelled -> {
                     Log.w(
                         TAG,
                         "Interactive token acquisition cancelled by user for ${msalAccount.username}"
                     )
-                    // Return failure with a CancellationException or MsalUserCancelException
-                    resultDeferred.complete(Result.failure(MsalUserCancelException())) // Use specific exception type
+                    resultDeferred.complete(Result.failure(MsalUserCancelException())) // Use specific exception
                 }
 
                 else -> {
+                    // Handle unexpected states from interactive flow if necessary
                     Log.e(
                         TAG,
                         "Unexpected result during interactive token acquisition for ${msalAccount.username}: $interactiveResult"
@@ -170,7 +178,7 @@ class MicrosoftTokenProvider @Inject constructor(
                         Result.failure(
                             MsalClientException(
                                 MsalClientException.UNKNOWN_ERROR,
-                                "Unexpected interactive authentication result."
+                                "Unexpected interactive auth result."
                             )
                         )
                     )
@@ -180,42 +188,17 @@ class MicrosoftTokenProvider @Inject constructor(
     }
 
     /**
-     * Finds the original MSAL IAccount based on the generic Account ID.
+     * Finds the original MSAL IAccount based on the generic Account ID by looking
+     * into the list provided by MicrosoftAuthManager.
+     *
+     * @param accountId The ID from the generic [Account] model.
+     * @return The corresponding [IAccount] object, or null if not found.
      */
     private fun getMsalAccountById(accountId: String?): IAccount? {
         if (accountId == null) return null
+        // Access the accounts list from the injected auth manager
         return microsoftAuthManager.accounts.find { it.id == accountId }
     }
 
-    /** Maps MSAL exceptions to user-friendly messages. */
-    private fun mapAuthExceptionToUserMessage(exception: Throwable?): String {
-        // Handle standard CancellationException from our logic above
-        if (exception is CancellationException) {
-            return exception.message ?: "Authentication cancelled."
-        }
-        if (exception !is MsalException) {
-            return exception?.message ?: "An unknown error occurred."
-        }
-        Log.w(
-            TAG,
-            "Mapping auth exception: ${exception::class.java.simpleName} - ${exception.errorCode} - ${exception.message}"
-        )
-        val code = exception.errorCode ?: "UNKNOWN"
-        return when (exception) {
-            // Check specific types first
-            is MsalUserCancelException -> "Authentication cancelled."
-            is MsalUiRequiredException -> "Session expired. Please retry or sign out/in."
-            is MsalClientException -> when (exception.errorCode) {
-                MsalClientException.NO_CURRENT_ACCOUNT -> "Account not found or session invalid."
-                // Add other specific MsalClientException codes here if needed.
-                else -> exception.message?.takeIf { it.isNotBlank() }
-                    ?: "Authentication client error ($code)"
-            }
-
-            is MsalServiceException -> exception.message?.takeIf { it.isNotBlank() }
-                ?: "Authentication service error ($code)"
-
-            else -> exception.message?.takeIf { it.isNotBlank() } ?: "Authentication failed ($code)"
-        }
-    }
+    // Error mapping is now centralized in ErrorMapper, remove local version if present.
 }

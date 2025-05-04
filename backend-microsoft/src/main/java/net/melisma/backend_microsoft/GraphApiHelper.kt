@@ -1,41 +1,38 @@
-package net.melisma.mail
+package net.melisma.backend_microsoft
 
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import net.melisma.core_data.model.MailFolder
+import net.melisma.core_data.model.Message
 import org.json.JSONObject
 import java.io.BufferedReader
+import java.io.IOException
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
+import javax.inject.Inject
+import javax.inject.Singleton
 import javax.net.ssl.HttpsURLConnection
 
-// Data class to hold relevant folder information
-data class MailFolder(
-    val id: String,
-    val displayName: String,
-    val totalItemCount: Int,
-    val unreadItemCount: Int
-)
+/**
+ * Helper class for making calls to the Microsoft Graph API (v1.0).
+ * Encapsulates network request logic and JSON parsing for mail-related data.
+ * Provided as a Singleton by Hilt.
+ */
+@Singleton
+class GraphApiHelper @Inject constructor() {
 
-// Data class for basic Message info needed in list view
-data class Message(
-    val id: String,
-    val receivedDateTime: String,
-    val subject: String?,
-    val senderName: String?, // Nullable String
-    val senderAddress: String?, // Nullable String
-    val bodyPreview: String?,
-    val isRead: Boolean
-)
+    companion object {
+        private const val TAG = "GraphApiHelper"
+        private const val MS_GRAPH_ROOT_ENDPOINT = "https://graph.microsoft.com/v1.0"
+    }
 
-object GraphApiHelper {
-
-    private const val TAG = "GraphApiHelper"
-    private const val MS_GRAPH_ROOT_ENDPOINT = "https://graph.microsoft.com/v1.0"
-
+    /**
+     * Fetches the list of mail folders for the authenticated user.
+     */
     suspend fun getMailFolders(accessToken: String): Result<List<MailFolder>> {
         return withContext(Dispatchers.IO) {
             makeGraphApiCall(
@@ -46,6 +43,9 @@ object GraphApiHelper {
         }
     }
 
+    /**
+     * Fetches a list of messages for a specific mail folder.
+     */
     suspend fun getMessagesForFolder(
         accessToken: String,
         folderId: String,
@@ -55,11 +55,8 @@ object GraphApiHelper {
         return withContext(Dispatchers.IO) {
             val selectParam = selectFields.joinToString(",")
             val queryParams = "?\$select=$selectParam&\$top=$top&\$orderby=receivedDateTime desc"
-            val endpointPath = URLEncoder.encode(
-                folderId,
-                StandardCharsets.UTF_8.toString()
-            ) // Always encode folder ID
-            val endpoint = "/me/mailFolders/$endpointPath/messages$queryParams"
+            val encodedFolderId = URLEncoder.encode(folderId, StandardCharsets.UTF_8.toString())
+            val endpoint = "/me/mailFolders/$encodedFolderId/messages$queryParams"
 
             makeGraphApiCall(
                 accessToken = accessToken,
@@ -69,6 +66,9 @@ object GraphApiHelper {
         }
     }
 
+    /**
+     * Generic internal function to make a GET request to the Microsoft Graph API.
+     */
     private suspend fun <T> makeGraphApiCall(
         accessToken: String,
         endpoint: String,
@@ -91,7 +91,7 @@ object GraphApiHelper {
                 val reader = BufferedReader(InputStreamReader(connection.inputStream))
                 val response = reader.readText()
                 reader.close()
-                Log.d(TAG, "GET $endpoint Response: $response")
+                Log.d(TAG, "GET $endpoint Response: ${response.take(500)}...")
                 val parsedData = parser(response)
                 Result.success(parsedData)
             } else {
@@ -100,7 +100,8 @@ object GraphApiHelper {
                 val errorResponse = reader.readText()
                 reader.close()
                 Log.e(TAG, "Error fetching $endpoint: $responseCode - $errorResponse")
-                Result.failure(Exception("Error fetching $endpoint: $responseCode - $errorResponse"))
+                // Ensure IOException can be referenced here
+                Result.failure(IOException("Error fetching $endpoint: $responseCode - $errorResponse"))
             }
         } catch (e: Exception) {
             Log.e(TAG, "Exception during API call to $endpoint", e)
@@ -110,6 +111,9 @@ object GraphApiHelper {
         }
     }
 
+    /**
+     * Parses the JSON response for a list of mail folders.
+     */
     private fun parseFolders(jsonResponse: String): List<MailFolder> {
         val folders = mutableListOf<MailFolder>()
         try {
@@ -127,6 +131,8 @@ object GraphApiHelper {
                             unreadItemCount = folderObject.optInt("unreadItemCount", 0)
                         )
                     )
+                } else {
+                    Log.w(TAG, "Skipping folder due to missing id or displayName: $folderObject")
                 }
             }
         } catch (e: Exception) {
@@ -135,6 +141,9 @@ object GraphApiHelper {
         return folders.sortedBy { it.displayName }
     }
 
+    /**
+     * Parses the JSON response for a list of messages.
+     */
     private fun parseMessages(jsonResponse: String): List<Message> {
         val messages = mutableListOf<Message>()
         try {
@@ -146,16 +155,19 @@ object GraphApiHelper {
                 val senderObject = msgObject.optJSONObject("sender")
                 val emailAddressObject = senderObject?.optJSONObject("emailAddress")
 
+                if (!msgObject.has("id")) {
+                    Log.w(TAG, "Skipping message due to missing id: $msgObject")
+                    continue
+                }
+
                 messages.add(
                     Message(
                         id = msgObject.getString("id"),
                         receivedDateTime = msgObject.optString("receivedDateTime", ""),
-                        subject = msgObject.optString("subject", "(No Subject)"),
-                        // Use elvis operator for safe fallback to empty string for non-nullable fields
-                        senderName = emailAddressObject?.optString("name") ?: "", // Fix warning
-                        senderAddress = emailAddressObject?.optString("address")
-                            ?: "", // Fix warning
-                        bodyPreview = msgObject.optString("bodyPreview", ""),
+                        subject = msgObject.optString("subject").ifEmpty { null },
+                        senderName = emailAddressObject?.optString("name")?.ifEmpty { null },
+                        senderAddress = emailAddressObject?.optString("address")?.ifEmpty { null },
+                        bodyPreview = msgObject.optString("bodyPreview").ifEmpty { null },
                         isRead = msgObject.optBoolean("isRead", true)
                     )
                 )

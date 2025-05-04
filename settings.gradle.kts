@@ -1,3 +1,5 @@
+// File: settings.gradle.kts (Project Root)
+
 pluginManagement {
     repositories {
         google {
@@ -21,7 +23,7 @@ dependencyResolutionManagement {
         google()
         mavenCentral()
 
-        // *** Add this repository for MSAL and its dependencies ***
+        // *** Repository for MSAL and its dependencies ***
         maven {
             url =
                 uri("https://pkgs.dev.azure.com/MicrosoftDeviceSDK/DuoSDK-Public/_packaging/Duo-SDK-Feed/maven/v1")
@@ -32,6 +34,8 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "Mail"
+// Include all modules in the project build
 include(":app")
 include(":feature-auth")
-
+include(":core-data")
+include(":backend-microsoft") // *** ADDED :backend-microsoft module ***

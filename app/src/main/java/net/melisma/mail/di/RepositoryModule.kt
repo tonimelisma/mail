@@ -1,7 +1,6 @@
 package net.melisma.mail.di
 
 import android.content.Context
-import dagger.Binds
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -9,78 +8,46 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import net.melisma.core_data.di.ApplicationScope
+import net.melisma.core_data.di.Dispatcher
+import net.melisma.core_data.di.MailDispatchers
 import net.melisma.feature_auth.MicrosoftAuthManager
-import net.melisma.mail.AccountRepository
-import net.melisma.mail.GraphApiHelper
-import net.melisma.mail.MicrosoftAccountRepository
 import net.melisma.mail.R
-import net.melisma.mail.data.datasources.MicrosoftTokenProvider
-import net.melisma.mail.data.datasources.TokenProvider
-import net.melisma.mail.data.repositories.Dispatcher // Import Dispatcher annotation
-import net.melisma.mail.data.repositories.FolderRepository
-import net.melisma.mail.data.repositories.MailDispatchers // Import MailDispatchers enum
-import net.melisma.mail.data.repositories.MessageRepository // *** ADDED IMPORT ***
-import net.melisma.mail.data.repositories.MicrosoftFolderRepository
-import net.melisma.mail.data.repositories.MicrosoftMessageRepository // *** ADDED IMPORT ***
-import javax.inject.Qualifier
 import javax.inject.Singleton
 
-/**
- * Qualifier annotation for distinguishing the application-level CoroutineScope.
- */
-@Qualifier
-@Retention(AnnotationRetention.BINARY)
-annotation class ApplicationScope
+
+// Definition of @ApplicationScope annotation REMOVED from here
+
 
 /**
- * Hilt Module responsible for providing repository implementations and related dependencies.
+ * Hilt Module for providing Application-level dependencies like CoroutineScope and AuthManager.
+ * Repository bindings are now moved to the specific backend modules (e.g., :backend-microsoft).
  */
 @Module
 @InstallIn(SingletonComponent::class)
-abstract class RepositoryModule {
+class RepositoryModule {
 
-    // Binds the AccountRepository interface to its Microsoft implementation.
-    @Binds
-    @Singleton
-    abstract fun bindAccountRepository(impl: MicrosoftAccountRepository): AccountRepository
+    // @Binds methods REMOVED
 
-    // Binds the FolderRepository interface to its Microsoft implementation.
-    @Binds
-    @Singleton
-    abstract fun bindFolderRepository(impl: MicrosoftFolderRepository): FolderRepository
-
-    // Binds the TokenProvider interface to its Microsoft implementation.
-    @Binds
-    @Singleton
-    abstract fun bindTokenProvider(impl: MicrosoftTokenProvider): TokenProvider
-
-    // *** ADDED BINDING for MessageRepository ***
-    @Binds
-    @Singleton
-    abstract fun bindMessageRepository(impl: MicrosoftMessageRepository): MessageRepository
-
-    // Companion object is used for @Provides methods within an abstract module.
     companion object {
 
-        /** Provides the IO dispatcher for background tasks like network calls. */
-        @Provides
-        @Singleton
-        @Dispatcher(MailDispatchers.IO)
-        fun provideIoDispatcher(): CoroutineDispatcher = Dispatchers.IO
-
-        /** Provides a singleton CoroutineScope bound to the application's lifecycle. */
-        @ApplicationScope
+        /**
+         * Provides a singleton [CoroutineScope] tied to the application's lifecycle.
+         * Uses a [SupervisorJob] so failure of one child coroutine doesn't cancel the scope.
+         * Uses the IO dispatcher (provided by another module) as the default context.
+         */
+        @ApplicationScope // Use the qualifier (imported from core-data)
         @Provides
         @Singleton
         fun provideApplicationCoroutineScope(
+            // Inject the dispatcher qualified from core-data, provided by backend-microsoft module
             @Dispatcher(MailDispatchers.IO) ioDispatcher: CoroutineDispatcher
         ): CoroutineScope {
             return CoroutineScope(SupervisorJob() + ioDispatcher)
         }
 
-        /** Provides the singleton instance of MicrosoftAuthManager. */
+        /** Provides the singleton instance of [MicrosoftAuthManager] from the :feature-auth module. */
         @Provides
         @Singleton
         fun provideMicrosoftAuthManager(
@@ -92,10 +59,7 @@ abstract class RepositoryModule {
             )
         }
 
-        /** Provides the GraphApiHelper object (singleton). */
-        @Provides
-        fun provideGraphApiHelper(): GraphApiHelper {
-            return GraphApiHelper
-        }
+        // provideGraphApiHelper REMOVED
+        // provideIoDispatcher REMOVED
     }
 }

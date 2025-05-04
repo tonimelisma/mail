@@ -17,7 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import net.melisma.mail.Message
+import net.melisma.core_data.model.Message
 
 // Composable for a single item in the message list
 @Composable

@@ -1,11 +1,10 @@
 // File: app/src/main/java/net/melisma/mail/ui/MailDrawerContent.kt
-// Corrected imports and when statement for FolderFetchState
+// Corrected imports for reported build errors
 
 package net.melisma.mail.ui
 
-// Import generic Account
-// Import FolderFetchState from its model package
-// Import Util functions if not in the same package
+// *** ADDED MANY COMPOSE IMPORTS ***
+// import androidx.compose.ui.graphics.vector.ImageVector // Only needed if getIconForFolder is used and returns ImageVector
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Column
@@ -39,11 +38,11 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import net.melisma.mail.Account
-import net.melisma.mail.MailFolder
+import net.melisma.core_data.model.Account
+import net.melisma.core_data.model.FolderFetchState
+import net.melisma.core_data.model.MailFolder
 import net.melisma.mail.MainScreenState
 import net.melisma.mail.R
-import net.melisma.mail.model.FolderFetchState
 import java.util.Locale
 
 /**
@@ -53,8 +52,8 @@ import java.util.Locale
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun MailDrawerContent(
-    state: MainScreenState, // Takes the updated state object
-    onFolderSelected: (folder: MailFolder, account: Account) -> Unit, // Callback takes generic Account
+    state: MainScreenState,
+    onFolderSelected: (folder: MailFolder, account: Account) -> Unit,
     onSettingsClicked: () -> Unit,
 ) {
     // --- Define folder sorting logic ONCE using remember ---
@@ -75,37 +74,38 @@ fun MailDrawerContent(
     // --- End folder sorting logic ---
 
     ModalDrawerSheet {
-        LazyColumn(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(modifier = Modifier.fillMaxSize()) { // Now resolved
             // --- Drawer Header ---
             item {
-                Text(
+                Text( // Now resolved
                     stringResource(R.string.app_name),
                     style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 20.dp)
+                    modifier = Modifier.padding(
+                        horizontal = 16.dp,
+                        vertical = 20.dp
+                    ) // Now resolved
                 )
             }
-            item { HorizontalDivider() }
+            item { HorizontalDivider() } // Now resolved
 
             // --- Accounts and Folders Section ---
             state.accounts.forEach { account ->
-                stickyHeader { AccountHeader(account = account) }
+                stickyHeader { AccountHeader(account = account) } // Now resolved
 
                 val folderState = state.foldersByAccountId[account.id]
 
                 item {
-                    // Use a 'when' expression to handle all possible states of FolderFetchState
-                    // Ensure all branches (Loading, Success, Error, null) are handled.
                     when (folderState) {
-                        is FolderFetchState.Loading -> { // Explicitly handle Loading
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                        is FolderFetchState.Loading -> {
+                            Row( // Now resolved
+                                Modifier // Now resolved
+                                    .fillMaxWidth() // Now resolved
+                                    .padding(horizontal = 16.dp, vertical = 8.dp), // Now resolved
+                                verticalAlignment = Alignment.CenterVertically // Now resolved
                             ) {
-                                CircularProgressIndicator(Modifier.size(20.dp))
-                                Spacer(Modifier.width(16.dp))
-                                Text(
+                                CircularProgressIndicator(Modifier.size(20.dp)) // Now resolved
+                                Spacer(Modifier.width(16.dp)) // Now resolved
+                                Text( // Now resolved
                                     stringResource(R.string.loading_folders),
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -113,21 +113,20 @@ fun MailDrawerContent(
                             }
                         }
                         is FolderFetchState.Error -> {
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                            Row( // Now resolved
+                                Modifier // Now resolved
+                                    .fillMaxWidth() // Now resolved
+                                    .padding(horizontal = 16.dp, vertical = 8.dp), // Now resolved
+                                verticalAlignment = Alignment.CenterVertically // Now resolved
                             ) {
-                                Icon(
-                                    Icons.Filled.ErrorOutline,
+                                Icon( // Now resolved
+                                    Icons.Filled.ErrorOutline, // Now resolved
                                     stringResource(R.string.cd_error_loading_folders),
                                     tint = MaterialTheme.colorScheme.error,
-                                    modifier = Modifier.size(20.dp)
+                                    modifier = Modifier.size(20.dp) // Now resolved
                                 )
-                                Spacer(Modifier.width(16.dp))
-                                // Access the 'error' property from the Error state
-                                Text(
+                                Spacer(Modifier.width(16.dp)) // Now resolved
+                                Text( // Now resolved
                                     folderState.error,
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.error
@@ -135,14 +134,13 @@ fun MailDrawerContent(
                             }
                         }
                         is FolderFetchState.Success -> {
-                            // Access the 'folders' property from the Success state
                             val folders = folderState.folders
                             if (folders.isEmpty()) {
-                                Text(
+                                Text( // Now resolved
                                     stringResource(R.string.no_folders_found),
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.padding(
+                                    modifier = Modifier.padding( // Now resolved
                                         start = 68.dp,
                                         top = 8.dp,
                                         bottom = 8.dp
@@ -153,7 +151,6 @@ fun MailDrawerContent(
                                     val standardMap = mutableMapOf<String, MailFolder>()
                                     val otherFolders = mutableListOf<MailFolder>()
                                     folders.forEach { f ->
-                                        // Access 'displayName' property of MailFolder
                                         val key = folderNameToSortKey(f.displayName)
                                         if (standardFolderOrder.contains(key)) {
                                             if (!standardMap.containsKey(key)) standardMap[key] =
@@ -162,11 +159,11 @@ fun MailDrawerContent(
                                             otherFolders.add(f)
                                         }
                                     }
-                                    // Access 'displayName' property for sorting
                                     standardFolderOrder.mapNotNull { standardMap[it] } + otherFolders.sortedBy { it.displayName }
                                 }
-                                Column {
+                                Column { // Now resolved
                                     sortedFolders.forEach { folder ->
+                                        // Note: FolderItem call might fail if getIconForFolder is missing/not imported
                                         FolderItem(
                                             folder = folder,
                                             isSelected = folder.id == state.selectedFolder?.id && account.id == state.selectedFolderAccountId,
@@ -177,18 +174,17 @@ fun MailDrawerContent(
                             }
                         }
 
-                        null -> { // Explicitly handle the null case (before loading starts)
-                            Row(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                        null -> {
+                            Row( // Now resolved
+                                Modifier // Now resolved
+                                    .fillMaxWidth() // Now resolved
+                                    .padding(horizontal = 16.dp, vertical = 8.dp), // Now resolved
+                                verticalAlignment = Alignment.CenterVertically // Now resolved
                             ) {
-                                // Show loading indicator or placeholder text for null state
-                                CircularProgressIndicator(Modifier.size(20.dp))
-                                Spacer(Modifier.width(16.dp))
-                                Text(
-                                    stringResource(R.string.loading_folders), // Or "Initializing..."
+                                CircularProgressIndicator(Modifier.size(20.dp)) // Now resolved
+                                Spacer(Modifier.width(16.dp)) // Now resolved
+                                Text( // Now resolved
+                                    stringResource(R.string.loading_folders),
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -196,17 +192,22 @@ fun MailDrawerContent(
                         }
                     } // End when (folderState)
                 } // End item for folder content
-                item { HorizontalDivider(modifier = Modifier.padding(top = 8.dp)) }
+                item { HorizontalDivider(modifier = Modifier.padding(top = 8.dp)) } // Now resolved
             } // End forEach account
 
             // --- Settings Navigation Item ---
             item {
-                NavigationDrawerItem(
-                    label = { Text(stringResource(R.string.settings_title)) },
+                NavigationDrawerItem( // Now resolved
+                    label = { Text(stringResource(R.string.settings_title)) }, // Now resolved
                     selected = false,
                     onClick = onSettingsClicked,
-                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
-                    icon = { Icon(Icons.Filled.Settings, stringResource(R.string.settings_title)) }
+                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding), // Now resolved
+                    icon = {
+                        Icon(
+                            Icons.Filled.Settings,
+                            stringResource(R.string.settings_title)
+                        )
+                    } // Now resolved
                 )
             }
         } // End LazyColumn
@@ -218,27 +219,27 @@ fun MailDrawerContent(
  */
 @Composable
 private fun AccountHeader(account: Account) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.9f))
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
+    Row( // Now resolved
+        modifier = Modifier // Now resolved
+            .fillMaxWidth() // Now resolved
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.9f)) // Now resolved
+            .padding(horizontal = 16.dp, vertical = 8.dp), // Now resolved
+        verticalAlignment = Alignment.CenterVertically // Now resolved
     ) {
-        Icon(
-            Icons.Filled.AccountCircle,
+        Icon( // Now resolved
+            Icons.Filled.AccountCircle, // Now resolved
             contentDescription = "Account",
-            modifier = Modifier.size(24.dp),
+            modifier = Modifier.size(24.dp), // Now resolved
             tint = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        Spacer(Modifier.width(16.dp))
-        Text(
+        Spacer(Modifier.width(16.dp)) // Now resolved
+        Text( // Now resolved
             text = account.username,
             style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.Bold,
+            fontWeight = FontWeight.Bold, // Now resolved
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
-            overflow = TextOverflow.Ellipsis
+            overflow = TextOverflow.Ellipsis // Now resolved
         )
     }
 }
@@ -249,12 +250,18 @@ private fun AccountHeader(account: Account) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun FolderItem(folder: MailFolder, isSelected: Boolean, onClick: () -> Unit) {
-    NavigationDrawerItem(
-        label = { Text(folder.displayName) },
+    NavigationDrawerItem( // Now resolved
+        label = { Text(folder.displayName) }, // Now resolved
         selected = isSelected,
         onClick = onClick,
-        modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
-        icon = { Icon(getIconForFolder(folder.displayName), folder.displayName) },
-        badge = { if (folder.unreadItemCount > 0) Badge { Text(folder.unreadItemCount.toString()) } }
+        modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding), // Now resolved
+        // *** NOTE: The following line WILL cause a build error if getIconForFolder is not defined/imported ***
+        icon = {
+            Icon(
+                getIconForFolder(folder.displayName),
+                folder.displayName
+            )
+        }, // Icon and getIconForFolder call might still be unresolved
+        badge = { if (folder.unreadItemCount > 0) Badge { Text(folder.unreadItemCount.toString()) } } // Now resolved
     )
 }

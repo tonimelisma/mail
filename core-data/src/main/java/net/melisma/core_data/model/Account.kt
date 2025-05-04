@@ -1,0 +1,16 @@
+package net.melisma.core_data.model
+
+/**
+ * A generic representation of a user account within the application.
+ * This data class abstracts the provider-specific account details (like MSAL's IAccount).
+ * It serves as the primary account model used across UI and ViewModel layers.
+ *
+ * @property id A unique identifier for the account, typically provided by the auth system (e.g., MSAL account ID).
+ * @property username A user-friendly name or email address representing the account.
+ * @property providerType An identifier string for the backend provider (e.g., "MS" for Microsoft, "GOOGLE" for Google). Used for routing logic.
+ */
+data class Account(
+    val id: String,
+    val username: String,
+    val providerType: String
+)
