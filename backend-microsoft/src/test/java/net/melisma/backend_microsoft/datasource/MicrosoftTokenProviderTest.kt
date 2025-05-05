@@ -1,7 +1,7 @@
 package net.melisma.backend_microsoft.datasource
 
-// Import specific exceptions instead of wildcard if preferred, but wildcard is fine for tests
 import android.app.Activity
+import android.util.Log // Keep Log import
 import com.microsoft.identity.client.IAccount
 import com.microsoft.identity.client.IAuthenticationResult
 import com.microsoft.identity.client.exception.MsalClientException
@@ -11,7 +11,9 @@ import com.microsoft.identity.client.exception.MsalUserCancelException
 import io.mockk.Called
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.mockkStatic // Keep MockK Static imports
 import io.mockk.unmockkAll
+import io.mockk.unmockkStatic // Keep MockK Static imports
 import io.mockk.verify
 import io.mockk.verifyOrder
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -25,7 +27,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
+// Removed Robolectric imports
+
 @OptIn(ExperimentalCoroutinesApi::class)
+// Removed @RunWith and @Config annotations
 class MicrosoftTokenProviderTest {
 
     // --- Mocks ---
@@ -47,121 +52,110 @@ class MicrosoftTokenProviderTest {
 
     @Before
     fun setUp() {
-        // Use relaxUnitFun = true for mocks where we don't care about verifying ALL Unit functions
         mockAuthManager = mockk(relaxUnitFun = true)
         mockActivity = mockk()
 
-        // Initialize the MSAL IAccount mock used in many tests
         msalAccountMock = mockk {
             every { id } returns msAccount.id
             every { username } returns msAccount.username
-            every { authority } returns "https://login.microsoftonline.com/common" // Or a more specific authority if needed
+            every { authority } returns "https://login.microsoftonline.com/common"
         }
+        every { mockAuthManager.accounts } returns listOf(msalAccountMock) // Default setup has one account
 
-        // --- CRITICAL: Mock the 'accounts' property ---
-        // This is called early in getAccessToken to find the IAccount.
-        // Default behavior: return the mock account. Can be overridden in specific tests.
-        every { mockAuthManager.accounts } returns listOf(msalAccountMock)
+        // --- Mock Log --- (Keep this)
+        mockkStatic(Log::class)
+        every { Log.v(any(), any()) } returns 0
+        every { Log.d(any(), any()) } returns 0
+        every { Log.i(any(), any()) } returns 0
+        every { Log.w(any(), any<String>()) } returns 0
+        every { Log.w(any(), any<String>(), any()) } returns 0
+        every { Log.e(any(), any()) } returns 0
+        every { Log.e(any(), any(), any()) } returns 0
+        // --- End Log mocking block ---
 
         tokenProvider = MicrosoftTokenProvider(mockAuthManager)
     }
 
     @After
     fun tearDown() {
+        unmockkStatic(Log::class) // Keep this
         unmockkAll()
     }
 
-    // --- Helper Functions for Mocking Callbacks ---
-
+    // --- Helper Functions --- (Keep existing helpers)
     private fun mockSilentCallbackWith(result: AcquireTokenResult) {
         every {
-            mockAuthManager.acquireTokenSilent(
-                any(), // Or specific account: msalAccountMock
-                any(), // Or specific scopes: testScopes
-                any()  // The callback lambda
-            )
-        } answers { // Use 'answers' to access arguments
-            val callback = arg<(AcquireTokenResult) -> Unit>(2) // Callback is the 3rd arg (index 2)
-            callback.invoke(result) // Invoke the callback immediately
+            mockAuthManager.acquireTokenSilent(any(), any(), any())
+        } answers {
+            val callback = arg<(AcquireTokenResult) -> Unit>(2)
+            callback.invoke(result)
         }
     }
 
     private fun mockInteractiveCallbackWith(result: AcquireTokenResult) {
         every {
-            mockAuthManager.acquireTokenInteractive(
-                any(), // Or specific activity: mockActivity
-                any(), // Or specific account: msalAccountMock
-                any(), // Or specific scopes: testScopes
-                any()  // The callback lambda
-            )
+            mockAuthManager.acquireTokenInteractive(any(), any(), any(), any())
         } answers {
-            val callback = arg<(AcquireTokenResult) -> Unit>(3) // Callback is the 4th arg (index 3)
-            callback.invoke(result) // Invoke the callback immediately
+            val callback = arg<(AcquireTokenResult) -> Unit>(3)
+            callback.invoke(result)
         }
     }
 
     // --- Test Cases ---
-
     @Test
     fun `getAccessToken fails for non MS account type`() = runTest {
-        // Act
         val result = tokenProvider.getAccessToken(googleAccount, testScopes, null)
-
-        // Assert
         assertTrue(result.isFailure)
         assertTrue(result.exceptionOrNull() is IllegalArgumentException)
-        assertEquals(
-            "Account provider type is not MS: GOOG",
-            result.exceptionOrNull()?.message
-        )
-
-        // Verify no auth manager calls were made
-        verify { mockAuthManager wasNot Called }
-        // More specific verification:
-        // verify(exactly = 0) { mockAuthManager.acquireTokenSilent(any(), any(), any()) }
-        // verify(exactly = 0) { mockAuthManager.acquireTokenInteractive(any(), any(), any(), any()) }
+        assertEquals("Account provider type is not MS: GOOG", result.exceptionOrNull()?.message)
+        verify { mockAuthManager wasNot Called } // Verify manager wasn't touched
     }
 
     @Test
     fun `getAccessToken fails if MSAL account not found in manager`() = runTest {
-        // Arrange: Override the default mock for 'accounts' property for this test
+        // Arrange: Override setup to have NO accounts in the manager
         every { mockAuthManager.accounts } returns emptyList()
         val unknownMsAccount = Account("unknown_id", "unknown@test.com", "MS")
 
         // Act
         val result = tokenProvider.getAccessToken(unknownMsAccount, testScopes, null)
 
-        // Assert
+        // Assert Result
         assertTrue(result.isFailure)
-        assertTrue(result.exceptionOrNull() is IllegalStateException)
+        val exception = result.exceptionOrNull()
+        assertTrue(exception is IllegalStateException)
+        // Check message includes the known accounts part (which is empty here)
         assertEquals(
-            "MSAL IAccount not found for generic Account ID: unknown_id",
-            result.exceptionOrNull()?.message
+            "MSAL IAccount not found for generic Account ID: unknown_id. Known accounts: ",
+            exception?.message
         )
 
-        // Verify no token acquisition calls were made (only 'accounts' property was accessed)
-        verify(exactly = 1) { mockAuthManager.accounts } // Verify property access
+        // Assert Interactions
+        // *** APPLY FIX: Expect exactly 2 calls to accounts getter ***
+        verify(exactly = 2) { mockAuthManager.accounts }
+        // Verify other manager methods were NOT called
         verify(exactly = 0) { mockAuthManager.acquireTokenSilent(any(), any(), any()) }
         verify(exactly = 0) { mockAuthManager.acquireTokenInteractive(any(), any(), any(), any()) }
     }
 
     @Test
     fun `getAccessToken succeeds with silent acquisition`() = runTest {
-        // Arrange: Configure the mock to immediately call back with success
+        // Arrange
         val successAuthResult: IAuthenticationResult = mockk {
             every { accessToken } returns fakeAccessTokenSilent
-            every { account } returns msalAccountMock // Include account in result if needed elsewhere
+            every { account } returns msalAccountMock // Ensure result links back to the correct account
         }
         mockSilentCallbackWith(AcquireTokenResult.Success(successAuthResult))
 
         // Act
         val result = tokenProvider.getAccessToken(msAccount, testScopes, null)
 
-        // Assert
+        // Assert Result
         assertTrue(result.isSuccess)
         assertEquals(fakeAccessTokenSilent, result.getOrNull())
 
-        // Verify silent was called, interactive was not
+        // Assert Interactions
+        verify(exactly = 1) { mockAuthManager.accounts } // Called once by getMsalAccountById
         verify(exactly = 1) {
             mockAuthManager.acquireTokenSilent(
                 msalAccountMock,
@@ -175,9 +169,8 @@ class MicrosoftTokenProviderTest {
     @Test
     fun `getAccessToken succeeds with interactive acquisition when silent fails (UI Required)`() =
         runTest {
-            // Arrange: Mock silent path -> UiRequired, mock interactive path -> Success
+            // Arrange
             mockSilentCallbackWith(AcquireTokenResult.UiRequired)
-
             val interactiveSuccessResult: IAuthenticationResult = mockk {
                 every { accessToken } returns fakeAccessTokenInteractive
                 every { account } returns msalAccountMock
@@ -187,12 +180,13 @@ class MicrosoftTokenProviderTest {
             // Act
             val result = tokenProvider.getAccessToken(msAccount, testScopes, mockActivity)
 
-            // Assert
+            // Assert Result
             assertTrue(result.isSuccess)
             assertEquals(fakeAccessTokenInteractive, result.getOrNull())
 
-            // Verify the sequence of calls
+            // Assert Interactions (Order matters here)
             verifyOrder {
+                mockAuthManager.accounts // From getMsalAccountById
                 mockAuthManager.acquireTokenSilent(msalAccountMock, testScopes, any())
                 mockAuthManager.acquireTokenInteractive(
                     mockActivity,
@@ -206,25 +200,20 @@ class MicrosoftTokenProviderTest {
     @Test
     fun `getAccessToken fails when silent fails (UI Required) and no activity provided`() =
         runTest {
-            // Arrange: Mock silent path -> UiRequired
+            // Arrange
             mockSilentCallbackWith(AcquireTokenResult.UiRequired)
 
             // Act
-            val result =
-                tokenProvider.getAccessToken(msAccount, testScopes, null) // Pass null Activity
+            val result = tokenProvider.getAccessToken(msAccount, testScopes, null) // No activity
 
-            // Assert
+            // Assert Result
             assertTrue(result.isFailure)
             val exception = result.exceptionOrNull()
-            assertTrue(exception is MsalUiRequiredException)
-            // Check the specific message added by the Provider
-            assertEquals(
-                "UI interaction required, but no Activity provided.",
-                exception?.message
-            )
+            assertTrue(exception is MsalUiRequiredException) // Should be the specific exception type
+            assertEquals("UI interaction required, but no Activity provided.", exception?.message)
 
-
-            // Verify silent was called, interactive was NOT called
+            // Assert Interactions
+            verify(exactly = 1) { mockAuthManager.accounts } // From getMsalAccountById
             verify(exactly = 1) {
                 mockAuthManager.acquireTokenSilent(
                     msalAccountMock,
@@ -239,23 +228,28 @@ class MicrosoftTokenProviderTest {
                     any(),
                     any()
                 )
-            }
+            } // Interactive never called
         }
 
     @Test
     fun `getAccessToken fails when silent fails (Error)`() = runTest {
-        // Arrange: Mock silent path -> Error
+        // Arrange
         val silentError = MsalServiceException("SILENT_CODE", "Silent failure message", null)
         mockSilentCallbackWith(AcquireTokenResult.Error(silentError))
 
         // Act
-        val result = tokenProvider.getAccessToken(msAccount, testScopes, mockActivity)
+        val result = tokenProvider.getAccessToken(
+            msAccount,
+            testScopes,
+            mockActivity
+        ) // Activity present but not needed
 
-        // Assert
+        // Assert Result
         assertTrue(result.isFailure)
-        assertEquals(silentError, result.exceptionOrNull())
+        assertEquals(silentError, result.exceptionOrNull()) // Expect the original exception
 
-        // Verify silent was called, interactive was not
+        // Assert Interactions
+        verify(exactly = 1) { mockAuthManager.accounts } // From getMsalAccountById
         verify(exactly = 1) {
             mockAuthManager.acquireTokenSilent(
                 msalAccountMock,
@@ -268,9 +262,8 @@ class MicrosoftTokenProviderTest {
 
     @Test
     fun `getAccessToken fails when interactive fails`() = runTest {
-        // Arrange: Mock silent path -> UiRequired, mock interactive path -> Error
+        // Arrange
         mockSilentCallbackWith(AcquireTokenResult.UiRequired)
-
         val interactiveError =
             MsalClientException("INTERACTIVE_CODE", "Interactive failure message")
         mockInteractiveCallbackWith(AcquireTokenResult.Error(interactiveError))
@@ -278,12 +271,13 @@ class MicrosoftTokenProviderTest {
         // Act
         val result = tokenProvider.getAccessToken(msAccount, testScopes, mockActivity)
 
-        // Assert
+        // Assert Result
         assertTrue(result.isFailure)
-        assertEquals(interactiveError, result.exceptionOrNull())
+        assertEquals(interactiveError, result.exceptionOrNull()) // Expect the interactive error
 
-        // Verify the sequence
+        // Assert Interactions (Order matters)
         verifyOrder {
+            mockAuthManager.accounts // From getMsalAccountById
             mockAuthManager.acquireTokenSilent(msalAccountMock, testScopes, any())
             mockAuthManager.acquireTokenInteractive(
                 mockActivity,
@@ -296,19 +290,20 @@ class MicrosoftTokenProviderTest {
 
     @Test
     fun `getAccessToken fails when interactive is cancelled`() = runTest {
-        // Arrange: Mock silent path -> UiRequired, mock interactive path -> Cancelled
+        // Arrange
         mockSilentCallbackWith(AcquireTokenResult.UiRequired)
         mockInteractiveCallbackWith(AcquireTokenResult.Cancelled)
 
         // Act
         val result = tokenProvider.getAccessToken(msAccount, testScopes, mockActivity)
 
-        // Assert
+        // Assert Result
         assertTrue(result.isFailure)
-        assertTrue(result.exceptionOrNull() is MsalUserCancelException)
+        assertTrue(result.exceptionOrNull() is MsalUserCancelException) // Expect specific cancellation exception
 
-        // Verify the sequence
+        // Assert Interactions (Order matters)
         verifyOrder {
+            mockAuthManager.accounts // From getMsalAccountById
             mockAuthManager.acquireTokenSilent(msalAccountMock, testScopes, any())
             mockAuthManager.acquireTokenInteractive(
                 mockActivity,
@@ -321,28 +316,28 @@ class MicrosoftTokenProviderTest {
 
     @Test
     fun `getAccessToken fails when silent indicates NotInitialized`() = runTest {
-        // Arrange: Mock silent path -> NotInitialized
+        // Arrange
         mockSilentCallbackWith(AcquireTokenResult.NotInitialized)
 
         // Act
-        val result = tokenProvider.getAccessToken(msAccount, testScopes, mockActivity)
+        val result = tokenProvider.getAccessToken(
+            msAccount,
+            testScopes,
+            mockActivity
+        ) // Activity present but not needed
 
-        // Assert
+        // Assert Result
         assertTrue(result.isFailure)
         val exception = result.exceptionOrNull()
         assertTrue(exception is MsalClientException)
-        // Check the specific message added by the Provider
-        assertEquals(
-            "MSAL not initialized.",
-            exception?.message
-        )
-        // Check error code if needed (Provider uses UNKNOWN_ERROR here)
+        assertEquals("MSAL not initialized.", exception?.message)
         assertEquals(
             MsalClientException.UNKNOWN_ERROR,
             (exception as MsalClientException).errorCode
-        )
+        ) // Check specific error code if possible
 
-        // Verify silent was called, interactive was not
+        // Assert Interactions
+        verify(exactly = 1) { mockAuthManager.accounts } // From getMsalAccountById
         verify(exactly = 1) {
             mockAuthManager.acquireTokenSilent(
                 msalAccountMock,

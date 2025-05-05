@@ -90,25 +90,20 @@ class MainViewModelTest {
     private lateinit var viewModel: MainViewModel
 
     // --- Test Data ---
-    // FIX 1: Account constructor - Was already correct (3 args)
     private val testAccount1 = Account(id = "id1", username = "user1@test.com", providerType = "MS")
-
-    // FIX 2: MailFolder constructor - Use named args for clarity, matching MailFolder.kt
     private val testInbox =
         MailFolder(id = "inboxId1", displayName = "Inbox", totalItemCount = 10, unreadItemCount = 2)
     private val testSent =
         MailFolder(id = "sentId1", displayName = "Sent", totalItemCount = 5, unreadItemCount = 0)
     private val testFoldersAcc1 = listOf(testInbox, testSent)
-
-    // FIX 3: Message constructor - Use String for receivedDateTime, matching Message.kt
     private val testDateTimeString: String =
         OffsetDateTime.now().minusDays(1).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
     private val testMessage1 = Message(
         id = "msg1",
-        receivedDateTime = testDateTimeString, // Use String!
+        receivedDateTime = testDateTimeString,
         subject = "Test Subject 1",
-        senderName = "Sender Name",            // Example sender name
-        senderAddress = "sender@example.com",  // Example sender address
+        senderName = "Sender Name",
+        senderAddress = "sender@example.com",
         bodyPreview = "This is a snippet...",
         isRead = false
     )
@@ -133,7 +128,6 @@ class MainViewModelTest {
         authStateFlow = MutableStateFlow(AuthState.Initializing)
         accountsFlow = MutableStateFlow(emptyList())
         isLoadingAccountActionFlow = MutableStateFlow(false)
-        // Use SharedFlow for transient messages like toasts
         accountActionMessageFlow = MutableSharedFlow(replay = 0, extraBufferCapacity = 1)
         folderStatesFlow = MutableStateFlow(emptyMap())
         messageDataStateFlow = MutableStateFlow(MessageDataState.Initial)
@@ -141,15 +135,14 @@ class MainViewModelTest {
         every { accountRepository.authState } returns authStateFlow.asStateFlow()
         every { accountRepository.accounts } returns accountsFlow.asStateFlow()
         every { accountRepository.isLoadingAccountAction } returns isLoadingAccountActionFlow.asStateFlow()
-        every { accountRepository.accountActionMessage } returns accountActionMessageFlow.asSharedFlow() // Expose as SharedFlow
-        every { folderRepository.observeFoldersState() } returns folderStatesFlow.asStateFlow() // Can be StateFlow or regular Flow
+        every { accountRepository.accountActionMessage } returns accountActionMessageFlow.asSharedFlow()
+        every { folderRepository.observeFoldersState() } returns folderStatesFlow.asStateFlow()
         every { messageRepository.messageDataState } returns messageDataStateFlow.asStateFlow()
 
-        // Stub suspend functions used by ViewModel
         coEvery { accountRepository.addAccount(any(), any()) } just runs
         coEvery { accountRepository.removeAccount(any()) } just runs
         coEvery { folderRepository.refreshAllFolders(any()) } just runs
-        coEvery { folderRepository.manageObservedAccounts(any()) } just runs // Stub this interaction
+        coEvery { folderRepository.manageObservedAccounts(any()) } just runs
         coEvery { messageRepository.refreshMessages(any()) } just runs
         coEvery { messageRepository.setTargetFolder(any(), any()) } just runs
 
@@ -165,7 +158,7 @@ class MainViewModelTest {
 
     @After
     fun tearDown() {
-        // Usually no cleanup needed for instance mocks
+        // No cleanup needed
     }
 
     @Test
@@ -174,7 +167,11 @@ class MainViewModelTest {
             val initialState = awaitItem()
             assertEquals(AuthState.Initializing, initialState.authState)
             assertTrue(initialState.accounts.isEmpty())
-            // ... other initial assertions
+            assertFalse(initialState.isLoadingAccountAction)
+            assertTrue(initialState.foldersByAccountId.isEmpty())
+            assertNull(initialState.selectedFolder)
+            assertEquals(MessageDataState.Initial, initialState.messageDataState)
+            assertNull(initialState.toastMessage)
             cancelAndIgnoreRemainingEvents()
         }
     }
@@ -202,6 +199,7 @@ class MainViewModelTest {
     }
 
 
+    // CORRECTED VERSION OF THIS TEST - Only one definition should exist
     @Test
     fun `state reflects folder loading and success with default selection`() = runTest {
         // Pre-condition: Authenticated with an account
@@ -211,39 +209,51 @@ class MainViewModelTest {
         mainCoroutineRule.testDispatcher.scheduler.advanceUntilIdle()
 
         viewModel.uiState.test {
-            awaitItem() // Skip initial/auth state
+            awaitItem() // Consume initial state
 
             // --- Arrange ---
             // Simulate folder loading
             folderStatesFlow.value = mapOf(testAccount1.id to FolderFetchState.Loading)
             mainCoroutineRule.testDispatcher.scheduler.advanceUntilIdle()
 
-            // --- Assert ---
+            // --- Assert Loading ---
             val loadingState = awaitItem()
             assertEquals(FolderFetchState.Loading, loadingState.foldersByAccountId[testAccount1.id])
             assertTrue(loadingState.isAnyFolderLoading)
-            assertNull(loadingState.selectedFolder)
+            assertNull("SelectedFolder should be null during Loading", loadingState.selectedFolder)
 
             // --- Arrange ---
             // Simulate folder success
             folderStatesFlow.value =
                 mapOf(testAccount1.id to FolderFetchState.Success(testFoldersAcc1))
-            mainCoroutineRule.testDispatcher.scheduler.advanceUntilIdle()
+            mainCoroutineRule.testDispatcher.scheduler.advanceUntilIdle() // Let selectDefaultFolderIfNeeded run
 
-            // --- Assert ---
-            val successState = awaitItem()
-            val folderState = successState.foldersByAccountId[testAccount1.id]
+            // --- Assert Success ---
+            // Consume the state emission from the folder map update
+            awaitItem()
+            // Consume the NEXT emission, which contains the default selection update
+            val stateAfterDefaultSelection = awaitItem()
+
+            // Assert on the state AFTER the default selection should have happened
+            val folderState = stateAfterDefaultSelection.foldersByAccountId[testAccount1.id]
             assertTrue(folderState is FolderFetchState.Success)
             assertEquals(testFoldersAcc1, (folderState as FolderFetchState.Success).folders)
-            assertFalse(successState.isAnyFolderLoading)
+            assertFalse(
+                "isAnyFolderLoading should be false after success",
+                stateAfterDefaultSelection.isAnyFolderLoading
+            )
 
-            // Verify default folder selection (Inbox)
-            assertEquals(testInbox, successState.selectedFolder)
-            assertEquals(testAccount1.id, successState.selectedFolderAccountId)
+            // Verify default folder selection (Inbox) - Assert on the correct state
+            assertEquals(
+                "Default folder 'Inbox' was not selected",
+                testInbox,
+                stateAfterDefaultSelection.selectedFolder
+            )
+            assertEquals(testAccount1.id, stateAfterDefaultSelection.selectedFolderAccountId)
 
-            // FIX 4: Move coVerify inside the test block
             // Verify MessageRepository was notified of selection
-            coVerify { messageRepository.setTargetFolder(testAccount1, testInbox) }
+            // Use atLeast = 1 as it might be called during init/account observation too if selection was null then
+            coVerify(atLeast = 1) { messageRepository.setTargetFolder(testAccount1, testInbox) }
 
             cancelAndIgnoreRemainingEvents()
         }
@@ -285,8 +295,16 @@ class MainViewModelTest {
         folderStatesFlow.value = mapOf(testAccount1.id to FolderFetchState.Success(testFoldersAcc1))
         // Ensure default selection or explicitly select
         mainCoroutineRule.testDispatcher.scheduler.advanceUntilIdle() // Allow default selection
-        viewModel.selectFolder(testInbox, testAccount1) // Or explicitly select here
-        mainCoroutineRule.testDispatcher.scheduler.advanceUntilIdle() // Let selection propagate
+        // Verify default selection happened before proceeding
+        if (viewModel.uiState.value.selectedFolder == null) {
+            // If default didn't happen (e.g. timing), explicitly select
+            viewModel.selectFolder(testInbox, testAccount1)
+            mainCoroutineRule.testDispatcher.scheduler.advanceUntilIdle() // Let selection propagate
+        }
+        assertEquals(
+            testInbox,
+            viewModel.uiState.value.selectedFolder
+        ) // Confirm selection before testing messages
 
 
         viewModel.uiState.test {
@@ -338,8 +356,6 @@ class MainViewModelTest {
     fun `refreshMessages does not call repository and shows toast when offline`() = runTest {
         // Arrange: Offline, folder selected
         every { mockNetworkCapabilities.hasTransport(any()) } returns false // Simulate offline
-        // Can also test: every { mockConnectivityManager.activeNetwork } returns null
-
         authStateFlow.value = AuthState.Initialized
         accountsFlow.value = listOf(testAccount1)
         folderStatesFlow.value = mapOf(testAccount1.id to FolderFetchState.Success(testFoldersAcc1))
@@ -365,7 +381,7 @@ class MainViewModelTest {
         }
     }
 
-    // FIX 5: Rewrite test based on removing account, not non-existent AuthState.SignedOut
+
     @Test
     fun `removing the only account clears selected folder and notifies MessageRepository`() =
         runTest {
@@ -375,8 +391,13 @@ class MainViewModelTest {
             folderStatesFlow.value =
                 mapOf(testAccount1.id to FolderFetchState.Success(testFoldersAcc1))
             mainCoroutineRule.testDispatcher.scheduler.advanceUntilIdle() // Allow default select
-            viewModel.selectFolder(testInbox, testAccount1) // Ensure inbox is selected
-            mainCoroutineRule.testDispatcher.scheduler.advanceUntilIdle()
+            // Verify default selection happened before proceeding
+            if (viewModel.uiState.value.selectedFolder == null) {
+                viewModel.selectFolder(testInbox, testAccount1)
+                mainCoroutineRule.testDispatcher.scheduler.advanceUntilIdle()
+            }
+            assertEquals(testInbox, viewModel.uiState.value.selectedFolder)
+
 
             viewModel.uiState.test {
                 val initialState = awaitItem() // Consume state after selection
@@ -398,7 +419,6 @@ class MainViewModelTest {
                 assertNull(finalState.selectedFolderAccountId)
 
                 // Verify message repo told to clear target due to selection change
-                // Use 'atLeast = 1' because default selection might call it initially too
                 coVerify(atLeast = 1) { messageRepository.setTargetFolder(null, null) }
 
                 cancelAndIgnoreRemainingEvents()
@@ -445,7 +465,8 @@ class MainViewModelTest {
 
         viewModel.uiState.test {
             // Assert toast is initially set
-            val stateWithToast = awaitItem()
+            // Use expectMostRecentItem() as initial state might also be emitted
+            val stateWithToast = expectMostRecentItem()
             assertEquals(testToast, stateWithToast.toastMessage)
 
             // Act: Simulate UI confirming toast shown
@@ -463,10 +484,10 @@ class MainViewModelTest {
         }
     }
 
+    // --- ADD MORE TESTS HERE ---
+    // TODO: Test error states from repositories (FolderFetchState.Error, MessageDataState.Error).
+    // TODO: Test removing the *currently selected* account when multiple accounts exist.
+    // TODO: Test default folder selection fallback logic (when Inbox doesn't exist).
+    // TODO: Test edge cases in observation logic (e.g., rapid changes).
 
-    // Add more tests:
-    // - Error states from repositories (FolderFetchState.Error, MessageDataState.Error).
-    // - Removing the *currently selected* account when multiple accounts exist.
-    // - Default folder selection fallback logic (when Inbox doesn't exist).
-    // - Edge cases in observation logic (e.g., rapid changes).
 }
