@@ -1,70 +1,62 @@
 package net.melisma.mail.di
 
-// <<< REMOVE import for MicrosoftAuthManager from feature_auth
-// import net.melisma.feature_auth.MicrosoftAuthManager
-// <<< ADD import for the new AuthConfigProvider interface
+// No longer needs Context import unless used for other providers
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
+// No longer needs @ApplicationContext unless used for other providers
 import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers // Use standard Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import net.melisma.backend_microsoft.di.AuthConfigProvider
-import net.melisma.core_data.di.ApplicationScope
-import net.melisma.core_data.di.Dispatcher
-import net.melisma.core_data.di.MailDispatchers
-import net.melisma.mail.R
+import net.melisma.backend_microsoft.di.AuthConfigProvider // Import the INTERFACE defined in the backend module
+import net.melisma.core_data.di.ApplicationScope // Qualifier for Scope
+import net.melisma.core_data.di.Dispatcher // Qualifier for Dispatcher
+import net.melisma.core_data.di.MailDispatchers // Enum for Dispatcher types
+import net.melisma.mail.R // Import app's R class to provide the resource ID
 import javax.inject.Singleton
 
 
 /**
- * Hilt Module for providing Application-level dependencies like CoroutineScope.
- * The AuthManager provider is now removed, and AuthConfigProvider is added.
+ * Hilt Module for providing Application-level dependencies.
+ * Provides the AuthConfigProvider implementation needed by backend modules,
+ * the application-wide CoroutineScope, and Dispatchers.
  */
 @Module
 @InstallIn(SingletonComponent::class)
-class RepositoryModule {
+object RepositoryModule { // Changed to object as it only contains @Provides
 
-    // @Binds methods previously REMOVED - stays removed
-
-    companion object {
-
-        // provideApplicationCoroutineScope (No changes needed here)
-        @ApplicationScope
-        @Provides
-        @Singleton
-        fun provideApplicationCoroutineScope(
-            @Dispatcher(MailDispatchers.IO) ioDispatcher: CoroutineDispatcher
-        ): CoroutineScope {
-            return CoroutineScope(SupervisorJob() + ioDispatcher)
-        }
-
-        // <<< REMOVED: Old provider for MicrosoftAuthManager >>>
-        /*
-        @Provides
-        @Singleton
-        fun provideMicrosoftAuthManager(
-            @ApplicationContext appContext: Context
-        ): MicrosoftAuthManager {
-            return MicrosoftAuthManager(
-                context = appContext,
-                configResId = R.raw.auth_config // This was the problem part
-            )
-        }
-        */
-
-        // <<< ADDED: Provider for AuthConfigProvider interface >>>
-        /** Provides the implementation for AuthConfigProvider, sourcing the ID from app resources. */
-        @Provides
-        @Singleton
-        fun provideAuthConfigProvider(): AuthConfigProvider {
-            return object : AuthConfigProvider {
-                // Provide the actual resource ID from the :app module's R class
-                override fun getMsalConfigResId(): Int = R.raw.auth_config
-            }
-        }
-
-        // Other providers like provideGraphApiHelper, provideIoDispatcher were previously REMOVED - stay removed
+    // Provide the application-level CoroutineScope, qualified by @ApplicationScope
+    @ApplicationScope
+    @Provides
+    @Singleton
+    fun provideApplicationCoroutineScope(
+        @Dispatcher(MailDispatchers.IO) ioDispatcher: CoroutineDispatcher // Inject the IO dispatcher
+    ): CoroutineScope {
+        // Use SupervisorJob + IO Dispatcher for background tasks independent of ViewModel lifecycle
+        return CoroutineScope(SupervisorJob() + ioDispatcher)
     }
+
+    // Provide the IO Dispatcher, qualified by @Dispatcher
+    @Dispatcher(MailDispatchers.IO)
+    @Provides
+    @Singleton
+    fun provideIoDispatcher(): CoroutineDispatcher = Dispatchers.IO
+
+    // Provide the concrete implementation of AuthConfigProvider needed by MicrosoftAuthManager
+    @Provides
+    @Singleton
+    fun provideAuthConfigProvider(): AuthConfigProvider {
+        // This object implements the interface defined in :backend-microsoft
+        // and provides the actual resource ID from this :app module.
+        return object : AuthConfigProvider {
+            override fun getMsalConfigResId(): Int = R.raw.auth_config
+        }
+    }
+
+    // NO LONGER PROVIDES/BINDS:
+    // - MicrosoftAuthManager (provided in :backend-microsoft)
+    // - Repositories (will be bound in :data)
+    // - GraphApiHelper (uses @Inject constructor)
 }

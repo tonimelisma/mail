@@ -1,4 +1,4 @@
-package net.melisma.backend_microsoft.errors
+package net.melisma.backend_microsoft.errors // Keep in this package as it tests the MS implementation
 
 import android.util.Log
 import com.microsoft.identity.client.exception.MsalArgumentException
@@ -17,27 +17,33 @@ import java.io.IOException
 import java.net.UnknownHostException
 import kotlin.coroutines.cancellation.CancellationException
 
+/**
+ * Unit tests for the MicrosoftErrorMapper implementation.
+ * NOTE: This now tests an instance of MicrosoftErrorMapper, not a static object.
+ */
 class ErrorMapperTest {
 
-    // Test target is the ErrorMapper object
+    // --- Class Under Test ---
+    // Create an instance of the class we are testing
+    private val errorMapper = MicrosoftErrorMapper()
 
     companion object {
         @BeforeClass
-        @JvmStatic // Necessary for JUnit 4 static methods
+        @JvmStatic
         fun beforeClass() {
             // Mock Log statically for the entire test class
             mockkStatic(Log::class)
             every { Log.v(any(), any()) } returns 0
             every { Log.d(any(), any()) } returns 0
             every { Log.i(any(), any()) } returns 0
-            every { Log.w(any(), any<String>()) } returns 0 // Handle String overload
-            every { Log.w(any(), any<String>(), any()) } returns 0 // Handle Throwable overload
+            every { Log.w(any(), any<String>()) } returns 0
+            every { Log.w(any(), any<String>(), any()) } returns 0
             every { Log.e(any(), any()) } returns 0
             every { Log.e(any(), any(), any()) } returns 0
         }
 
         @AfterClass
-        @JvmStatic // Necessary for JUnit 4 static methods
+        @JvmStatic
         fun afterClass() {
             // Unmock Log after all tests in the class have run
             unmockkStatic(Log::class)
@@ -46,36 +52,34 @@ class ErrorMapperTest {
 
 
     // --- mapAuthExceptionToUserMessage Tests ---
-    // ... (Keep passing tests unchanged) ...
+    // Tests now call methods on the errorMapper instance
 
     @Test
     fun `mapAuthException handles MsalUserCancelException`() {
         assertEquals(
             "Authentication cancelled.",
-            ErrorMapper.mapAuthExceptionToUserMessage(MsalUserCancelException())
+            // Call method on the instance
+            errorMapper.mapAuthExceptionToUserMessage(MsalUserCancelException())
         )
     }
 
     @Test
     fun `mapAuthException handles MsalUiRequiredException`() {
-        // We can use the public constructor now, providing necessary (even if dummy) codes
         assertEquals(
             "Session expired. Please retry or sign out/in.",
-            ErrorMapper.mapAuthExceptionToUserMessage(
-                MsalUiRequiredException(
-                    "test_code",
-                    "test msg"
-                )
+            // Call method on the instance
+            errorMapper.mapAuthExceptionToUserMessage(
+                MsalUiRequiredException("test_code", "test msg")
             )
         )
     }
 
     @Test
     fun `mapAuthException handles MsalClientException NoCurrentAccount`() {
-        // Use public constructor with known error code constant
         assertEquals(
             "Account not found or session invalid.",
-            ErrorMapper.mapAuthExceptionToUserMessage(MsalClientException(MsalClientException.NO_CURRENT_ACCOUNT))
+            // Call method on the instance
+            errorMapper.mapAuthExceptionToUserMessage(MsalClientException(MsalClientException.NO_CURRENT_ACCOUNT))
         )
     }
 
@@ -83,7 +87,8 @@ class ErrorMapperTest {
     fun `mapAuthException handles MsalClientException InvalidParameter`() {
         assertEquals(
             "Authentication request is invalid.",
-            ErrorMapper.mapAuthExceptionToUserMessage(MsalClientException(MsalClientException.INVALID_PARAMETER))
+            // Call method on the instance
+            errorMapper.mapAuthExceptionToUserMessage(MsalClientException(MsalClientException.INVALID_PARAMETER))
         )
     }
 
@@ -91,11 +96,9 @@ class ErrorMapperTest {
     fun `mapAuthException handles generic MsalClientException with message`() {
         assertEquals(
             "Client failure message",
-            ErrorMapper.mapAuthExceptionToUserMessage(
-                MsalClientException(
-                    "client_code",
-                    "Client failure message"
-                )
+            // Call method on the instance
+            errorMapper.mapAuthExceptionToUserMessage(
+                MsalClientException("client_code", "Client failure message")
             )
         )
     }
@@ -104,21 +107,18 @@ class ErrorMapperTest {
     fun `mapAuthException handles generic MsalClientException with blank message`() {
         assertEquals(
             "Authentication client error (blank_client_code)",
-            ErrorMapper.mapAuthExceptionToUserMessage(MsalClientException("blank_client_code", ""))
+            // Call method on the instance
+            errorMapper.mapAuthExceptionToUserMessage(MsalClientException("blank_client_code", ""))
         )
     }
 
     @Test
     fun `mapAuthException handles MsalServiceException with message`() {
-        // Use public constructor
         assertEquals(
             "Service failure message",
-            ErrorMapper.mapAuthExceptionToUserMessage(
-                MsalServiceException(
-                    "service_code",
-                    "Service failure message",
-                    null
-                )
+            // Call method on the instance
+            errorMapper.mapAuthExceptionToUserMessage(
+                MsalServiceException("service_code", "Service failure message", null)
             )
         )
     }
@@ -127,150 +127,174 @@ class ErrorMapperTest {
     fun `mapAuthException handles MsalServiceException with blank message`() {
         assertEquals(
             "Authentication service error (blank_service_code)",
-            ErrorMapper.mapAuthExceptionToUserMessage(
-                MsalServiceException(
-                    "blank_service_code",
-                    "",
-                    null
-                )
+            // Call method on the instance
+            errorMapper.mapAuthExceptionToUserMessage(
+                MsalServiceException("blank_service_code", "", null)
             )
         )
     }
 
     @Test
     fun `mapAuthException handles MsalArgumentException (as other MsalException)`() {
-        // MsalArgumentException IS-A MsalException, use its public constructor
         assertEquals(
-            "Argument failure message", // Expect the message itself when present
-            ErrorMapper.mapAuthExceptionToUserMessage(
-                MsalArgumentException(
-                    "arg_name",
-                    "param_name",
-                    "Argument failure message"
-                )
+            "Argument failure message",
+            // Call method on the instance
+            errorMapper.mapAuthExceptionToUserMessage(
+                MsalArgumentException("arg_name", "param_name", "Argument failure message")
             )
         )
     }
 
     @Test
     fun `mapAuthException handles other MsalException with message`() {
-        // Cannot instantiate base MsalException directly usually. Test with another subtype like MsalDeclinedScopeException if needed, or rely on subtype tests.
-        // Using MsalArgumentException as an example of a subtype not explicitly handled.
         assertEquals(
-            "Argument failure message", // Expect the message itself when present
-            ErrorMapper.mapAuthExceptionToUserMessage(
-                MsalArgumentException(
-                    "arg_name",
-                    "param_name",
-                    "Argument failure message"
-                )
+            "Argument failure message",
+            // Call method on the instance
+            errorMapper.mapAuthExceptionToUserMessage(
+                MsalArgumentException("arg_name", "param_name", "Argument failure message")
             )
         )
     }
 
     @Test
     fun `mapAuthException handles other MsalException with blank message`() {
-        // Arrange: Create an MsalArgumentException with a blank message.
-        // Its errorCode property will likely resolve to "illegal_argument_exception" or similar.
-        val blankArgumentException = MsalArgumentException(
-            "arg_name",
-            "param_name",
-            "" // Blank message triggers the fallback
-        )
-        val actualErrorCode =
-            blankArgumentException.errorCode ?: "UNKNOWN" // Get the actual error code
-
-        // Assert: Expect the fallback message using the actual error code from the exception instance.
-        // *** APPLY FIX: Use the actual error code from the exception ***
+        val blankArgumentException = MsalArgumentException("arg_name", "param_name", "")
+        val actualErrorCode = blankArgumentException.errorCode ?: "UNKNOWN"
         assertEquals(
-            "Authentication failed ($actualErrorCode)", // Corrected expected message format
-            ErrorMapper.mapAuthExceptionToUserMessage(blankArgumentException)
+            "Authentication failed ($actualErrorCode)",
+            // Call method on the instance
+            errorMapper.mapAuthExceptionToUserMessage(blankArgumentException)
         )
     }
 
     @Test
     fun `mapAuthException handles generic IOException via fallback`() {
         assertEquals(
-            "Network error occurred",
-            ErrorMapper.mapAuthExceptionToUserMessage(IOException("Network issue"))
+            "Network error occurred", // mapAuthException falls back to mapNetworkOrApiException
+            // Call method on the instance
+            errorMapper.mapAuthExceptionToUserMessage(IOException("Network issue"))
         )
     }
 
     @Test
     fun `mapAuthException handles UnknownHostException via fallback`() {
         assertEquals(
-            "No internet connection",
-            ErrorMapper.mapAuthExceptionToUserMessage(UnknownHostException("Cannot resolve"))
+            "No internet connection", // mapAuthException falls back to mapNetworkOrApiException
+            // Call method on the instance
+            errorMapper.mapAuthExceptionToUserMessage(UnknownHostException("Cannot resolve"))
         )
     }
 
     @Test
     fun `mapAuthException handles unknown non Msal Exception via fallback`() {
         assertEquals(
-            "Unknown error message", // Should map to the exception message if present
-            ErrorMapper.mapAuthExceptionToUserMessage(RuntimeException("Unknown error message"))
+            "Unknown error message", // Falls back to network mapping, then uses message
+            // Call method on the instance
+            errorMapper.mapAuthExceptionToUserMessage(RuntimeException("Unknown error message"))
+        )
+    }
+
+    @Test
+    fun `mapAuthException handles unknown non Msal Exception with blank message via fallback`() {
+        assertEquals(
+            "An unknown authentication error occurred", // Falls back to network mapping (unknown), then auth fallback
+            // Call method on the instance
+            errorMapper.mapAuthExceptionToUserMessage(RuntimeException(""))
         )
     }
 
     @Test
     fun `mapAuthException handles CancellationException with message`() {
         assertEquals(
-            "User cancelled", // Expect specific message from CancellationException
-            ErrorMapper.mapAuthExceptionToUserMessage(CancellationException("User cancelled"))
+            "User cancelled",
+            // Call method on the instance
+            errorMapper.mapAuthExceptionToUserMessage(CancellationException("User cancelled"))
         )
     }
 
     @Test
     fun `mapAuthException handles CancellationException with null message`() {
-        // Use the constructor that takes a cause (Throwable?) or null message
         assertEquals(
-            "Authentication cancelled.", // Expect fallback message for null message CancellationException
-            ErrorMapper.mapAuthExceptionToUserMessage(CancellationException(null as String?))
+            "Authentication cancelled.",
+            // Call method on the instance
+            errorMapper.mapAuthExceptionToUserMessage(CancellationException(null as String?))
         )
     }
 
     @Test
     fun `mapAuthException handles null exception`() {
-        assertEquals("An unknown error occurred", ErrorMapper.mapAuthExceptionToUserMessage(null))
+        assertEquals(
+            "An unknown authentication error occurred", // Falls back to network mapping (unknown), then auth fallback
+            // Call method on the instance
+            errorMapper.mapAuthExceptionToUserMessage(null)
+        )
     }
 
 
-    // --- mapGraphExceptionToUserMessage Tests ---
-    // ... (Keep passing tests unchanged) ...
+    // --- mapNetworkOrApiException Tests ---
+    // Tests now call methods on the errorMapper instance
+
     @Test
-    fun `mapGraphException handles IOException`() {
+    fun `mapNetworkOrApiException handles IOException`() {
         assertEquals(
             "Network error occurred",
-            ErrorMapper.mapGraphExceptionToUserMessage(IOException("Graph network failed"))
+            // Call method on the instance
+            errorMapper.mapNetworkOrApiException(IOException("Graph network failed"))
         )
     }
 
     @Test
-    fun `mapGraphException handles UnknownHostException`() {
+    fun `mapNetworkOrApiException handles UnknownHostException`() {
         assertEquals(
             "No internet connection",
-            ErrorMapper.mapGraphExceptionToUserMessage(UnknownHostException("Cannot reach graph.microsoft.com"))
+            // Call method on the instance
+            errorMapper.mapNetworkOrApiException(UnknownHostException("Cannot reach graph.microsoft.com"))
         )
     }
 
     @Test
-    fun `mapGraphException handles generic Exception with message`() {
+    fun `mapNetworkOrApiException handles generic Exception with message`() {
         assertEquals(
-            "Graph processing failed", // Expect the exception message
-            ErrorMapper.mapGraphExceptionToUserMessage(RuntimeException("Graph processing failed"))
+            "Graph processing failed",
+            // Call method on the instance
+            errorMapper.mapNetworkOrApiException(RuntimeException("Graph processing failed"))
         )
     }
 
     @Test
-    fun `mapGraphException handles generic Exception with blank message`() {
+    fun `mapNetworkOrApiException handles generic Exception with blank message`() {
         assertEquals(
-            "An unknown error occurred", // Expect fallback
-            ErrorMapper.mapGraphExceptionToUserMessage(RuntimeException(""))
+            "An unknown network or API error occurred",
+            // Call method on the instance
+            errorMapper.mapNetworkOrApiException(RuntimeException(""))
         )
     }
 
     @Test
-    fun `mapGraphException handles null exception`() {
-        assertEquals("An unknown error occurred", ErrorMapper.mapGraphExceptionToUserMessage(null))
+    fun `mapNetworkOrApiException handles CancellationException with message`() {
+        assertEquals(
+            "User cancelled",
+            // Call method on the instance
+            errorMapper.mapNetworkOrApiException(CancellationException("User cancelled"))
+        )
+    }
+
+    @Test
+    fun `mapNetworkOrApiException handles CancellationException with null message`() {
+        assertEquals(
+            "Operation cancelled.",
+            // Call method on the instance
+            errorMapper.mapNetworkOrApiException(CancellationException(null as String?))
+        )
+    }
+
+
+    @Test
+    fun `mapNetworkOrApiException handles null exception`() {
+        assertEquals(
+            "An unknown network or API error occurred",
+            // Call method on the instance
+            errorMapper.mapNetworkOrApiException(null)
+        )
     }
 }

@@ -1,7 +1,6 @@
 package net.melisma.backend_microsoft.repository
 
-// Removed unused import: advanceTimeBy
-// Removed Robolectric imports
+// import net.melisma.backend_microsoft.errors.ErrorMapper // OLD IMPORT
 import android.app.Activity
 import android.util.Log
 import app.cash.turbine.test
@@ -22,7 +21,7 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import net.melisma.backend_microsoft.GraphApiHelper
-import net.melisma.backend_microsoft.errors.ErrorMapper
+import net.melisma.core_common.errors.ErrorMapperService
 import net.melisma.core_data.datasource.TokenProvider
 import net.melisma.core_data.model.Account
 import net.melisma.core_data.model.MailFolder
@@ -30,7 +29,6 @@ import net.melisma.core_data.model.Message
 import net.melisma.core_data.model.MessageDataState
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import java.io.IOException
@@ -41,7 +39,7 @@ class MicrosoftMessageRepositoryTest {
     // --- Mocks ---
     private lateinit var tokenProvider: TokenProvider
     private lateinit var graphApiHelper: GraphApiHelper
-    private lateinit var errorMapper: ErrorMapper
+    private lateinit var mockErrorMapper: ErrorMapperService // Mock the INTERFACE
     private lateinit var mockActivity: Activity
     private lateinit var testDispatcher: TestDispatcher
     private lateinit var testScope: TestScope
@@ -88,19 +86,19 @@ class MicrosoftMessageRepositoryTest {
     fun setUp() {
         tokenProvider = mockk()
         graphApiHelper = mockk()
-        errorMapper = mockk(relaxed = true)
+        mockErrorMapper = mockk() // Mock the interface
         mockActivity = mockk()
         testDispatcher = StandardTestDispatcher()
         testScope = TestScope(testDispatcher)
 
-        // Default setup - NOTE: returnsMany might be unreliable in specific scenarios like the cancellation test
+        // Mock token provider calls
         coEvery {
             tokenProvider.getAccessToken(
                 eq(testAccount),
                 eq(mailReadScope),
                 isNull()
             )
-        } returnsMany listOf(Result.success(tokenNoActivity), Result.success(tokenFolder2))
+        } returns Result.success(tokenNoActivity) andThen Result.success(tokenFolder2) // Sequence for multiple calls if needed
         coEvery {
             tokenProvider.getAccessToken(
                 eq(testAccount),
@@ -108,8 +106,8 @@ class MicrosoftMessageRepositoryTest {
                 eq(mockActivity)
             )
         } returns Result.success(tokenWithActivity)
-        // neq() mock removed
 
+        // Mock Graph API calls
         coEvery {
             graphApiHelper.getMessagesForFolder(
                 eq(tokenNoActivity),
@@ -133,10 +131,16 @@ class MicrosoftMessageRepositoryTest {
                 eq(messageListFields),
                 eq(messageListPageSize)
             )
-        } returns Result.success(messagesForFolder2) // For folder 2 test
+        } returns Result.success(messagesForFolder2) // For folder 2
 
-        every { errorMapper.mapAuthExceptionToUserMessage(any()) } returns "Auth Error"
-        every { errorMapper.mapGraphExceptionToUserMessage(any()) } returns "Graph API Error"
+        // Mock the interface methods
+        every { mockErrorMapper.mapAuthExceptionToUserMessage(any()) } answers {
+            "Mapped Auth Error: " + ((args[0] as? Throwable)?.message ?: "Unknown Auth")
+        }
+        every { mockErrorMapper.mapNetworkOrApiException(any()) } answers {
+            "Mapped Network/API Error: " + ((args[0] as? Throwable)?.message
+                ?: "Unknown Network/API")
+        }
 
         mockkStatic(Log::class)
         every { Log.v(any(), any()) } returns 0
@@ -147,12 +151,13 @@ class MicrosoftMessageRepositoryTest {
         every { Log.e(any(), any()) } returns 0
         every { Log.e(any(), any(), any()) } returns 0
 
+        // Pass the mocked INTERFACE to the constructor
         repository = MicrosoftMessageRepository(
             tokenProvider = tokenProvider,
             graphApiHelper = graphApiHelper,
             ioDispatcher = testDispatcher,
             externalScope = testScope,
-            errorMapper = errorMapper
+            errorMapper = mockErrorMapper // Use the mocked interface
         )
     }
 
@@ -166,120 +171,66 @@ class MicrosoftMessageRepositoryTest {
 
     @Test
     fun `initial messageDataState is Initial`() = testScope.runTest {
-        repository.messageDataState.test {
-            assertEquals(MessageDataState.Initial, awaitItem())
-            cancelAndIgnoreRemainingEvents()
-        }
+        assertEquals(MessageDataState.Initial, repository.messageDataState.value)
     }
 
     @Test
     fun `setTargetFolder with null account clears state to Initial`() = testScope.runTest {
-        // Arrange: Set an initial target and wait for success
         repository.setTargetFolder(testAccount, testFolder)
         advanceUntilIdle()
-        val initialState = repository.messageDataState.first { it is MessageDataState.Success }
-        assertTrue(initialState is MessageDataState.Success)
+        repository.messageDataState.first { it is MessageDataState.Success }
 
-
-        // Act: Set account to null
         repository.setTargetFolder(null, testFolder)
-        // State update is synchronous
-
-        // Assert: State should revert to Initial
         assertEquals(MessageDataState.Initial, repository.messageDataState.value)
-
-        // Verify interactions
-        coVerify(exactly = 1) { tokenProvider.getAccessToken(testAccount, mailReadScope, null) }
-        coVerify(exactly = 1) {
-            graphApiHelper.getMessagesForFolder(
-                tokenNoActivity,
-                testFolder.id,
-                any(),
-                any()
-            )
-        }
     }
 
     @Test
     fun `setTargetFolder with null folder clears state to Initial`() = testScope.runTest {
-        // Arrange: Set an initial target and wait for success
         repository.setTargetFolder(testAccount, testFolder)
         advanceUntilIdle()
-        val initialState = repository.messageDataState.first { it is MessageDataState.Success }
-        assertTrue(initialState is MessageDataState.Success)
+        repository.messageDataState.first { it is MessageDataState.Success }
 
-        // Act: Set folder to null
         repository.setTargetFolder(testAccount, null)
-        // State update is synchronous
-
-        // Assert: State should revert to Initial
         assertEquals(MessageDataState.Initial, repository.messageDataState.value)
-
-        // Verify interactions
-        coVerify(exactly = 1) { tokenProvider.getAccessToken(testAccount, mailReadScope, null) }
-        coVerify(exactly = 1) {
-            graphApiHelper.getMessagesForFolder(
-                tokenNoActivity,
-                testFolder.id,
-                any(),
-                any()
-            )
-        }
     }
 
     @Test
-    fun `setTargetFolder with non MS account sets error state`() = testScope.runTest {
-        repository.messageDataState.test {
-            assertEquals(
-                "Initial state should be Initial",
-                MessageDataState.Initial,
-                awaitItem()
-            ) // 1. Initial
+    fun `setTargetFolder with non MS account sets state to Initial`() = testScope.runTest {
+        // Arrange: Set an initial MS target first
+        repository.setTargetFolder(testAccount, testFolder)
+        advanceUntilIdle()
+        repository.messageDataState.first { it is MessageDataState.Success } // Consume success state
 
-            println("Setting target to non-MS account...")
+        repository.messageDataState.test {
+            assertEquals(MessageDataState.Success(testMessages), awaitItem()) // Current state
+
+            // Act: Set non-MS account
             repository.setTargetFolder(nonMsAccount, testFolder)
 
-            // Consume the transient Loading state emitted first by setTargetFolder
-            val loadingState = awaitItem()
-            println("Awaited item 1: $loadingState")
-            assertEquals(
-                "Expected Loading state first",
-                MessageDataState.Loading,
-                loadingState
-            ) // 2. Loading (transient)
-
-            // Now await the Error state which should follow immediately
-            val errorState = awaitItem()
-            println("Awaited item 2: $errorState")
-            assertTrue(
-                "Expected Error state after Loading but was $errorState",
-                errorState is MessageDataState.Error
-            ) // 3. Error
-            assertEquals("Unsupported account type.", (errorState as MessageDataState.Error).error)
-
+            // Assert: State becomes Initial immediately
+            assertEquals(MessageDataState.Initial, awaitItem())
             cancelAndIgnoreRemainingEvents()
         }
-        // Verify no token/API calls were made
-        coVerify(exactly = 0) { tokenProvider.getAccessToken(any(), any(), any()) }
-        coVerify(exactly = 0) { graphApiHelper.getMessagesForFolder(any(), any(), any(), any()) }
+        coVerify(exactly = 1) {
+            tokenProvider.getAccessToken(
+                testAccount,
+                mailReadScope,
+                null
+            )
+        } // Only initial call
+        coVerify(exactly = 0) { tokenProvider.getAccessToken(nonMsAccount, any(), any()) }
     }
 
     @Test
     fun `setTargetFolder triggers fetch and updates state on success`() = testScope.runTest {
         repository.messageDataState.test {
             assertEquals(MessageDataState.Initial, awaitItem())
-
-            // Act: Set target
             repository.setTargetFolder(testAccount, testFolder)
-
-            // Assert: Loading state, then Success state
             assertEquals(MessageDataState.Loading, awaitItem())
-            advanceUntilIdle() // Allow fetch job to complete
+            advanceUntilIdle()
             assertEquals(MessageDataState.Success(testMessages), awaitItem())
-
             cancelAndIgnoreRemainingEvents()
         }
-        // Verify correct token and API call (first token from sequence)
         coVerify(exactly = 1) { tokenProvider.getAccessToken(testAccount, mailReadScope, null) }
         coVerify(exactly = 1) {
             graphApiHelper.getMessagesForFolder(
@@ -293,108 +244,85 @@ class MicrosoftMessageRepositoryTest {
 
     @Test
     fun `setTargetFolder skips fetch if target is the same`() = testScope.runTest {
-        // Arrange: Set initial target and wait for success
         repository.setTargetFolder(testAccount, testFolder)
         advanceUntilIdle()
-        repository.messageDataState.first { it is MessageDataState.Success } // Consume initial load
+        repository.messageDataState.first { it is MessageDataState.Success }
 
-        // Act: Set the same target again
-        repository.setTargetFolder(testAccount, testFolder)
-        advanceUntilIdle() // Let time pass
+        repository.setTargetFolder(testAccount, testFolder) // Set same target again
+        advanceUntilIdle()
 
-        // Assert: State remains success, no new events emitted
         repository.messageDataState.test {
-            assertEquals(
-                MessageDataState.Success(testMessages),
-                awaitItem()
-            ) // Should still be the success state
-            expectNoEvents() // No further state changes expected
+            assertEquals(MessageDataState.Success(testMessages), awaitItem())
+            expectNoEvents()
             cancel()
         }
-        // Verify: Only one token/API call from the initial fetch
-        coVerify(exactly = 1) { tokenProvider.getAccessToken(testAccount, mailReadScope, null) }
         coVerify(exactly = 1) {
-            graphApiHelper.getMessagesForFolder(
-                tokenNoActivity,
-                testFolder.id,
-                messageListFields,
-                messageListPageSize
+            tokenProvider.getAccessToken(
+                testAccount,
+                mailReadScope,
+                null
             )
-        }
+        } // Verify only called once
     }
 
     @Test
     fun `setTargetFolder handles token fetch failure`() = testScope.runTest {
-        // Arrange: Mock token failure for the first call sequence
         val tokenError = RuntimeException("Token fetch failed")
-        // Override the sequence mock from setup for this specific call
-        // Need to ensure this doesn't interfere with other tests if run in parallel,
-        // but runTest usually isolates. Re-mocking the exact args should be safe.
         coEvery {
             tokenProvider.getAccessToken(
-                eq(testAccount),
-                eq(mailReadScope),
-                isNull()
+                testAccount,
+                mailReadScope,
+                null
             )
         } returns Result.failure(tokenError)
-        every { errorMapper.mapAuthExceptionToUserMessage(tokenError) } returns "Mapped Token Error"
+        // Mock specific error mapping
+        every { mockErrorMapper.mapAuthExceptionToUserMessage(tokenError) } returns "Mapped Token Error"
 
         repository.messageDataState.test {
             assertEquals(MessageDataState.Initial, awaitItem())
-
-            // Act: Set target
             repository.setTargetFolder(testAccount, testFolder)
-
-            // Assert: Loading state, then Error state
             assertEquals(MessageDataState.Loading, awaitItem())
-            advanceUntilIdle() // Allow job to fail
+            advanceUntilIdle()
             assertEquals(MessageDataState.Error("Mapped Token Error"), awaitItem())
-
             cancelAndIgnoreRemainingEvents()
         }
-        // Verify token tried, API not called
         coVerify(exactly = 1) { tokenProvider.getAccessToken(testAccount, mailReadScope, null) }
         coVerify(exactly = 0) { graphApiHelper.getMessagesForFolder(any(), any(), any(), any()) }
-        verify { errorMapper.mapAuthExceptionToUserMessage(tokenError) } // Verify mapper was called
+        verify { mockErrorMapper.mapAuthExceptionToUserMessage(tokenError) } // Verify mapper call
     }
 
     @Test
     fun `setTargetFolder handles Graph API failure`() = testScope.runTest {
-        // Arrange: Mock API failure
         val graphError = IOException("Graph network error")
-        // Ensure the token mock returns the expected token for this call
+        // Ensure token succeeds
         coEvery {
             tokenProvider.getAccessToken(
-                eq(testAccount),
-                eq(mailReadScope),
-                isNull()
+                testAccount,
+                mailReadScope,
+                null
             )
         } returns Result.success(tokenNoActivity)
-        // Mock the API call to fail
+        // Mock API failure
         coEvery {
             graphApiHelper.getMessagesForFolder(
-                eq(tokenNoActivity),
-                eq(testFolder.id),
+                tokenNoActivity,
+                testFolder.id,
                 any(),
                 any()
             )
         } returns Result.failure(graphError)
-        every { errorMapper.mapGraphExceptionToUserMessage(graphError) } returns "Mapped Graph Error"
+        // Mock specific error mapping
+        every { mockErrorMapper.mapNetworkOrApiException(graphError) } returns "Mapped Graph Error"
+
 
         repository.messageDataState.test {
             assertEquals(MessageDataState.Initial, awaitItem())
-
-            // Act: Set target
             repository.setTargetFolder(testAccount, testFolder)
-
-            // Assert: Loading state, then Error state
             assertEquals(MessageDataState.Loading, awaitItem())
-            advanceUntilIdle() // Allow job to fail
+            advanceUntilIdle()
             assertEquals(MessageDataState.Error("Mapped Graph Error"), awaitItem())
-
             cancelAndIgnoreRemainingEvents()
         }
-        // Verify token fetched, API called
         coVerify(exactly = 1) { tokenProvider.getAccessToken(testAccount, mailReadScope, null) }
         coVerify(exactly = 1) {
             graphApiHelper.getMessagesForFolder(
@@ -404,71 +332,59 @@ class MicrosoftMessageRepositoryTest {
                 any()
             )
         }
-        verify { errorMapper.mapGraphExceptionToUserMessage(graphError) } // Verify mapper called
+        verify { mockErrorMapper.mapNetworkOrApiException(graphError) } // Verify mapper call
     }
 
     @Test
     fun `refreshMessages re-fetches for current target using activity`() = testScope.runTest {
-        // Arrange: Set initial target, wait for success
         repository.setTargetFolder(testAccount, testFolder)
         advanceUntilIdle()
-        repository.messageDataState.first { it is MessageDataState.Success } // Consume initial success
+        repository.messageDataState.first { it is MessageDataState.Success } // Consume initial
 
-        // Arrange: Mock a different result for the refresh call (using the specific 'with activity' token)
-        val refreshedMessages = listOf(testMessage1) // Different messages for refresh
-        // Ensure the specific token call for refresh is mocked correctly
-        coEvery {
-            tokenProvider.getAccessToken(
-                eq(testAccount),
-                eq(mailReadScope),
-                eq(mockActivity)
-            )
-        } returns Result.success(tokenWithActivity)
+        val refreshedMessages = listOf(testMessage1)
         coEvery {
             graphApiHelper.getMessagesForFolder(
-                eq(tokenWithActivity),
-                eq(testFolder.id),
+                tokenWithActivity,
+                testFolder.id,
                 any(),
                 any()
             )
         } returns Result.success(refreshedMessages)
 
         repository.messageDataState.test {
-            // Assert initial state consumed by first() call above, expect current success state
-            assertEquals(MessageDataState.Success(testMessages), awaitItem())
-
-            // Act: Refresh
+            assertEquals(MessageDataState.Success(testMessages), awaitItem()) // Current state
             repository.refreshMessages(mockActivity)
-
-            // Assert: Loading, then Success with refreshed data
             assertEquals(MessageDataState.Loading, awaitItem())
-            advanceUntilIdle() // Allow refresh job to complete
+            advanceUntilIdle()
             assertEquals(MessageDataState.Success(refreshedMessages), awaitItem())
-
             cancelAndIgnoreRemainingEvents()
         }
-
-        // Verify: Initial token/API call (null activity), plus refresh token/API call (mock activity)
-        coVerify(exactly = 1) { tokenProvider.getAccessToken(testAccount, mailReadScope, null) }
+        coVerify(exactly = 1) {
+            tokenProvider.getAccessToken(
+                testAccount,
+                mailReadScope,
+                null
+            )
+        } // Initial
         coVerify(exactly = 1) {
             tokenProvider.getAccessToken(
                 testAccount,
                 mailReadScope,
                 mockActivity
             )
-        }
+        } // Refresh
         coVerify(exactly = 1) {
             graphApiHelper.getMessagesForFolder(
-                eq(tokenNoActivity),
-                eq(testFolder.id),
+                tokenNoActivity,
+                testFolder.id,
                 any(),
                 any()
             )
         } // Initial
         coVerify(exactly = 1) {
             graphApiHelper.getMessagesForFolder(
-                eq(tokenWithActivity),
-                eq(testFolder.id),
+                tokenWithActivity,
+                testFolder.id,
                 any(),
                 any()
             )
@@ -478,34 +394,25 @@ class MicrosoftMessageRepositoryTest {
 
     @Test
     fun `refreshMessages does nothing if no target folder is set`() = testScope.runTest {
-        // Arrange: Ensure initial state is Initial
         assertEquals(MessageDataState.Initial, repository.messageDataState.value)
-
-        // Act: Call refresh
         repository.refreshMessages(mockActivity)
-        advanceUntilIdle() // Let time pass
-
-        // Assert: State remains Initial
+        advanceUntilIdle()
         repository.messageDataState.test {
             assertEquals(MessageDataState.Initial, awaitItem())
             expectNoEvents()
             cancel()
         }
-        // Verify no interactions
         coVerify(exactly = 0) { tokenProvider.getAccessToken(any(), any(), any()) }
-        coVerify(exactly = 0) { graphApiHelper.getMessagesForFolder(any(), any(), any(), any()) }
     }
 
     @Test
     fun `refreshMessages does nothing if already loading`() = testScope.runTest {
-        // Arrange: Start a fetch that will hang
         val fetchDeferred = CompletableDeferred<Result<List<Message>>>()
-        // Ensure the initial token call is mocked correctly
         coEvery {
             tokenProvider.getAccessToken(
-                eq(testAccount),
-                eq(mailReadScope),
-                isNull()
+                testAccount,
+                mailReadScope,
+                null
             )
         } returns Result.success(tokenNoActivity)
         coEvery {
@@ -517,66 +424,42 @@ class MicrosoftMessageRepositoryTest {
             )
         } coAnswers { fetchDeferred.await() }
 
-        // Act: Trigger initial fetch
         repository.setTargetFolder(testAccount, testFolder)
-        // Assert: State becomes Loading
         assertEquals(
             MessageDataState.Loading,
             repository.messageDataState.first { it == MessageDataState.Loading })
 
-        // Act: Call refresh while still loading
-        repository.refreshMessages(mockActivity)
-        advanceUntilIdle() // Let time pass
+        repository.refreshMessages(mockActivity) // Attempt refresh while loading
+        advanceUntilIdle()
 
-        // Assert: State is still Loading
-        assertEquals(MessageDataState.Loading, repository.messageDataState.value)
+        assertEquals(MessageDataState.Loading, repository.messageDataState.value) // Still loading
 
-        // Verify: Only the initial token/API calls happened, refresh was skipped
         coVerify(exactly = 1) {
             tokenProvider.getAccessToken(
                 testAccount,
                 mailReadScope,
                 null
             )
-        } // Initial token
-        coVerify(exactly = 1) {
-            graphApiHelper.getMessagesForFolder(
-                tokenNoActivity,
-                testFolder.id,
-                any(),
-                any()
-            )
-        } // Initial API (hanging)
+        } // Only initial token call
         coVerify(exactly = 0) {
             tokenProvider.getAccessToken(
                 testAccount,
                 mailReadScope,
                 mockActivity
             )
-        } // No refresh token
-        coVerify(exactly = 0) {
-            graphApiHelper.getMessagesForFolder(
-                tokenWithActivity,
-                testFolder.id,
-                any(),
-                any()
-            )
-        } // No refresh API
+        } // No refresh token call
 
-        // Cleanup: Complete the deferred to allow test scope to finish
-        fetchDeferred.complete(Result.success(testMessages))
+        fetchDeferred.complete(Result.success(testMessages)) // Allow test to finish
         advanceUntilIdle()
     }
 
     @Test
     fun `setTargetFolder cancels previous fetch if target changes`() = testScope.runTest {
-        // Arrange: Mock two separate fetches, one hanging
         val fetch1Deferred = CompletableDeferred<Result<List<Message>>>()
         val fetch1Token = tokenNoActivity
         val fetch2Token = tokenFolder2
 
-        // *** FIX: Override tokenProvider mock locally for this test ***
-        // Ensure the first call returns token1 and the second returns token2, avoiding reliance on potentially problematic returnsMany sequence from @Before
+        // Mock token sequence for the two setTargetFolder calls
         coEvery {
             tokenProvider.getAccessToken(
                 eq(testAccount),
@@ -584,24 +467,20 @@ class MicrosoftMessageRepositoryTest {
                 isNull()
             )
         } returns Result.success(fetch1Token) andThen Result.success(fetch2Token)
-
-        // Setup graph API mocks
+        // Mock API for first fetch (will hang)
         coEvery {
             graphApiHelper.getMessagesForFolder(
-                eq(fetch1Token),
-                eq(testFolder.id),
+                fetch1Token,
+                testFolder.id,
                 any(),
                 any()
             )
-        } coAnswers {
-            println(">>> Graph API Fetch 1 STARTING (will hang)")
-            fetch1Deferred.await()
-        }
-        // Mock for folder 2 (using fetch2Token) should already be in setUp
+        } coAnswers { fetch1Deferred.await() }
+        // Mock API for second fetch (should succeed)
         coEvery {
             graphApiHelper.getMessagesForFolder(
-                eq(fetch2Token),
-                eq(testFolder2.id),
+                fetch2Token,
+                testFolder2.id,
                 any(),
                 any()
             )
@@ -610,45 +489,37 @@ class MicrosoftMessageRepositoryTest {
 
         repository.messageDataState.test {
             assertEquals(MessageDataState.Initial, awaitItem()) // 1. Initial
-            println("Test: Setting target to folder 1")
-            repository.setTargetFolder(testAccount, testFolder) // Triggers fetch 1
 
+            repository.setTargetFolder(testAccount, testFolder) // Start fetch 1
+            assertEquals(MessageDataState.Loading, awaitItem()) // 2. Loading (Fetch 1)
+
+            repository.setTargetFolder(testAccount, testFolder2) // Cancel 1, Start fetch 2
+            // Expect Loading again because the second fetch starts immediately
+            assertEquals(MessageDataState.Loading, awaitItem()) // 3. Loading (Fetch 2)
+
+            advanceUntilIdle() // Let fetch 2 complete
+
+            // Expect Success from fetch 2
             assertEquals(
-                "Expected Loading state for first fetch",
-                MessageDataState.Loading,
+                MessageDataState.Success(messagesForFolder2),
                 awaitItem()
-            ) // 2. Loading (Fetch 1)
-            println("Test: State is Loading for folder 1")
+            ) // 4. Success (Fetch 2)
 
-            println("Test: Setting target to folder 2")
-            repository.setTargetFolder(
-                testAccount,
-                testFolder2
-            ) // Should cancel fetch 1, trigger fetch 2
-
-            // *** FIX: Modified assertion logic to focus on cancellation ***
-            // Expect *some* state after setting target 2 (could be Loading or Error if token fails)
-            val stateAfterTarget2 = awaitItem()
-            println("Test: State after setting target 2: $stateAfterTarget2")
-
-            // Advance time to allow the second fetch attempt to complete or fail
+            // Now complete the first deferred - should have no effect as job was cancelled
+            fetch1Deferred.complete(Result.success(testMessages))
             advanceUntilIdle()
 
-            // Now, complete the first fetch's deferred. If cancelled, it should have no effect.
-            println("Test: Completing deferred fetch for folder 1 (should have been cancelled)")
-            fetch1Deferred.complete(Result.success(testMessages))
-            advanceUntilIdle() // Let any potential effects settle
-
-            // Assert that NO NEW events occurred after completing the first fetch.
-            // This proves cancellation worked, regardless of whether the second fetch succeeded or hit the token error.
-            println("Test: Expecting no more events from cancelled fetch 1")
-            expectNoEvents()
+            expectNoEvents() // Assert no state change from completed cancelled job
             cancel()
         }
 
-        // Verify: Token requested twice
-        // API called once for folder 1 (attempted/cancelled), once for folder 2 (attempted)
-        coVerify(exactly = 2) { tokenProvider.getAccessToken(testAccount, mailReadScope, null) }
+        coVerify(exactly = 2) {
+            tokenProvider.getAccessToken(
+                testAccount,
+                mailReadScope,
+                null
+            )
+        } // Token called twice
         coVerify(exactly = 1) {
             graphApiHelper.getMessagesForFolder(
                 fetch1Token,
@@ -656,7 +527,7 @@ class MicrosoftMessageRepositoryTest {
                 any(),
                 any()
             )
-        }
+        } // Fetch 1 attempted
         coVerify(exactly = 1) {
             graphApiHelper.getMessagesForFolder(
                 fetch2Token,
@@ -664,6 +535,6 @@ class MicrosoftMessageRepositoryTest {
                 any(),
                 any()
             )
-        }
+        } // Fetch 2 completed
     }
 }

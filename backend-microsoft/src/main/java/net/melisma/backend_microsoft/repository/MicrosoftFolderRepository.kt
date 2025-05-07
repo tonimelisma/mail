@@ -1,4 +1,4 @@
-package net.melisma.backend_microsoft.repository
+package net.melisma.backend_microsoft.repository // Still in this package for now
 
 import android.app.Activity
 import android.util.Log
@@ -14,7 +14,8 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import net.melisma.backend_microsoft.GraphApiHelper
-import net.melisma.backend_microsoft.errors.ErrorMapper
+// import net.melisma.backend_microsoft.errors.ErrorMapper // OLD IMPORT
+import net.melisma.core_common.errors.ErrorMapperService // NEW INTERFACE IMPORT
 import net.melisma.core_data.datasource.TokenProvider
 import net.melisma.core_data.di.ApplicationScope
 import net.melisma.core_data.di.Dispatcher
@@ -31,16 +32,15 @@ import kotlin.coroutines.cancellation.CancellationException
  * Microsoft implementation of the [FolderRepository] interface.
  * Fetches mail folders for Microsoft accounts using the Microsoft Graph API.
  * Manages fetching state per account and handles token acquisition.
+ * NOTE: This class will be moved to the :data module in Step 1.4.
  */
 @Singleton
 class MicrosoftFolderRepository @Inject constructor(
-    private val tokenProvider: TokenProvider,
-    private val graphApiHelper: GraphApiHelper,
-    // Use the qualifier imported from core-data
-    @Dispatcher(MailDispatchers.IO) private val ioDispatcher: CoroutineDispatcher,
-    // Use the qualifier imported from core-data
-    @ApplicationScope private val externalScope: CoroutineScope,
-    private val errorMapper: ErrorMapper
+    private val tokenProvider: TokenProvider, // Inject interface
+    private val graphApiHelper: GraphApiHelper, // Inject helper
+    @Dispatcher(MailDispatchers.IO) private val ioDispatcher: CoroutineDispatcher, // Inject dispatcher
+    @ApplicationScope private val externalScope: CoroutineScope, // Inject scope
+    private val errorMapper: ErrorMapperService // <-- INJECT THE INTERFACE
 ) : FolderRepository {
 
     private val TAG = "MsFolderRepository"
@@ -146,8 +146,9 @@ class MicrosoftFolderRepository @Inject constructor(
                         )
                         FolderFetchState.Success(folders)
                     } else {
+                        // Use injected interface instance
                         val errorMsg =
-                            errorMapper.mapGraphExceptionToUserMessage(foldersResult.exceptionOrNull())
+                            errorMapper.mapNetworkOrApiException(foldersResult.exceptionOrNull())
                         Log.e(
                             TAG,
                             "Failed to fetch folders for ${account.username}: $errorMsg",
@@ -165,6 +166,7 @@ class MicrosoftFolderRepository @Inject constructor(
                     }
 
                 } else { // Token failure
+                    // Use injected interface instance
                     val errorMsg =
                         errorMapper.mapAuthExceptionToUserMessage(tokenResult.exceptionOrNull())
                     Log.e(
@@ -185,13 +187,21 @@ class MicrosoftFolderRepository @Inject constructor(
 
             } catch (e: CancellationException) {
                 Log.w(TAG, "Folder fetch job for ${account.username} cancelled.", e)
+                // Optionally reset state if cancelled during loading
                 if (observedAccounts.containsKey(accountId) && _folderStates.value[accountId] is FolderFetchState.Loading) {
-                    _folderStates.update { it - accountId }
+                    _folderStates.update { currentMap ->
+                        if (currentMap[accountId] is FolderFetchState.Loading) {
+                            currentMap - accountId // Remove loading state on cancel
+                        } else {
+                            currentMap // Keep success/error state if already set
+                        }
+                    }
                 }
-                throw e
+                throw e // Re-throw cancellation
             } catch (e: Exception) {
                 Log.e(TAG, "Exception during folder fetch for ${account.username}", e)
                 ensureActive()
+                // Use injected interface instance
                 val errorMsg = errorMapper.mapAuthExceptionToUserMessage(e)
                 if (observedAccounts.containsKey(accountId)) {
                     _folderStates.update { it + (accountId to FolderFetchState.Error(errorMsg)) }
@@ -202,6 +212,7 @@ class MicrosoftFolderRepository @Inject constructor(
                     )
                 }
             } finally {
+                // Clean up job reference if this is the job completing
                 if (folderFetchJobs[accountId] == coroutineContext[Job]) {
                     folderFetchJobs.remove(accountId)
                 }
@@ -209,10 +220,12 @@ class MicrosoftFolderRepository @Inject constructor(
         }
         folderFetchJobs[accountId] = job
 
+        // Optional: Handle unhandled job failures
         job.invokeOnCompletion { cause ->
             if (cause != null && cause !is CancellationException && externalScope.isActive) {
                 Log.e(TAG, "Unhandled error in folder fetch job for $accountId", cause)
                 if (observedAccounts.containsKey(accountId) && _folderStates.value[accountId] !is FolderFetchState.Error) {
+                    // Use injected interface instance
                     val errorMsg = errorMapper.mapAuthExceptionToUserMessage(cause)
                     _folderStates.update { it + (accountId to FolderFetchState.Error(errorMsg)) }
                 }
@@ -223,7 +236,8 @@ class MicrosoftFolderRepository @Inject constructor(
     private fun cancelAndRemoveJob(accountId: String) {
         folderFetchJobs.remove(accountId)?.apply {
             if (isActive) {
-                cancel(CancellationException("Job cancelled for account $accountId"))
+                // Provide a more specific cancellation message
+                cancel(CancellationException("Job cancelled for account $accountId due to removal or refresh."))
                 Log.d(TAG, "Cancelled active job for account $accountId")
             }
         }

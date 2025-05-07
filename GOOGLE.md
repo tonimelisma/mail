@@ -1,149 +1,507 @@
-# Plan: Implementing Gmail Backend Support
+# **Refactoring and Google Backend Integration Plan**
 
-This plan details adding Gmail support alongside the existing Microsoft backend, focusing on consistency, modularity, and testability.
+This plan details the steps to refactor the existing codebase for better modularity and networking,
+followed by the implementation of Google account support using Gmail APIs.  
+**Assumptions:**
 
-## Phase 0: Setup & Configuration
+* Ktor with OkHttp engine will be used for networking.
+* kotlinx.serialization will be used for JSON parsing.
+* A new :data module will be created to house default repository implementations managing multiple
+  providers.
+* A new :core-common module will be created for shared utilities like ErrorMapper.
+* No server-side backend exists; all operations are within the Android app.
+* Offline access for Google accounts is not required initially.
+* User has access to the Google Cloud Console and the Android project's signing keys (for SHA-1).
 
-1.  **Google Cloud Console Setup:**
-    * Create/use a Google Cloud project.
-    * Enable **Gmail API** and **Google People API**.
-    * Create **OAuth 2.0 Client ID** for **Android**:
-        * Provide package name and SHA-1 fingerprint(s).
-        * Download the resulting `google-services.json` file.
-    * Configure the **OAuth consent screen** (app name, logo, scopes).
-        * **Required Scopes:** Start with `https://www.googleapis.com/auth/userinfo.email`, `https://www.googleapis.com/auth/userinfo.profile`, `openid` for sign-in, and add `https://www.googleapis.com/auth/gmail.readonly` for reading mail. Add more (like `gmail.modify`, `gmail.labels`) as needed for future features.
+## **Phase 1: Core Refactoring**
 
-2.  **Project Setup:**
-    * Place `google-services.json` into the `:app` module directory (`app/`).
-    * Add/verify the Google Services Gradle plugin (`com.google.gms.google-services`) in project-level and app-level build files.
-    * **Choose Networking Library:** Decide between **Retrofit** or **Ktor**. Add its dependencies, along with a JSON converter (e.g., `kotlinx.serialization`, `moshi`, `gson`).
-    * Add Google library dependencies:
-        * `com.google.android.gms:play-services-auth:<version>` (Google Sign-In)
-        * `com.google.api-client:google-api-client-android:<version>` (Optional, base client)
-        * `com.google.apis:google-api-services-gmail:v1-rev<...>-<version>` (Generated Gmail library - useful DTOs, or define your own with Retrofit/Ktor)
-        * `androidx.activity:activity-ktx:<version>` (For `ActivityResultLauncher`)
+*(Steps 1.1 \- 1.4 focus on improving the existing structure before adding new features)*
 
-3.  **Create New Modules:**
-    * `backend-google`: New Android Library module for Google-specific implementations (AuthManager, ApiHelper, TokenProvider). Depends on `:core-data`.
-    * `data`: New Kotlin/Java Library module. This module will contain the *default* implementations of the repository interfaces (`AccountRepository`, `FolderRepository`, `MessageRepository`). It will depend on `:core-data`, `:backend-microsoft`, and `:backend-google`.
+### **Step 1.1: Centralize Error Mapping**
 
-4.  **Update Dependencies:**
-    * `:app` module should depend on `:data`.
-    * Remove direct dependency from `:app` to `:backend-microsoft` if it exists (DI will handle providing implementations via `:data`).
+* **Goal:** Move ErrorMapper to a shared, backend-agnostic module.
+* **Actions:**
+    1. Create a new Gradle module named :core-common. This module will hold utilities shared across
+       different layers or backends but not specific to core data models/interfaces.
+    2. Configure settings.gradle.kts to include :core-common.
+    3. Configure core-common/build.gradle.kts as a basic Kotlin/Android library (similar setup to :
+       core-data, likely without Android-specific dependencies unless needed later). Add dependency
+       on kotlin-stdlib.
+    4. Move ErrorMapper.kt from net.melisma.backend\_microsoft.errors to a package within :
+       core-common (e.g., net.melisma.core\_common.errors). Update the package declaration inside
+       ErrorMapper.kt.
+    5. Add implementation(project(":core-common")) dependency to backend-microsoft/build.gradle.kts.
+    6. Update the import statements for ErrorMapper in MicrosoftAccountRepository.kt,
+       MicrosoftFolderRepository.kt, and MicrosoftMessageRepository.kt (Note: These files will be
+       moved to :data in Step 1.4, so ensure imports are correct there).
+* **Verification:** Build the project successfully. Run the app and test Microsoft account error
+  scenarios (e.g., turn off network during folder load) to ensure errors are still mapped and
+  displayed correctly.
 
-## Phase 1: Google Authentication & Core Data Integration
+### **Step 1.2: Refactor Networking to Ktor (backend-microsoft)**
 
-1.  **Step 1.1: Google Auth Manager (`:backend-google`)**
-    * Create `GoogleAuthManager` in `:backend-google:auth`.
-    * Inject `@ApplicationContext`.
-    * **Internal Logic:** Use `GoogleSignIn.getClient()` configured with necessary scopes (email, profile, *and initial Gmail scopes*).
-    * **Public API:**
-        * `signIn(activity: Activity, launcher: ActivityResultLauncher<Intent>)`: Launches the Google Sign-In intent via the launcher.
-        * `handleSignInResult(data: Intent?, onSuccess: (Account) -> Unit, onError: (Exception) -> Unit)`: Parses the result, fetches necessary profile info, maps `GoogleSignInAccount` to your generic `Account` (with `providerType = "GOOGLE"`), and calls callbacks.
-        * `signOut(account: Account, onComplete: () -> Unit)`: Signs out the specific Google account using `GoogleSignInClient.signOut()`.
-        * `getSignedInAccounts(): List<Account>`: Returns currently signed-in Google accounts mapped to your `Account` model. (Needs mechanism to store/retrieve signed-in state reliably).
-        * `requestScopesIfNeeded(activity: Activity, account: Account, scopes: List<String>, ...) `: Handles incremental authorization if needed later.
-    * **Testable:** Unit test `GoogleAuthManager`. Mock `GoogleSignInClient` interactions. Add a temporary debug button in `:app` to trigger `signIn` and `signOut` via a temporary instance or injected dependency. Log success/failure and the resulting `Account` object.
+* **Goal:** Replace the HttpsURLConnection-based networking in GraphApiHelper with Ktor, aligning
+  with the chosen stack.
+* **Actions:**
+    1. **Dependencies:** Add Ktor & Serialization dependencies to gradle/libs.versions.toml (if not
+       already present from previous plans):  
+       \[versions\]  
+       \# ... existing versions  
+       ktor \= "2.3.12" \# Use the latest stable Ktor 2.x version  
+       kotlinxSerialization \= "1.6.3" \# Use latest stable serialization version
 
-2.  **Step 1.2: Default Account Repository (`:data`)**
-    * Create `DefaultAccountRepository` implementing `AccountRepository` from `:core-data`.
-    * Inject `MicrosoftAuthManager` (from `:backend-microsoft`) and `GoogleAuthManager` (from `:backend-google`).
-    * Inject `ErrorMapper`.
-    * Inject `@ApplicationScope CoroutineScope`.
-    * **`accounts` Flow:** Combine results from `microsoftAuthManager.accounts` (via its listener or state) and `googleAuthManager.getSignedInAccounts()` into a single `StateFlow<List<Account>>`.
-    * **`authState` Flow:** Determine overall state. Could be `Initializing` until both managers report status, `Initialized` if at least one is ready, `Error` if a critical one fails. *Decision:* Keep it simple: `Initialized` means the repository is ready to be called, even if managers are still initializing internally or have no accounts. Propagate critical init errors.
-    * **`addAccount(activity, scopes)`:** This needs a way to know which provider.
-        * *Modify UI:* Add distinct "Add Microsoft Account" and "Add Google Account" buttons in the Settings screen.
-        * *Modify Method:* Pass a `providerType: String` hint to `addAccount`, or create `addMicrosoftAccount`/`addGoogleAccount`. Let's assume the UI triggers specific actions. The repository calls the appropriate manager (`microsoftAuthManager.addAccount` or `googleAuthManager.signIn`).
-    * **`removeAccount(account)`:** Check `account.providerType` and delegate to `microsoftAuthManager.removeAccount` or `googleAuthManager.signOut`.
-    * **Other Flows (`isLoadingAccountAction`, `accountActionMessage`):** Manage these based on actions delegated to the auth managers.
-    * **DI Change:**
-        * In `:data`'s Hilt module (e.g., `DataModule.kt`), bind `AccountRepository` to `DefaultAccountRepository`.
-        * Ensure `MicrosoftAuthManager` and `GoogleAuthManager` are provided by their respective backend modules (`BackendMicrosoftModule`, `BackendGoogleModule`) and available for injection into `DefaultAccountRepository`.
-    * **Testable:** Run the app. Navigate to Settings -> Manage Accounts. Verify both "Add Microsoft" and "Add Google" buttons work. Verify accounts of both types appear in the UI (drawer, settings) after adding. Verify removing works for both. Check `MainViewModel` correctly receives the combined account list.
+       \[libraries\]  
+       \# ... existing libraries  
+       ktor-client-core \= { module \= "io.ktor:ktor-client-core", version.ref \= "ktor" }  
+       ktor-client-okhttp \= { module \= "io.ktor:ktor-client-okhttp", version.ref \= "ktor" }  
+       ktor-client-contentnegotiation \= { module \= "io.ktor:ktor-client-content-negotiation",
+       version.ref \= "ktor" }  
+       ktor-serialization-kotlinx-json \= { module \= "io.ktor:ktor-serialization-kotlinx-json",
+       version.ref \= "ktor" }  
+       kotlinx-serialization-json \= { group \= "org.jetbrains.kotlinx", name \= "
+       kotlinx-serialization-json", version.ref \= "kotlinxSerialization" }
 
-3.  **Step 1.3: Google Token Provider (`:backend-google`)**
-    * Create `GoogleTokenProvider` implementing `TokenProvider` from `:core-data`.
-    * Inject `@ApplicationContext`.
-    * **`getAccessToken(account, scopes, activity)`:**
-        * Verify `account.providerType == "GOOGLE"`.
-        * Use `GoogleSignIn.getLastSignedInAccount` or find the specific `GoogleSignInAccount`.
-        * **Crucially:** Use `GoogleAuthUtil.getToken` or potentially `account.serverAuthCode` (if using offline access flow) to get the OAuth **access token** for the requested *Gmail API scopes*. This often requires background execution.
-        * Handle `GoogleAuthException` (especially `UserRecoverableAuthException` needing `activity.startActivityForResult`) and `IOException`.
-        * Wrap results in `Result<String>`.
-    * **DI Change:** In `BackendGoogleModule`, provide `GoogleTokenProvider`.
-    * **Testable:** Unit test `GoogleTokenProvider`. Mock `GoogleSignIn` and `GoogleAuthUtil` calls. Verify correct token requests and error handling.
+    2. **Apply Dependencies:** Add the following to backend-microsoft/build.gradle.kts dependencies
+       block:  
+       implementation(libs.ktor.client.core)  
+       implementation(libs.ktor.client.okhttp)  
+       implementation(libs.ktor.client.contentnegotiation)  
+       implementation(libs.ktor.serialization.kotlinx.json)  
+       implementation(libs.kotlinx.serialization.json) // Core serialization runtime
 
-## Phase 2: Gmail API Integration & Networking
+    3. **Provide HttpClient:** Create a Hilt module in :backend-microsoft (e.g., NetworkModule.kt)
+       to provide a singleton Ktor HttpClient:  
+       package net.melisma.backend\_microsoft.di // Or appropriate package
 
-4.  **Step 2.1: Refactor Networking & Create API Helpers**
-    * **Refactor `GraphApiHelper` (`:backend-microsoft`):**
-        * Modify it to use the chosen networking library (Retrofit/Ktor) instead of `HttpsURLConnection`.
-        * Define API interfaces (e.g., `MicrosoftGraphApiService`) with Retrofit/Ktor annotations.
-        * Inject the configured networking client (provided via Hilt).
-        * Inject `MicrosoftTokenProvider` (or a generic `TokenProvider` map/set). The helper needs the token *before* making the call. *Correction:* An Authenticator/Interceptor in the HTTP client is better for handling tokens.
-    * **Create `GmailApiHelper` (`:backend-google`):**
-        * Implement using the *same* networking library (Retrofit/Ktor).
-        * Define API interfaces (e.g., `GmailApiService`) for endpoints (`labels.list`, `labels.get`, `messages.list`, `messages.get`).
-        * Inject the configured networking client.
-    * **Configure HTTP Client (via Hilt Module, e.g., in `:data` or `:app`):**
-        * Provide a singleton instance of the Retrofit/Ktor client.
-        * Add an **Interceptor/Authenticator** that:
-            * Intercepts outgoing requests.
-            * Determines the required provider type (perhaps based on URL or a request tag). *This is tricky.* A simpler way might be for the `ApiHelper` to request the token first and pass it to the API call function, avoiding complex interceptors for now. *Decision:* Keep it simple: `ApiHelper` gets token from `TokenProvider` first, then makes the call with the token.
-            * Handles adding the `Authorization: Bearer <token>` header.
-            * (Optional Advanced) Handles 401 responses by attempting silent token refresh using the appropriate `TokenProvider` and retrying the request.
-    * **DI Change:** Provide the networking client, `GraphApiHelper`, and `GmailApiHelper` via Hilt modules.
-    * **Testable:** Unit test both `GraphApiHelper` (post-refactor) and `GmailApiHelper`. Mock API responses. Verify parsing. Test the temporary debug screen (from Step 1.3) now uses `GmailApiHelper` to fetch labels after getting a token. Ensure Microsoft functionality still works with the refactored `GraphApiHelper`.
+       import dagger.Module  
+       import dagger.Provides  
+       import dagger.hilt.InstallIn  
+       import dagger.hilt.components.SingletonComponent  
+       import io.ktor.client.\*  
+       import io.ktor.client.engine.okhttp.\*  
+       import io.ktor.client.plugins.contentnegotiation.\*  
+       import io.ktor.client.plugins.logging.\* // Optional: for logging requests/responses  
+       import io.ktor.serialization.kotlinx.json.\*  
+       import kotlinx.serialization.json.Json  
+       import java.util.concurrent.TimeUnit // For OkHttp timeouts if needed  
+       import javax.inject.Singleton
 
-5.  **Step 2.2: Default Folder Repository (`:data`)**
-    * Create `DefaultFolderRepository` implementing `FolderRepository` from `:core-data`.
-    * Inject `GraphApiHelper` and `GmailApiHelper`.
-    * Inject `Map<String, @JvmSuppressWildcards TokenProvider>` using Hilt Map Multibindings (key="MS", "GOOGLE").
-    * Inject `ErrorMapper`.
-    * Inject `@ApplicationScope CoroutineScope` and `@Dispatcher(IO)`.
-    * **`observeFoldersState()`:** Returns the combined state flow `_folderStates`.
-    * **`manageObservedAccounts(accounts)`:**
-        * Iterate through accounts. Cancel jobs for removed accounts.
-        * For new/existing accounts, check `providerType`.
-        * If "MS", launch a job using the "MS" `TokenProvider` and `GraphApiHelper.getMailFolders`.
-        * If "GOOGLE", launch a job using the "GOOGLE" `TokenProvider` and `GmailApiHelper.getLabels` (and maybe `labels.get` for counts). Map labels to `MailFolder`.
-        * Update the `_folderStates: MutableStateFlow<Map<String, FolderFetchState>>` accordingly (handle Loading, Success, Error states per account ID). Use the injected `ErrorMapper`.
-    * **`refreshAllFolders(activity)`:** Iterate tracked accounts, find the correct `TokenProvider` and `ApiHelper` based on `providerType`, and launch refresh jobs (passing `activity` for potential interactive token needs).
-    * **DI Change:**
-        * In `DataModule`, bind `FolderRepository` to `DefaultFolderRepository`.
-        * Use Hilt Map Multibindings in `BackendMicrosoftModule` and `BackendGoogleModule` to provide their respective `TokenProvider` implementations into the `Map<String, TokenProvider>` injected into `DefaultFolderRepository`.
-        * Ensure `GraphApiHelper` and `GmailApiHelper` are provided.
-    * **Testable:** Run app. Sign in with MS and Google. Open drawer. Verify folders/labels appear correctly under each account. Test pull-to-refresh in the (not yet implemented) folder list UI or log state changes. Verify loading/error states per account.
+       @Module  
+       @InstallIn(SingletonComponent::class)  
+       object NetworkModule {
 
-6.  **Step 2.3: Default Message Repository (`:data`)**
-    * Create `DefaultMessageRepository` implementing `MessageRepository` from `:core-data`.
-    * Inject dependencies similarly to `DefaultFolderRepository` (ApiHelpers, TokenProvider Map, ErrorMapper, Scope, Dispatcher).
-    * **`messageDataState`:** The `StateFlow<MessageDataState>` representing the state for the *currently selected* folder.
-    * **`setTargetFolder(account, folder)`:**
-        * Store `currentTargetAccount` and `currentTargetFolder`. Cancel previous fetch job.
-        * If `account` is null, set state to `Initial`.
-        * Check `account.providerType`.
-        * If "MS", launch fetch job using "MS" `TokenProvider` and `GraphApiHelper.getMessagesForFolder`.
-        * If "GOOGLE", launch fetch job using "GOOGLE" `TokenProvider` and `GmailApiHelper.getMessagesList/getMessage`. Map results to `List<Message>`.
-        * Update `_messageDataState` (Loading, Success, Error). Use `ErrorMapper`.
-    * **`refreshMessages(activity)`:** Check `currentTargetAccount.providerType`, get correct `TokenProvider` and `ApiHelper`, pass `activity`, and launch refresh job, updating `_messageDataState`.
-    * **DI Change:** In `DataModule`, bind `MessageRepository` to `DefaultMessageRepository`. Ensure dependencies (TokenProvider Map, ApiHelpers) are provided.
-    * **Testable:** Run app. Sign in with MS and Google. Select MS folder -> verify messages. Select Google label -> verify messages. Test refresh for both. Verify loading/error UI states driven by `messageDataState`.
+           @Provides  
+           @Singleton  
+           fun provideJson(): Json \= Json {  
+               prettyPrint \= true // Good for debugging  
+               isLenient \= true  
+               ignoreUnknownKeys \= true // Essential for API stability  
+           }
 
-## Phase 3: Refinement & Cleanup
+           @Provides  
+           @Singleton  
+           fun provideKtorHttpClient(json: Json): HttpClient {  
+               return HttpClient(OkHttp) {  
+                   // Engine configuration (OkHttp specific)  
+                   engine {  
+                       config {  
+                           connectTimeout(30, TimeUnit.SECONDS)  
+                           readTimeout(30, TimeUnit.SECONDS)  
+                           // Configure retries, interceptors etc. if needed  
+                       }  
+                   }
 
-7.  **Step 3.1: Error Handling & Mapping**
-    * Enhance `ErrorMapper` (likely move to `:data` or `:core-common` if it needs broader scope) to handle Google-specific errors (`GoogleAuthException`, Gmail API errors) alongside MSAL/Graph errors. Ensure it's used consistently in default repositories and auth managers.
-    * **Testable:** Test error scenarios (network off, invalid credentials/token revoked via provider settings) for both account types. Verify appropriate error messages in the UI.
+                   // JSON Serialization  
+                   install(ContentNegotiation) {  
+                       json(json) // Use the provided Json instance  
+                   }
 
-8.  **Step 3.2: UI Consistency & Polish**
-    * Review `MainActivity`, `MainViewModel`, `MailDrawerContent`, `SettingsScreen`.
-    * Ensure clear visual separation or indication of account types if desired.
-    * Confirm all interactions (selecting folders, viewing messages, adding/removing accounts) work smoothly regardless of provider type.
-    * Address any UI adjustments needed for Gmail's label concept vs. Microsoft's folders if behaviors differ significantly (e.g., messages having multiple labels).
+                   // Optional: Logging  
+                   install(Logging) {  
+                       logger \= Logger.DEFAULT // Or use a custom logger  
+                       level \= LogLevel.BODY // Log request/response bodies (use INFO for less detail)  
+                   }
 
-9.  **Step 3.3: Code Cleanup & Final Testing**
-    * Remove temporary debug code, buttons, logs.
-    * Refactor common mapping logic (e.g., ProviderAccount -> Core `Account`) into helper functions/extensions if duplicated.
-    * Perform end-to-end testing covering all core features for both Microsoft and Google accounts.
+                   // Optional: Default request parameters  
+                   // install(DefaultRequest) { header(HttpHeaders.ContentType, ContentType.Application.Json) }  
+               }  
+           }  
+       }
+
+    4. **Refactor GraphApiHelper.kt:**
+        * Inject the HttpClient provided by Hilt: class GraphApiHelper @Inject constructor(private
+          val httpClient: HttpClient)
+        * Define Kotlin data classes marked with @Serializable within backend-microsoft (e.g., in a
+          model or dto sub-package) to represent the structure of Graph API JSON responses (e.g.,
+          for /me/mailFolders, /me/mailFolders/{id}/messages). Ensure property names match the JSON
+          keys or use @SerialName.
+        * Rewrite getMailFolders and getMessagesForFolder methods:
+            * Use httpClient.get with a URL builder/string for the endpoint.
+            * Add the Authorization: Bearer $accessToken header using bearerAuth(accessToken).
+            * Use response.body\<YourSerializableDataClass\>() within a try-catch block to get the
+              parsed response.
+            * Map the received DTO data class to your :core-data model (MailFolder, Message).
+            * Update error handling: Catch Ktor exceptions like ClientRequestException,
+              ServerResponseException, RedirectResponseException, SerializationException, as well as
+              general IOException, etc. Use the (moved) ErrorMapper to convert these into
+              user-friendly messages. mapGraphExceptionToUserMessage in ErrorMapper will need
+              updating to recognize Ktor exceptions.
+* **Verification:** Run the app. Sign in with Microsoft. Verify folders and messages load correctly
+  via Ktor (check logs for Ktor output if logging is enabled). Test network error scenarios.
+
+### **Step 1.3: (Optional but Recommended) Refactor MicrosoftTokenProvider**
+
+* **Goal:** Improve testability and align MicrosoftTokenProvider with modern coroutine flow
+  patterns.
+* **Actions:**
+    1. Modify MicrosoftAuthManager (implementation assumed) to expose its asynchronous auth
+       results (AcquireTokenResult) using kotlinx.coroutines.flow.callbackFlow instead of simple
+       callbacks.
+    2. Update MicrosoftTokenProvider.kt to collect results from these flows instead of using
+       CompletableDeferred.
+* **Verification:** Run the app. Verify Microsoft sign-in and subsequent authenticated actions (
+  loading folders/messages which require tokens) still work seamlessly.
+
+### **Step 1.4: Implement :data Module and Default Repositories**
+
+* **Goal:** Centralize repository implementations to prepare for handling multiple backends (
+  Microsoft and Google).
+* **Actions:**
+    1. Create a new Android Library module named :data.
+    2. Add :data to settings.gradle.kts.
+    3. Configure data/build.gradle.kts:
+        * Apply necessary plugins (Android library, Kotlin, Kapt, Hilt).
+        * Set up android { ... } block (namespace, compileSdk, etc., consistent with other modules).
+        * Add dependencies:  
+          dependencies {  
+          implementation(project(":core-data"))  
+          implementation(project(":core-common")) // For ErrorMapper  
+          implementation(project(":backend-microsoft")) // For MS-specific components (AuthManager,
+          ApiHelper, TokenProvider)
+
+              implementation(libs.hilt.android)  
+              kapt(libs.hilt.compiler)  
+              implementation(libs.kotlinx.coroutines.core) // If using coroutines directly
+
+              // Add testing dependencies as needed (junit, mockk, turbine, coroutines-test)  
+          }
+
+    4. Move the implementation files (MicrosoftAccountRepository.kt, MicrosoftFolderRepository.kt,
+       MicrosoftMessageRepository.kt) from :backend-microsoft/src/main/java/.../repository to :
+       data/src/main/java/net/melisma/data/repository.
+    5. Update the package declarations in the moved files to net.melisma.data.repository.
+    6. Rename the moved classes:
+        * MicrosoftAccountRepository \-\> DefaultAccountRepository
+        * MicrosoftFolderRepository \-\> DefaultFolderRepository
+        * MicrosoftMessageRepository \-\> DefaultMessageRepository
+    7. Update import statements within these moved files if necessary (e.g., for ErrorMapper,
+       GraphApiHelper, MicrosoftTokenProvider).
+    8. Create a Hilt module in :data (e.g., DataModule.kt) to bind the repository *interfaces*
+       from :core-data to these *default implementations*:  
+       package net.melisma.data.di // Or appropriate package
+
+       import dagger.Binds  
+       import dagger.Module  
+       import dagger.hilt.InstallIn  
+       import dagger.hilt.components.SingletonComponent  
+       import net.melisma.core\_data.repository.AccountRepository  
+       import net.melisma.core\_data.repository.FolderRepository  
+       import net.melisma.core\_data.repository.MessageRepository  
+       import net.melisma.data.repository.DefaultAccountRepository  
+       import net.melisma.data.repository.DefaultFolderRepository  
+       import net.melisma.data.repository.DefaultMessageRepository  
+       import javax.inject.Singleton
+
+       @Module  
+       @InstallIn(SingletonComponent::class)  
+       abstract class DataModule {
+
+           @Binds  
+           @Singleton  
+           abstract fun bindAccountRepository(impl: DefaultAccountRepository): AccountRepository
+
+           @Binds  
+           @Singleton  
+           abstract fun bindFolderRepository(impl: DefaultFolderRepository): FolderRepository
+
+           @Binds  
+           @Singleton  
+           abstract fun bindMessageRepository(impl: DefaultMessageRepository): MessageRepository  
+       }
+
+    9. Update app/build.gradle.kts: Replace implementation(project(":backend-microsoft")) with
+       implementation(project(":data")). The :app module should now depend on the data layer, not
+       specific backends.
+    10. Review backend-microsoft/build.gradle.kts: It should no longer need dependencies like Hilt
+        unless it's providing components directly used *only* within that module (like the Ktor
+        client if not moved, or AuthManager). The repository implementations are gone. It primarily
+        provides helpers (GraphApiHelper) and auth components (MicrosoftAuthManager,
+        MicrosoftTokenProvider) to be injected into the :data module.
+* **Verification:** Clean and rebuild the project. Run the app. Verify all Microsoft functionality (
+  sign-in, listing folders, listing messages) works exactly as before. The underlying implementation
+  module (:data) has changed, but the behavior should be identical. Check that MainViewModel still
+  injects the repository interfaces without issue.
+
+## **Phase 2: Google Backend Implementation**
+
+*(Execute these steps after Phase 1 refactoring is complete and verified)*
+
+### **Step 2.1: Google Cloud & Project Setup**
+
+* **Goal:** Configure Google services access for the Android app and add base dependencies.
+* **Actions:**
+    1. **Google Cloud Console:**
+        * Navigate to your
+          project: [https://console.cloud.google.com/](https://console.cloud.google.com/)
+        * **Enable APIs:** Go to "APIs & Services" \-\> "Library". Search for and enable:
+            * Gmail API
+            * Google People API (Often used with sign-in to get profile info)
+        * **Credentials:** Go to "APIs & Services" \-\> "Credentials".
+            * Click "+ CREATE CREDENTIALS" \-\> "OAuth client ID".
+            * Select "Application type" \-\> Android.
+            * Give it a name (e.g., "Melisma Mail Android Client").
+            * Enter your app's package name: net.melisma.mail.
+            * Generate your SHA-1 signing certificate fingerprint:
+                * In Android Studio Terminal: ./gradlew signingReport
+                * Copy the SHA-1 value for your debug variant.
+                * *(Important: When you create a release build, you MUST add the release
+                  certificate's SHA-1 here as well)*.
+            * Paste the SHA-1 fingerprint and click "CREATE".
+        * **OAuth Consent Screen:** Go to "APIs & Services" \-\> "OAuth consent screen".
+            * Ensure "User Type" is appropriate (likely "External" unless using Workspace).
+            * Fill in required info: App name ("Melisma Mail"), User support email, App logo (
+              optional), Developer contact info.
+            * **Scopes:** Click "ADD OR REMOVE SCOPES". Add the following essential scopes:
+                * .../auth/userinfo.email (View your email address)
+                * .../auth/userinfo.profile (See your personal info, including any personal info
+                  you've made publicly available)
+                * openid (Associate you with your personal info on Google)
+                * https://www.googleapis.com/auth/gmail.readonly (View your email messages and
+                  settings) \- Crucial for reading mail.
+            * *(Optional Scopes for later: Add .../auth/gmail.modify for actions like mark
+              read/delete, .../auth/gmail.labels for label management, .../auth/gmail.send for
+              sending mail)*.
+            * Save the consent screen configuration. If "External", you might need to submit for
+              verification later for non-test users, but testing should work immediately.
+        * **Download JSON:** Go back to "Credentials", find your Android Client ID, and click the
+          download button (looks like a down arrow) to get the google-services.json file.
+    2. **Android Project Setup:**
+        * Copy the downloaded google-services.json file into the app/ directory of your project.
+        * **Gradle Plugin:** Ensure the Google Services Gradle plugin is set up:
+            * Project build.gradle.kts: Check for alias(libs.plugins.google.services) or classpath "
+              com.google.gms:google-services:...". (Add if missing).
+            * App app/build.gradle.kts: Apply the plugin at the top: id("
+              com.google.gms.google-services").
+        * **Dependencies:** Add to gradle/libs.versions.toml:  
+          \[versions\]  
+          \# ...  
+          playServicesAuth \= "21.1.0" \# Check for latest version  
+          androidxActivityKtx \= "1.9.0" \# Check for latest version
+
+          \[libraries\]  
+          \# ...  
+          google-play-services-auth \= { group \= "com.google.android.gms", name \= "
+          play-services-auth", version.ref \= "playServicesAuth" }  
+          androidx-activity-ktx \= { group \= "androidx.activity", name \= "activity-ktx",
+          version.ref \= "androidxActivityKtx" }
+
+* **Verification:** Sync the Gradle project. Ensure no build errors related to Google Services or
+  dependencies occur.
+
+### **Step 2.2: Create :backend-google Module**
+
+* **Goal:** Create a dedicated module for Google-specific authentication and API interaction logic.
+* **Actions:**
+    1. Create a new Android Library module named :backend-google.
+    2. Add :backend-google to settings.gradle.kts.
+    3. Configure backend-google/build.gradle.kts:
+        * Apply necessary plugins (Android library, Kotlin, Kapt, Hilt).
+        * Set up android { ... } block.
+        * Add dependencies:  
+          dependencies {  
+          implementation(project(":core-data"))  
+          implementation(project(":core-common")) // For ErrorMapper
+
+              // Google Sign-In  
+              implementation(libs.google.play.services.auth)  
+              implementation(libs.androidx.activity.ktx) // Needed for ActivityResultLauncher
+
+              // Ktor Client (Inject from :backend-microsoft or a new :core-network module)  
+              implementation(libs.ktor.client.core) // Needed for HttpClient type  
+              // DO NOT add engine/serialization here if provided elsewhere
+
+              // Hilt  
+              implementation(libs.hilt.android)  
+              kapt(libs.hilt.compiler)  
+              implementation(libs.kotlinx.coroutines.core)
+
+              // Required for Ktor JSON parsing  
+              implementation(libs.ktor.serialization.kotlinx.json)  
+              implementation(libs.kotlinx.serialization.json)
+
+              // Testing  
+              // ...  
+          }
+
+* **Verification:** The new module is created and the project builds successfully.
+
+### **Step 2.3: Implement Google Authentication (:backend-google)**
+
+* **Goal:** Implement logic for signing users in and out with their Google accounts.
+* **Actions:**
+    1. Create GoogleAuthManager.kt in :backend-google (e.g., net.melisma.backend\_google.auth).
+        * Make it injectable (@Inject constructor(...), @Singleton).
+        * Inject @ApplicationContext context: Context.
+        * Inside, create a GoogleSignInClient:  
+          private val gso \= GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT\_SIGN\_IN)  
+          .requestEmail() // Includes email, profile, openid implicitly  
+          .requestScopes(Scope("https://www.googleapis.com/auth/gmail.readonly")) // Add Gmail
+          scope  
+          // .requestServerAuthCode(WEB\_CLIENT\_ID) // Not needed without backend/offline  
+          .build()  
+          private val googleSignInClient \= GoogleSignIn.getClient(context, gso)
+
+        * Implement signIn(activity: Activity, launcher: ActivityResultLauncher\<Intent\>): Call
+          launcher.launch(googleSignInClient.signInIntent).
+        * Implement handleSignInResult(data: Intent?, onSuccess: (Account) \-\> Unit, onError: (
+          Exception) \-\> Unit):
+            * Use GoogleSignIn.getSignedInAccountFromIntent(data) in a try-catch block for
+              ApiException.
+            * On success (task.getResult(ApiException::class.java)), map the GoogleSignInAccount (
+              non-null fields: id, email, displayName) to your Account model (providerType \= "
+              GOOGLE"). Call onSuccess.
+            * On failure, call onError with the caught exception.
+        * Implement signOut(account: Account, onComplete: () \-\> Unit): Call
+          googleSignInClient.signOut().addOnCompleteListener { onComplete() }.
+        * Implement getSignedInAccount(): Account?: Use GoogleSignIn.getLastSignedInAccount(context)
+          to check for an existing session, map it to your Account model if non-null.
+    2. Create a Hilt module in :backend-google (e.g., BackendGoogleModule.kt) to provide
+       GoogleAuthManager as a Singleton.
+* **Verification:** Modify DefaultAccountRepository's addAccount to accept a provider hint. Add a
+  temporary "Add Google Account" button in SettingsScreen that calls accountRepository.addAccount(
+  activity, scopes, "GOOGLE"). Verify the Google Sign-In screen appears, sign-in works, and the
+  account appears in the UI (requires Step 2.6 partially). Verify sign-out removes the account.
+
+### **Step 2.4: Implement Google Token Provider (:backend-google)**
+
+* **Goal:** Implement the TokenProvider interface to get OAuth2 access tokens for making Gmail API
+  calls.
+* **Actions:**
+    1. Create GoogleTokenProvider.kt implementing TokenProvider in :backend-google (e.g., datasource
+       package).
+    2. Make it injectable (@Inject constructor(...), @Singleton). Inject @ApplicationContext
+       context: Context, @Dispatcher(MailDispatchers.IO) private val ioDispatcher:
+       CoroutineDispatcher.
+    3. Implement getAccessToken(account: Account, scopes: List\<String\>, activity: Activity?):
+       Result\<String\>:
+        * Run the core logic within withContext(ioDispatcher).
+        * Check account.providerType \== "GOOGLE". Return Result.failure if not.
+        * Get the GoogleSignInAccount: val googleAccount \= GoogleSignIn.getLastSignedInAccount(
+          context) (ensure it matches account.id if multiple Google accounts were supported). Return
+          failure if null or doesn't match.
+        * Check if required scopes are already granted using GoogleSignIn.hasPermissions(
+          googleAccount, \*scopes.map { Scope(it) }.toTypedArray()).
+        * **If permissions granted:**
+            * Use GoogleAuthUtil.getToken(context, googleAccount.account\!\!, "oauth2:$
+              {scopes.joinToString(" ")}"). This must NOT be called on the main thread.
+            * Wrap the result in Result.success.
+            * Catch GoogleAuthException (map using ErrorMapper), IOException. Return Result.failure.
+        * **If permissions NOT granted:**
+            * Return Result.failure indicating missing permissions. The UI/ViewModel layer would
+              need to trigger a re-authentication via GoogleAuthManager requesting the *needed*
+              scopes.
+    4. Add GoogleTokenProvider to BackendGoogleModule using @Provides.
+* **Verification:** Unit test GoogleTokenProvider mocking GoogleSignIn and GoogleAuthUtil. Add
+  temporary code to call getAccessToken after sign-in and log the token or error.
+
+### **Step 2.5: Implement Gmail API Helper (:backend-google)**
+
+* **Goal:** Create a helper class to interact with Gmail API endpoints using Ktor.
+* **Actions:**
+    1. Create GmailApiHelper.kt in :backend-google.
+    2. Make it injectable (@Inject constructor(...), @Singleton). Inject the Ktor HttpClient (
+       provided from :backend-microsoft or a shared network module).
+    3. Define @Serializable data classes within :backend-google for Gmail API v1 responses (e.g.,
+       GmailLabelList, GmailLabel, GmailMessageList, GmailMessage, MessagePartHeader, etc.). Refer
+       to the [Gmail API documentation](https://developers.google.com/gmail/api/reference/rest).
+    4. Implement API call methods:
+        * suspend fun getLabels(accessToken: String): Result\<List\<MailFolder\>\>: Calls
+          GET https://gmail.googleapis.com/gmail/v1/users/me/labels. Parses GmailLabelList, maps
+          labels array to List\<MailFolder\>.
+        * suspend fun getMessagesForList(accessToken: String, labelIds: List\<String\>, maxResults:
+          Int): Result\<List\<Message\>\>:
+            * Call GET .../messages with labelIds, maxResults.
+            * For each message ID in the response, call GET
+              .../messages/{id}?format=metadata\&metadataHeaders=Subject\&metadataHeaders=From\&metadataHeaders=Date\&metadataHeaders=Snippet.
+              *(Limit concurrent requests or use batching later)*.
+            * Parse metadata, map to Message (extract sender, date, subject, use snippet, check for
+              UNREAD label). Return List\<Message\>.
+    5. Use Ktor client (httpClient.get), add bearerAuth(accessToken), parse with
+       response.body\<DataClass\>(), handle exceptions using ErrorMapper.
+    6. Add GmailApiHelper to BackendGoogleModule using @Provides.
+* **Verification:** Unit test GmailApiHelper mocking Ktor responses. Add temporary code: After
+  getting a Google token, call getLabels and log the results.
+
+### **Step 2.6: Integrate Google into Default Repositories (:data)**
+
+* **Goal:** Modify the repository implementations in the :data module to support both Microsoft and
+  Google providers.
+* **Actions:**
+    1. **Dependency:** Add implementation(project(":backend-google")) to data/build.gradle.kts.
+    2. **Modify DefaultAccountRepository.kt (:data):**
+        * Inject GoogleAuthManager alongside MicrosoftAuthManager.
+        * Update addAccount: Accept a providerType: String hint. Based on the hint, call either
+          microsoftAuthManager.addAccount(...) or googleAuthManager.signIn(...). Handle results
+          appropriately. *(Need to adjust the interface AccountRepository or add a new method)*.
+          Let's adjust the interface: addAccount(activity: Activity, scopes: List\<String\>,
+          providerType: String)
+        * Update removeAccount: Check account.providerType. If "MS", call
+          microsoftAuthManager.removeAccount; if "GOOGLE", call googleAuthManager.signOut.
+        * Update account state (accounts flow): Combine results from microsoftAuthManager.accounts
+          and googleAuthManager.getSignedInAccount(). This needs careful state management,
+          potentially listening to both managers.
+    3. **Modify DefaultFolderRepository.kt (:data):**
+        * Inject GoogleTokenProvider and GmailApiHelper. *(Consider using Hilt Map Multibindings for
+          TokenProvider and API helpers to simplify injection)*.
+            * Example: Inject Map\<String, @JvmSuppressWildcards TokenProvider\>. In
+              BackendMicrosoftModule provide "MS" key, in BackendGoogleModule provide "GOOGLE" key.
+        * Update manageObservedAccounts: In the loop, check account.providerType. Use the correct
+          TokenProvider and API Helper (GraphApiHelper or GmailApiHelper) based on the type. Update
+          \_folderStates accordingly.
+        * Update refreshAllFolders: Iterate accounts, check type, use correct components from the
+          map or injected instances.
+    4. **Modify DefaultMessageRepository.kt (:data):**
+        * Inject GoogleTokenProvider and GmailApiHelper (or use Map Multibindings).
+        * Update setTargetFolder and refreshMessages: Check currentTargetAccount.providerType. Use
+          the correct TokenProvider and API Helper based on the type. Update \_messageDataState.
+    5. **Update ErrorMapper.kt (:core-common):**
+        * Add handling for Google exceptions: ApiException (from Play Services Auth),
+          GoogleAuthException (from GoogleAuthUtil). Map common status codes or error types to
+          user-friendly messages. Add cases for Ktor exceptions if not already covered broadly in
+          Step 1.2.
+        * Ensure the repositories in :data use the updated ErrorMapper for both MS and Google error
+          paths.
+* **Verification:** Run the app. Add both a Microsoft and a Google account. Verify:
+    * Both accounts appear correctly in UI lists.
+    * Selecting MS folders loads MS messages via Ktor.
+    * Selecting Google labels (mapped as folders) loads Google messages via Ktor/Gmail API.
+    * Pull-to-refresh works for both types.
+    * Adding/Removing both account types works.
+    * Simulate errors (network off) for both and check messages.
+
+### **Step 2.7: UI/UX Adjustments & Final Testing**
+
+* **Goal:** Ensure a polished and functional user experience supporting both account providers.
+* **Actions:**
+    1. **UI Updates:**
+        * Modify SettingsScreen or equivalent: Provide distinct "Add Microsoft Account" and "Add
+          Google Account" options/buttons.
+        * Modify MailDrawerContent: Ensure accounts are grouped or visually distinct if desired.
+          Handle display of Gmail "Labels" alongside MS "Folders".
+        * Review MessageListContent and MessageListItem: Ensure data from both Message objects (
+          mapped from MS or Google) displays correctly.
+    2. **Thorough Testing:** Perform end-to-end testing covering all implemented features (
+       sign-in/out, folder/label view, message list view, refresh, error handling) for *both*
+       Microsoft and Google accounts interactively. Test edge cases.
+* **Verification:** The app provides a stable, intuitive, and consistent experience for managing and
+  viewing mail from both Microsoft and Google accounts.

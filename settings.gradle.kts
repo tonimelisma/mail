@@ -37,4 +37,5 @@ rootProject.name = "Mail"
 // Include all modules in the project build
 include(":app")
 include(":core-data")
-include(":backend-microsoft") // *** ADDED :backend-microsoft module ***
+include(":backend-microsoft")
+include(":core-common")

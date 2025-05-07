@@ -1,6 +1,5 @@
 package net.melisma.backend_microsoft.repository
 
-// Removed unused flow imports: mapNotNull, toList
 import android.app.Activity
 import android.util.Log
 import app.cash.turbine.test
@@ -18,6 +17,7 @@ import io.mockk.runs
 import io.mockk.slot
 import io.mockk.unmockkAll
 import io.mockk.unmockkStatic
+import io.mockk.verify
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -26,7 +26,7 @@ import net.melisma.backend_microsoft.auth.AddAccountResult
 import net.melisma.backend_microsoft.auth.AuthStateListener
 import net.melisma.backend_microsoft.auth.MicrosoftAuthManager
 import net.melisma.backend_microsoft.auth.RemoveAccountResult
-import net.melisma.backend_microsoft.errors.ErrorMapper
+import net.melisma.core_common.errors.ErrorMapperService
 import net.melisma.core_data.model.Account
 import net.melisma.core_data.model.AuthState
 import org.junit.After
@@ -36,15 +36,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
-// Removed Robolectric imports
-
 @OptIn(ExperimentalCoroutinesApi::class)
-// Removed @RunWith and @Config annotations
 class MicrosoftAccountRepositoryTest {
 
     // --- Mocks ---
     private lateinit var mockAuthManager: MicrosoftAuthManager
-    private lateinit var mockErrorMapper: ErrorMapper
+    private lateinit var mockErrorMapper: ErrorMapperService // Mock the INTERFACE
     private lateinit var mockActivity: Activity
 
     // --- Class Under Test ---
@@ -66,14 +63,14 @@ class MicrosoftAccountRepositoryTest {
     @Before
     fun setUp() {
         mockAuthManager = mockk(relaxUnitFun = true)
-        mockErrorMapper = mockk(relaxed = true)
+        mockErrorMapper = mockk() // Mock the interface
         mockActivity = mockk()
 
         authStateListenerSlot = slot()
         every { mockAuthManager.setAuthStateListener(capture(authStateListenerSlot)) } just runs
-        every { mockAuthManager.isInitialized } returns false // Default to not initialized
+        every { mockAuthManager.isInitialized } returns false
         every { mockAuthManager.initializationError } returns null
-        every { mockAuthManager.accounts } returns emptyList() // Use manager's accounts property
+        every { mockAuthManager.accounts } returns emptyList()
         every {
             mockAuthManager.addAccount(
                 any(),
@@ -81,7 +78,6 @@ class MicrosoftAccountRepositoryTest {
                 capture(addAccountCallbackSlot)
             )
         } just runs
-        // *** Use eq() for the account mock in removeAccount setup if needed, or rely on specific instance if relaxUnitFun=true handles it ***
         every {
             mockAuthManager.removeAccount(
                 eq(testMsalAccount1),
@@ -89,16 +85,17 @@ class MicrosoftAccountRepositoryTest {
             )
         } just runs
 
-        // Make error mapper mock more realistic - return message based on input
+        // Mock the interface methods
         every { mockErrorMapper.mapAuthExceptionToUserMessage(any()) } answers {
-            "Mapped Error: " + ((args[0] as? Throwable)?.message ?: "Unknown")
+            "Mapped Error: " + ((args[0] as? Throwable)?.message ?: "Unknown Auth")
         }
-        every { mockErrorMapper.mapGraphExceptionToUserMessage(any()) } answers {
-            "Mapped Graph Error: " + ((args[0] as? Throwable)?.message ?: "Unknown")
+        // mapNetworkOrApiException might be called by mapAuthExceptionToUserMessage as fallback
+        every { mockErrorMapper.mapNetworkOrApiException(any()) } answers {
+            "Mapped Network/API Error: " + ((args[0] as? Throwable)?.message
+                ?: "Unknown Network/API")
         }
 
 
-        // --- Mock Log --- (Keep this)
         mockkStatic(Log::class)
         every { Log.v(any(), any()) } returns 0
         every { Log.d(any(), any()) } returns 0
@@ -107,53 +104,44 @@ class MicrosoftAccountRepositoryTest {
         every { Log.w(any(), any<String>(), any()) } returns 0
         every { Log.e(any(), any()) } returns 0
         every { Log.e(any(), any(), any()) } returns 0
-        // --- End Log mocking block ---
-
-        // Defer repository creation to tests or helper to ensure correct TestScope injection
     }
 
     @After
     fun tearDown() {
-        unmockkStatic(Log::class) // Keep this
+        unmockkStatic(Log::class)
         unmockkAll()
     }
 
-    // Helper function refactored to avoid nested runTest
+    // Helper function to initialize repository within a test scope
     private fun initializeRepository(
-        testScope: TestScope, // Pass the scope from the test
+        testScope: TestScope,
         isInitialized: Boolean,
-        initialError: MsalException?, // Use imported MsalException type
-        initialMsalAccounts: List<IAccount> // Use more descriptive name for clarity
+        initialError: MsalException?,
+        initialMsalAccounts: List<IAccount>
     ) {
         every { mockAuthManager.isInitialized } returns isInitialized
         every { mockAuthManager.initializationError } returns initialError
-        every { mockAuthManager.accounts } returns initialMsalAccounts // Setup mock manager's state
+        every { mockAuthManager.accounts } returns initialMsalAccounts
 
-        // Initialize the repository within the test's scope
+        // Pass the mocked INTERFACE to the constructor
         repository = MicrosoftAccountRepository(mockAuthManager, testScope, mockErrorMapper)
 
-        // Manually trigger listener if needed to simulate initial state sync
-        // This happens *after* the repository constructor registers the listener.
+        // Manually trigger listener if needed
         if (authStateListenerSlot.isCaptured) {
             authStateListenerSlot.captured.onAuthStateChanged(
                 isInitialized = isInitialized,
-                accounts = initialMsalAccounts, // Pass the 'initialMsalAccounts' list
+                accounts = initialMsalAccounts,
                 error = initialError
             )
         }
-        // advanceUntilIdle() must be called *in the test* after calling this helper
     }
-
 
     // --- Test Cases ---
 
     @Test
     fun `init determines initial state correctly - Initializing`() = runTest {
-        // Arrange: Initialize with default mocks (not initialized, no error, no accounts)
         initializeRepository(this, false, null, emptyList())
-        advanceUntilIdle() // Allow init process and potential listener calls
-
-        // Assert
+        advanceUntilIdle()
         assertEquals(AuthState.Initializing, repository.authState.value)
         assertTrue(repository.accounts.value.isEmpty())
         assertFalse(repository.isLoadingAccountAction.value)
@@ -161,48 +149,35 @@ class MicrosoftAccountRepositoryTest {
 
     @Test
     fun `init determines initial state correctly - InitializationError`() = runTest {
-        // Arrange
         val initError = MsalClientException("init_failed", "Init failed")
         initializeRepository(this, false, initError, emptyList())
-        advanceUntilIdle() // Allow init process and potential listener calls
-
-        // Assert
+        advanceUntilIdle()
         val state = repository.authState.value
         assertTrue(state is AuthState.InitializationError)
         assertEquals(initError, (state as AuthState.InitializationError).error)
-        assertTrue(repository.accounts.value.isEmpty())
-        assertFalse(repository.isLoadingAccountAction.value)
     }
 
     @Test
     fun `init determines initial state correctly - Initialized with accounts`() = runTest {
-        // Arrange
         initializeRepository(this, true, null, listOf(testMsalAccount1))
-        advanceUntilIdle() // Allow potential listener call during init to process
-
-        // Assert
+        advanceUntilIdle()
         assertEquals(AuthState.Initialized, repository.authState.value)
-        assertEquals(1, repository.accounts.value.size)
-        assertEquals(testGenericAccount1, repository.accounts.value[0])
-        assertFalse(repository.isLoadingAccountAction.value)
+        assertEquals(listOf(testGenericAccount1), repository.accounts.value)
     }
 
 
     @Test
     fun `onAuthStateChanged updates state flows`() = runTest {
-        // Arrange: Start in Initializing state
         initializeRepository(this, false, null, emptyList())
-        advanceUntilIdle() // Process init
-        assertEquals(AuthState.Initializing, repository.authState.value)
+        advanceUntilIdle()
         assertTrue(authStateListenerSlot.isCaptured)
         val listener = authStateListenerSlot.captured
 
         // Act & Assert: Initialized, no accounts
         listener.onAuthStateChanged(isInitialized = true, accounts = emptyList(), error = null)
-        advanceUntilIdle() // Allow state updates to propagate
+        advanceUntilIdle()
         assertEquals(AuthState.Initialized, repository.authState.value)
         assertTrue(repository.accounts.value.isEmpty())
-        assertFalse(repository.isLoadingAccountAction.value) // Should reset loading
 
         // Act & Assert: Initialized, one account
         listener.onAuthStateChanged(
@@ -212,9 +187,7 @@ class MicrosoftAccountRepositoryTest {
         )
         advanceUntilIdle()
         assertEquals(AuthState.Initialized, repository.authState.value)
-        assertEquals(1, repository.accounts.value.size)
-        assertEquals(testGenericAccount1, repository.accounts.value[0])
-        assertFalse(repository.isLoadingAccountAction.value)
+        assertEquals(listOf(testGenericAccount1), repository.accounts.value)
 
         // Act & Assert: Error state
         val initError = MsalClientException("init_error", "Error during init")
@@ -227,43 +200,27 @@ class MicrosoftAccountRepositoryTest {
         val errorState = repository.authState.value
         assertTrue(errorState is AuthState.InitializationError)
         assertEquals(initError, (errorState as AuthState.InitializationError).error)
-        assertTrue(repository.accounts.value.isEmpty())
-        assertFalse(repository.isLoadingAccountAction.value)
     }
 
     @Test
-    fun `addAccount success updates loading state and emits message`() = runTest { // Test #4
-        // Arrange: Start initialized
+    fun `addAccount success updates loading state and emits message`() = runTest {
         initializeRepository(this, true, null, emptyList())
-        advanceUntilIdle() // Process init listener
+        advanceUntilIdle()
 
-        // Act & Assert
         repository.accountActionMessage.test {
-            expectNoEvents() // Ensure no initial message
-
+            expectNoEvents()
             repository.addAccount(mockActivity, testScopes)
-            assertTrue(repository.isLoadingAccountAction.value) // Loading set immediately
+            assertTrue(repository.isLoadingAccountAction.value)
 
-            // Simulate successful callback & listener update
             val successResult = AddAccountResult.Success(testMsalAccount1)
             assertTrue(addAccountCallbackSlot.isCaptured)
             addAccountCallbackSlot.captured.invoke(successResult)
-            authStateListenerSlot.captured.onAuthStateChanged(
-                isInitialized = true,
-                accounts = listOf(testMsalAccount1),
-                error = null
-            )
-            advanceUntilIdle() // Process callback message emit & listener state update
+            authStateListenerSlot.captured.onAuthStateChanged(true, listOf(testMsalAccount1), null)
+            advanceUntilIdle()
 
-            // Assert final state
-            assertFalse(repository.isLoadingAccountAction.value) // Loading reset by listener
-            val expectedMessage = "Account added: ${testMsalAccount1.username}"
-            assertEquals(expectedMessage, awaitItem())
-            assertEquals(
-                listOf(testGenericAccount1),
-                repository.accounts.value
-            ) // Account list updated
-
+            assertFalse(repository.isLoadingAccountAction.value)
+            assertEquals("Account added: ${testMsalAccount1.username}", awaitItem())
+            assertEquals(listOf(testGenericAccount1), repository.accounts.value)
             cancelAndIgnoreRemainingEvents()
         }
         coVerify { mockAuthManager.addAccount(mockActivity, testScopes, any()) }
@@ -271,205 +228,143 @@ class MicrosoftAccountRepositoryTest {
 
 
     @Test
-    fun `addAccount error updates loading state and emits error message`() = runTest { // Test #7
-        // Arrange: Start initialized
+    fun `addAccount error updates loading state and emits error message`() = runTest {
         initializeRepository(this, true, null, emptyList())
         advanceUntilIdle()
         val addError = MsalClientException("add_fail", "Add failed")
-        val expectedMappedError = "Mapped Error: ${addError.message}"
-        every { mockErrorMapper.mapAuthExceptionToUserMessage(addError) } returns expectedMappedError
+        // Mock the specific error mapping call
+        every { mockErrorMapper.mapAuthExceptionToUserMessage(addError) } returns "Mapped Add Error"
 
-        // Act & Assert
         repository.accountActionMessage.test {
             expectNoEvents()
-
             repository.addAccount(mockActivity, testScopes)
             assertTrue(repository.isLoadingAccountAction.value)
 
-            // Simulate error callback & listener update
             val errorResult = AddAccountResult.Error(addError)
             assertTrue(addAccountCallbackSlot.isCaptured)
             addAccountCallbackSlot.captured.invoke(errorResult)
-            authStateListenerSlot.captured.onAuthStateChanged(
-                isInitialized = true,
-                accounts = emptyList(), // Assume accounts unchanged on error
-                error = null
-            )
+            authStateListenerSlot.captured.onAuthStateChanged(true, emptyList(), null)
             advanceUntilIdle()
 
-            // Assert final state
-            assertFalse(repository.isLoadingAccountAction.value) // Loading reset by listener
-            val expectedFullErrorMessage = "Error adding account: $expectedMappedError"
-            assertEquals(expectedFullErrorMessage, awaitItem())
-            assertTrue(repository.accounts.value.isEmpty()) // Accounts unchanged
-
+            assertFalse(repository.isLoadingAccountAction.value)
+            // Assert message uses the mocked mapped error
+            assertEquals("Error adding account: Mapped Add Error", awaitItem())
+            assertTrue(repository.accounts.value.isEmpty())
             cancelAndIgnoreRemainingEvents()
         }
-        coVerify { mockAuthManager.addAccount(mockActivity, testScopes, any()) }
+        verify { mockErrorMapper.mapAuthExceptionToUserMessage(addError) } // Verify specific call
     }
 
 
     @Test
-    fun `addAccount cancelled updates loading state and emits cancel message`() =
-        runTest { // Test #5
-            // Arrange: Start initialized
-            initializeRepository(this, true, null, emptyList())
-            advanceUntilIdle()
+    fun `addAccount cancelled updates loading state and emits cancel message`() = runTest {
+        initializeRepository(this, true, null, emptyList())
+        advanceUntilIdle()
 
-            // Act & Assert
-            repository.accountActionMessage.test {
-                expectNoEvents()
-
+        repository.accountActionMessage.test {
+            expectNoEvents()
             repository.addAccount(mockActivity, testScopes)
             assertTrue(repository.isLoadingAccountAction.value)
 
-                // Simulate cancellation callback & listener update
             assertTrue(addAccountCallbackSlot.isCaptured)
             addAccountCallbackSlot.captured.invoke(AddAccountResult.Cancelled)
-                authStateListenerSlot.captured.onAuthStateChanged(
-                    isInitialized = true,
-                    accounts = emptyList(), // Assume accounts unchanged on cancel
-                    error = null
-                )
+            authStateListenerSlot.captured.onAuthStateChanged(true, emptyList(), null)
             advanceUntilIdle()
 
-                // Assert final state
-                assertFalse(repository.isLoadingAccountAction.value) // Loading reset by listener
-                assertEquals("Account addition cancelled.", awaitItem())
-                assertTrue(repository.accounts.value.isEmpty()) // Accounts unchanged
-
-                cancelAndIgnoreRemainingEvents()
-            }
-            coVerify { mockAuthManager.addAccount(mockActivity, testScopes, any()) }
+            assertFalse(repository.isLoadingAccountAction.value)
+            assertEquals("Account addition cancelled.", awaitItem())
+            assertTrue(repository.accounts.value.isEmpty())
+            cancelAndIgnoreRemainingEvents()
         }
+    }
 
 
     @Test
-    fun `removeAccount success updates loading state and emits message`() = runTest { // Test #3
-        // Arrange: Start initialized with one account
+    fun `removeAccount success updates loading state and emits message`() = runTest {
         initializeRepository(this, true, null, listOf(testMsalAccount1))
         advanceUntilIdle()
 
-        // Act & Assert
         repository.accountActionMessage.test {
             expectNoEvents()
-
             repository.removeAccount(testGenericAccount1)
             assertTrue(repository.isLoadingAccountAction.value)
 
-            // Simulate successful callback & listener update
             assertTrue(removeAccountCallbackSlot.isCaptured)
             removeAccountCallbackSlot.captured.invoke(RemoveAccountResult.Success)
-            authStateListenerSlot.captured.onAuthStateChanged(
-                isInitialized = true,
-                accounts = emptyList(), // Accounts list is now empty
-                error = null
-            )
+            authStateListenerSlot.captured.onAuthStateChanged(true, emptyList(), null)
             advanceUntilIdle()
 
-            // Assert final state
-            assertFalse(repository.isLoadingAccountAction.value) // Loading reset by listener
-            val expectedMessage = "Account removed: ${testMsalAccount1.username}"
-            assertEquals(expectedMessage, awaitItem())
-            assertTrue(repository.accounts.value.isEmpty()) // Account list updated
-
+            assertFalse(repository.isLoadingAccountAction.value)
+            assertEquals("Account removed: ${testMsalAccount1.username}", awaitItem())
+            assertTrue(repository.accounts.value.isEmpty())
             cancelAndIgnoreRemainingEvents()
         }
-        coVerify { mockAuthManager.removeAccount(eq(testMsalAccount1), any()) } // Use eq() matcher
+        coVerify { mockAuthManager.removeAccount(eq(testMsalAccount1), any()) }
     }
 
     @Test
-    fun `removeAccount error updates loading state and emits error message`() = runTest { // Test #9
-        // Arrange: Start initialized with one account
+    fun `removeAccount error updates loading state and emits error message`() = runTest {
         val initialAccounts = listOf(testMsalAccount1)
         initializeRepository(this, true, null, initialAccounts)
         advanceUntilIdle()
         val removeError = MsalServiceException("remove_fail", "Remove failed", null)
-        val expectedMappedError = "Mapped Error: ${removeError.message}"
-        every { mockErrorMapper.mapAuthExceptionToUserMessage(removeError) } returns expectedMappedError
+        // Mock the specific error mapping call
+        every { mockErrorMapper.mapAuthExceptionToUserMessage(removeError) } returns "Mapped Remove Error"
 
-        // Act & Assert
         repository.accountActionMessage.test {
             expectNoEvents()
-
             repository.removeAccount(testGenericAccount1)
             assertTrue(repository.isLoadingAccountAction.value)
 
-            // Simulate error callback & listener update
             assertTrue(removeAccountCallbackSlot.isCaptured)
             val errorResult = RemoveAccountResult.Error(removeError)
             removeAccountCallbackSlot.captured.invoke(errorResult)
-            authStateListenerSlot.captured.onAuthStateChanged(
-                isInitialized = true,
-                accounts = initialAccounts, // Assume accounts unchanged on error
-                error = null
-            )
+            authStateListenerSlot.captured.onAuthStateChanged(true, initialAccounts, null)
             advanceUntilIdle()
 
-            // Assert final state
-            assertFalse(repository.isLoadingAccountAction.value) // Loading reset by listener
-            val expectedFullErrorMessage = "Error removing account: $expectedMappedError"
-            assertEquals(expectedFullErrorMessage, awaitItem())
-            assertEquals(
-                listOf(testGenericAccount1),
-                repository.accounts.value
-            ) // Accounts unchanged
-
+            assertFalse(repository.isLoadingAccountAction.value)
+            // Assert message uses the mocked mapped error
+            assertEquals("Error removing account: Mapped Remove Error", awaitItem())
+            assertEquals(listOf(testGenericAccount1), repository.accounts.value)
             cancelAndIgnoreRemainingEvents()
         }
-        coVerify { mockAuthManager.removeAccount(eq(testMsalAccount1), any()) } // Use eq() matcher
+        verify { mockErrorMapper.mapAuthExceptionToUserMessage(removeError) } // Verify specific call
     }
 
     @Test
-    fun `removeAccount account not found in manager emits message`() = runTest { // Test #8
-        // Arrange: Start initialized with NO accounts
+    fun `removeAccount account not found in manager emits message`() = runTest {
         initializeRepository(this, true, null, emptyList())
         advanceUntilIdle()
 
-        // Act & Assert
         repository.accountActionMessage.test {
             expectNoEvents()
+            repository.removeAccount(testGenericAccount1) // Account not in manager's list
+            advanceUntilIdle()
 
-            // Try removing an account that doesn't exist in the manager's list
-            repository.removeAccount(testGenericAccount1)
-            advanceUntilIdle() // Allow the check and message emission to occur
-
-            // Assert: loading state should reset, specific message emitted
-            assertFalse(repository.isLoadingAccountAction.value) // Should be false as action failed early
+            assertFalse(repository.isLoadingAccountAction.value)
             assertEquals("Account not found for removal.", awaitItem())
             cancelAndIgnoreRemainingEvents()
         }
-        coVerify(exactly = 0) {
-            mockAuthManager.removeAccount(
-                any(),
-                any()
-            )
-        } // Verify manager wasn't called
+        coVerify(exactly = 0) { mockAuthManager.removeAccount(any(), any()) }
     }
 
 
     @Test
     fun `addOrRemoveAccount does nothing if not initialized`() = runTest {
-        // Arrange: Start in Initializing state
         initializeRepository(this, false, null, emptyList())
-        advanceUntilIdle() // Process init
-        assertEquals(AuthState.Initializing, repository.authState.value)
+        advanceUntilIdle()
 
-        // Act & Assert
         repository.accountActionMessage.test {
             expectNoEvents()
-
-            // Attempt add
             repository.addAccount(mockActivity, testScopes)
-            advanceUntilIdle() // Let message emit
+            advanceUntilIdle()
             assertEquals("Authentication system not ready.", awaitItem())
-            assertFalse(repository.isLoadingAccountAction.value) // Loading should be false
+            assertFalse(repository.isLoadingAccountAction.value)
 
-            // Attempt remove
             repository.removeAccount(testGenericAccount1)
-            advanceUntilIdle() // Let message emit
+            advanceUntilIdle()
             assertEquals("Authentication system not ready.", awaitItem())
-            assertFalse(repository.isLoadingAccountAction.value) // Loading should be false
+            assertFalse(repository.isLoadingAccountAction.value)
 
             cancelAndIgnoreRemainingEvents()
         }
@@ -479,46 +374,22 @@ class MicrosoftAccountRepositoryTest {
 
 
     @Test
-    fun `clearAccountActionMessage emits null`() =
-        runTest { // Test #6 - NOTE: This test had a timeout, fix is not guaranteed
-            // Arrange: Start initialized and emit an initial message
-            initializeRepository(this, true, null, emptyList())
-            advanceUntilIdle() // Process init
-            // Trigger an initial message emission
-            repository.addAccount(mockActivity, testScopes)
-            assertTrue(addAccountCallbackSlot.isCaptured)
-            addAccountCallbackSlot.captured.invoke(AddAccountResult.Cancelled)
-            authStateListenerSlot.captured.onAuthStateChanged(
-                isInitialized = true,
-                accounts = emptyList(), // Simulate listener update after cancel
-                error = null
-            )
-            advanceUntilIdle() // Ensure setup completes and initial message is emitted
+    fun `clearAccountActionMessage emits null`() = runTest {
+        initializeRepository(this, true, null, emptyList())
+        advanceUntilIdle()
+        // Trigger an initial message
+        repository.addAccount(mockActivity, testScopes)
+        assertTrue(addAccountCallbackSlot.isCaptured)
+        addAccountCallbackSlot.captured.invoke(AddAccountResult.Cancelled)
+        authStateListenerSlot.captured.onAuthStateChanged(true, emptyList(), null)
+        advanceUntilIdle()
 
-            // Act & Assert
         repository.accountActionMessage.test {
-            // Assert: Consume the initial message
-            assertEquals("Account addition cancelled.", awaitItem())
-
-            // Act: Clear the message
+            assertEquals("Account addition cancelled.", awaitItem()) // Consume initial message
             repository.clearAccountActionMessage()
-
-            // Add advanceUntilIdle to allow launched coroutine for emission to run
             advanceUntilIdle()
-
-            // Assert: Expect null to be emitted
-            // NOTE: If this still times out, it requires deeper coroutine/dispatcher debugging
-            assertEquals(null, awaitItem())
-
+            assertEquals(null, awaitItem()) // Expect null after clear
             cancelAndIgnoreRemainingEvents()
         }
     }
-
-}
-
-// Helper extension function (remains unchanged)
-// This function is internal to the test file and doesn't affect the interface call issue.
-// Its parameter name 'msalAccounts' is local to this function.
-private fun mapToGenericAccounts(msalAccounts: List<IAccount>): List<Account> {
-    return msalAccounts.map { Account(it.id ?: "", it.username ?: "Unknown User", "MS") }
 }

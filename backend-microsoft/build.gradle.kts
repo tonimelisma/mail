@@ -3,16 +3,17 @@
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
-    id("org.jetbrains.kotlin.kapt") // Apply kapt if using Hilt/DI annotations within this module
-    alias(libs.plugins.hilt.gradle) // Apply Hilt plugin if needed here
+    id("org.jetbrains.kotlin.kapt")
+    alias(libs.plugins.hilt.gradle)
+    alias(libs.plugins.kotlin.serialization) // <<< APPLY SERIALIZATION PLUGIN
 }
 
 android {
-    namespace = "net.melisma.backend_microsoft" // Ensure correct namespace
-    compileSdk = 35 // Match app's SDK
+    namespace = "net.melisma.backend_microsoft"
+    compileSdk = 35
 
     defaultConfig {
-        minSdk = 26 // Match app's minSdk
+        minSdk = 26
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles("consumer-rules.pro")
     }
@@ -33,32 +34,35 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
-    // buildFeatures { // Add features if needed, e.g., compose = true if Compose used here
-    //     compose = true
-    // }
-    // composeOptions { // Add if compose enabled
-    //    kotlinCompilerExtensionVersion = libs.versions.composeCompiler.get()
-    // }
 }
 
 dependencies {
     // --- Project Modules ---
-    implementation(project(":core-data")) // Essential dependency
-    // Ensure NO dependency on :feature-auth here
+    implementation(project(":core-data"))
+    implementation(project(":core-common"))
 
-    // --- AndroidX & Kotlin ---
-    implementation(libs.androidx.core.ktx)
-    implementation(libs.kotlinx.coroutines.core) // If using coroutines directly
+    // --- MSAL ---
+    implementation(libs.microsoft.msal)
 
-    // --- Hilt --- (If using @Inject, @Provides, @Module etc. *within* this module)
+    // --- Hilt ---
     implementation(libs.hilt.android)
     kapt(libs.hilt.compiler)
 
-    // --- MSAL --- (Should already be here)
-    implementation(libs.microsoft.msal) // Assuming you have this alias
+    // --- AndroidX & Kotlin ---
+    implementation(libs.androidx.core.ktx)
+    implementation(libs.kotlinx.coroutines.core)
 
-    // --- JSON Parsing --- (e.g., if GraphApiHelper uses org.json)
-    implementation(libs.org.json) // Assuming alias exists
+    // --- Ktor Client Dependencies --- ADDED BLOCK ---
+    implementation(libs.ktor.client.core)
+    implementation(libs.ktor.client.okhttp)
+    implementation(libs.ktor.client.contentnegotiation)
+    implementation(libs.ktor.serialization.kotlinx.json)
+    implementation(libs.kotlinx.serialization.json) // Core serialization runtime
+    implementation(libs.ktor.client.logging) // Optional Ktor logging
+    // --- END Ktor Block ---
+
+    // --- JSON Parsing (Old - REMOVE if GraphApiHelper no longer uses org.json) ---
+    // implementation(libs.org.json)
 
     // --- Unit Testing ---
     testImplementation(libs.junit)
@@ -66,14 +70,13 @@ dependencies {
     testImplementation(libs.mockk.android)
     testImplementation(libs.mockk.agent)
     testImplementation(libs.kotlinx.coroutines.test)
-    testImplementation(libs.turbine) // If testing flows here
+    testImplementation(libs.turbine) // Uncommented for testing Flow-based code
 
     // --- Instrumented Testing ---
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
-    // Add other necessary test dependencies
 }
 
-kapt { // Add if Hilt compiler is used
+kapt {
     correctErrorTypes = true
 }

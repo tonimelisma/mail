@@ -1,7 +1,5 @@
-package net.melisma.backend_microsoft.repository
+package net.melisma.backend_microsoft.repository // Still in this package for now
 
-// <<< CHANGED IMPORTS START
-// <<< CHANGED IMPORTS END
 import android.app.Activity
 import android.util.Log
 import com.microsoft.identity.client.IAccount
@@ -19,7 +17,8 @@ import net.melisma.backend_microsoft.auth.AddAccountResult
 import net.melisma.backend_microsoft.auth.AuthStateListener
 import net.melisma.backend_microsoft.auth.MicrosoftAuthManager
 import net.melisma.backend_microsoft.auth.RemoveAccountResult
-import net.melisma.backend_microsoft.errors.ErrorMapper
+// import net.melisma.backend_microsoft.errors.ErrorMapper // OLD IMPORT
+import net.melisma.core_common.errors.ErrorMapperService // NEW INTERFACE IMPORT
 import net.melisma.core_data.di.ApplicationScope
 import net.melisma.core_data.model.Account
 import net.melisma.core_data.model.AuthState
@@ -32,12 +31,13 @@ import javax.inject.Singleton
  * Manages Microsoft user accounts and authentication state using [MicrosoftAuthManager].
  * Listens to state changes from the auth manager and translates them into generic
  * [Account] models and [AuthState] exposed via Kotlin Flows.
+ * NOTE: This class will be moved to the :data module in Step 1.4.
  */
 @Singleton
 class MicrosoftAccountRepository @Inject constructor(
-    private val microsoftAuthManager: MicrosoftAuthManager, // Injected (provider needs update later)
+    private val microsoftAuthManager: MicrosoftAuthManager, // Injected
     @ApplicationScope private val externalScope: CoroutineScope, // Use the qualifier
-    private val errorMapper: ErrorMapper
+    private val errorMapper: ErrorMapperService // <-- INJECT THE INTERFACE
 ) : AccountRepository, AuthStateListener { // Implement both interfaces
 
     private val TAG = "MicrosoftAccountRepo"
@@ -103,9 +103,8 @@ class MicrosoftAccountRepository @Inject constructor(
             val message = when (result) {
                 is AddAccountResult.Success -> "Account added: ${result.account.username}"
                 is AddAccountResult.Error -> "Error adding account: ${
-                    errorMapper.mapAuthExceptionToUserMessage(
-                        result.exception
-                    )
+                    // Use injected interface instance
+                    errorMapper.mapAuthExceptionToUserMessage(result.exception)
                 }"
                 is AddAccountResult.Cancelled -> "Account addition cancelled."
                 is AddAccountResult.NotInitialized -> "Authentication system not ready."
@@ -144,9 +143,8 @@ class MicrosoftAccountRepository @Inject constructor(
             val message = when (result) {
                 is RemoveAccountResult.Success -> "Account removed: ${accountToRemove.username}"
                 is RemoveAccountResult.Error -> "Error removing account: ${
-                    errorMapper.mapAuthExceptionToUserMessage(
-                        result.exception
-                    )
+                    // Use injected interface instance
+                    errorMapper.mapAuthExceptionToUserMessage(result.exception)
                 }"
                 is RemoveAccountResult.NotInitialized -> "Authentication system not ready."
                 is RemoveAccountResult.AccountNotFound -> "Account to remove not found."
