@@ -61,7 +61,7 @@ dependencies {
     // --- Project Modules ---
     // implementation(project(":feature-auth")) // <<< REMOVED THIS LINE
     implementation(project(":core-data"))
-    implementation(project(":backend-microsoft")) // Keep or add this
+    implementation(project(":data")) // Changed to :data which has backend-microsoft as a dependency
 
     // --- AndroidX Core & Lifecycle ---
     implementation(libs.androidx.core.ktx)

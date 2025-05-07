@@ -38,4 +38,6 @@ rootProject.name = "Mail"
 include(":app")
 include(":core-data")
 include(":backend-microsoft")
+include(":backend-google")  // New Google backend module
 include(":core-common")
+include(":data")

@@ -50,6 +50,17 @@ interface AccountRepository {
     suspend fun addAccount(activity: Activity, scopes: List<String>)
 
     /**
+     * Initiates the flow to add a new account of the specified provider type interactively.
+     * The result (success, error, cancellation) will be communicated via [accountActionMessage],
+     * and the account list ([accounts]) and auth state ([authState]) will update via their respective flows.
+     *
+     * @param activity The current [Activity] context, required by most auth SDKs to start the interactive flow.
+     * @param scopes The list of permission scopes required for the account being added (e.g., "Mail.Read").
+     * @param providerType The type of provider (e.g., "MS" for Microsoft, "GOOGLE" for Google).
+     */
+    suspend fun addAccount(activity: Activity, scopes: List<String>, providerType: String)
+
+    /**
      * Initiates the removal of the specified account from the application and the underlying auth provider.
      * The result (success, error) will be communicated via [accountActionMessage],
      * and the account list ([accounts]) will update via its flow.

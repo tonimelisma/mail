@@ -1,4 +1,4 @@
-package net.melisma.backend_microsoft.repository // Still in this package for now
+package net.melisma.data.repository
 
 import android.app.Activity
 import android.util.Log
@@ -17,8 +17,7 @@ import net.melisma.backend_microsoft.auth.AddAccountResult
 import net.melisma.backend_microsoft.auth.AuthStateListener
 import net.melisma.backend_microsoft.auth.MicrosoftAuthManager
 import net.melisma.backend_microsoft.auth.RemoveAccountResult
-// import net.melisma.backend_microsoft.errors.ErrorMapper // OLD IMPORT
-import net.melisma.core_common.errors.ErrorMapperService // NEW INTERFACE IMPORT
+import net.melisma.core_common.errors.ErrorMapperService
 import net.melisma.core_data.di.ApplicationScope
 import net.melisma.core_data.model.Account
 import net.melisma.core_data.model.AuthState
@@ -27,20 +26,18 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Microsoft implementation of the [AccountRepository] interface.
- * Manages Microsoft user accounts and authentication state using [MicrosoftAuthManager].
- * Listens to state changes from the auth manager and translates them into generic
- * [Account] models and [AuthState] exposed via Kotlin Flows.
- * NOTE: This class will be moved to the :data module in Step 1.4.
+ * Default implementation of the [AccountRepository] interface.
+ * Currently only handles Microsoft accounts using [MicrosoftAuthManager].
+ * Future: Will be extended to support multiple account types (Google, etc.).
  */
 @Singleton
-class MicrosoftAccountRepository @Inject constructor(
-    private val microsoftAuthManager: MicrosoftAuthManager, // Injected
-    @ApplicationScope private val externalScope: CoroutineScope, // Use the qualifier
-    private val errorMapper: ErrorMapperService // <-- INJECT THE INTERFACE
-) : AccountRepository, AuthStateListener { // Implement both interfaces
+class DefaultAccountRepository @Inject constructor(
+    private val microsoftAuthManager: MicrosoftAuthManager,
+    @ApplicationScope private val externalScope: CoroutineScope,
+    private val errorMapper: ErrorMapperService
+) : AccountRepository, AuthStateListener {
 
-    private val TAG = "MicrosoftAccountRepo"
+    private val TAG = "DefaultAccountRepo"
 
     // --- State Flows reflecting Manager State ---
     private val _authState = MutableStateFlow(determineInitialAuthState())
@@ -90,9 +87,63 @@ class MicrosoftAccountRepository @Inject constructor(
     }
 
     // --- AccountRepository Interface Implementation ---
+
+    /**
+     * Adds an account with the specified provider type.
+     * Currently supports "MS" (Microsoft) provider type.
+     * Future: Will support "GOOGLE" as well.
+     */
+    override suspend fun addAccount(
+        activity: Activity,
+        scopes: List<String>,
+        providerType: String
+    ) {
+        when (providerType) {
+            "MS" -> addMicrosoftAccount(activity, scopes)
+            else -> {
+                Log.w(TAG, "Unsupported provider type: $providerType")
+                tryEmitMessage("Unsupported account provider: $providerType")
+            }
+        }
+    }
+
+    /**
+     * Legacy method for backward compatibility.
+     * Defaults to Microsoft account type.
+     */
     override suspend fun addAccount(activity: Activity, scopes: List<String>) {
+        addAccount(activity, scopes, "MS")
+    }
+
+    override suspend fun removeAccount(account: Account) {
+        when (account.providerType) {
+            "MS" -> removeMicrosoftAccount(account)
+            else -> {
+                Log.w(
+                    TAG,
+                    "Cannot remove account with unsupported provider type: ${account.providerType}"
+                )
+                tryEmitMessage("Cannot remove account with unsupported provider type: ${account.providerType}")
+            }
+        }
+    }
+
+    /** Clears the last emitted transient message. */
+    override fun clearAccountActionMessage() {
+        tryEmitMessage(null) // Request emission of null
+    }
+
+    // --- Private Implementation Methods ---
+
+    /**
+     * Microsoft-specific account addition.
+     */
+    private suspend fun addMicrosoftAccount(activity: Activity, scopes: List<String>) {
         if (authState.value !is AuthState.Initialized) {
-            Log.w(TAG, "addAccount called but auth state is not Initialized: ${authState.value}")
+            Log.w(
+                TAG,
+                "addMicrosoftAccount called but auth state is not Initialized: ${authState.value}"
+            )
             tryEmitMessage("Authentication system not ready.")
             return
         }
@@ -103,40 +154,26 @@ class MicrosoftAccountRepository @Inject constructor(
             val message = when (result) {
                 is AddAccountResult.Success -> "Account added: ${result.account.username}"
                 is AddAccountResult.Error -> "Error adding account: ${
-                    // Use injected interface instance
                     errorMapper.mapAuthExceptionToUserMessage(result.exception)
                 }"
+
                 is AddAccountResult.Cancelled -> "Account addition cancelled."
                 is AddAccountResult.NotInitialized -> "Authentication system not ready."
-                // No need for 'else' if sealed class is handled exhaustively
             }
-            // Note: State flows (_accounts, _authState) are updated via the listener,
-            // we only need to emit the transient message here.
             tryEmitMessage(message)
             // Loading state is reset inside onAuthStateChanged listener for robustness
         }
     }
 
-    override suspend fun addAccount(
-        activity: Activity,
-        scopes: List<String>,
-        providerType: String
-    ) {
-        // For Microsoft repository implementation, we ignore the providerType parameter
-        // as this repository can only handle Microsoft accounts
-        if (providerType != "MS") {
-            Log.w(TAG, "addAccount called with unsupported provider type: $providerType")
-            tryEmitMessage("Provider type not supported by this repository: $providerType")
-            return
-        }
-
-        // Delegate to the existing implementation
-        addAccount(activity, scopes)
-    }
-
-    override suspend fun removeAccount(account: Account) {
+    /**
+     * Microsoft-specific account removal.
+     */
+    private suspend fun removeMicrosoftAccount(account: Account) {
         if (authState.value !is AuthState.Initialized) {
-            Log.w(TAG, "removeAccount called but auth state is not Initialized: ${authState.value}")
+            Log.w(
+                TAG,
+                "removeMicrosoftAccount called but auth state is not Initialized: ${authState.value}"
+            )
             tryEmitMessage("Authentication system not ready.")
             return
         }
@@ -160,22 +197,16 @@ class MicrosoftAccountRepository @Inject constructor(
             val message = when (result) {
                 is RemoveAccountResult.Success -> "Account removed: ${accountToRemove.username}"
                 is RemoveAccountResult.Error -> "Error removing account: ${
-                    // Use injected interface instance
                     errorMapper.mapAuthExceptionToUserMessage(result.exception)
                 }"
+
                 is RemoveAccountResult.NotInitialized -> "Authentication system not ready."
                 is RemoveAccountResult.AccountNotFound -> "Account to remove not found."
-                // No need for 'else' if sealed class is handled exhaustively
             }
             // State flows are updated via the listener. Emit the message.
             tryEmitMessage(message)
             // Loading state is reset inside onAuthStateChanged
         }
-    }
-
-    /** Clears the last emitted transient message. */
-    override fun clearAccountActionMessage() {
-        tryEmitMessage(null) // Request emission of null
     }
 
     // --- Helper Functions ---

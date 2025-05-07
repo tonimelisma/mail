@@ -24,6 +24,10 @@ appcompat = "1.7.0"
 material = "1.12.0"
 # okhttpVersion = "4.12.0" # Optional: Specify OkHttp version if needed, often handled by Ktor
 
+# Google Play Services
+playServicesAuth = "21.1.0" # Google Sign-In
+activityKtx = "1.9.0" # For ActivityResultLauncher
+
 [libraries]
 kotlin-stdlib = { group = "org.jetbrains.kotlin", name = "kotlin-stdlib", version.ref = "kotlin" }
 kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }
@@ -40,6 +44,11 @@ ktor-client-contentnegotiation = { module = "io.ktor:ktor-client-content-negotia
 ktor-serialization-kotlinx-json = { module = "io.ktor:ktor-serialization-kotlinx-json", version.ref = "ktor" } # Adapter for Kotlinx Serialization
 ktor-client-logging = { module = "io.ktor:ktor-client-logging", version.ref = "ktor" } # Optional Ktor logging
 # --- END Ktor Client ---
+
+# --- Google Play Services ---
+google-play-services-auth = { group = "com.google.android.gms", name = "play-services-auth", version.ref = "playServicesAuth" }
+androidx-activity-ktx = { group = "androidx.activity", name = "activity-ktx", version.ref = "activityKtx" }
+# --- END Google Play Services ---
 
 # --- OkHttp (Optional, often transitive via ktor-client-okhttp) ---
 # okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttpVersion" }
