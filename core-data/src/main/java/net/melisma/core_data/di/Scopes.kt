@@ -1,12 +1,12 @@
-package net.melisma.core_data.di // New package in core-data
+package net.melisma.core_data.di
 
-import javax.inject.Qualifier
+import javax.inject.Scope
 
 /**
- * Qualifier annotation for distinguishing the application-level CoroutineScope.
- * Defined in :core-data so it can be used by any module providing or consuming this scope.
- * Ensures that the correct scope is injected where needed (e.g., for long-running background tasks).
+ * Custom Hilt scope annotation for application-level lifecycle.
+ * Ensures that dependencies annotated with this scope live as long as the application.
+ * Used for providing an application-level CoroutineScope.
  */
-@Qualifier
-@Retention(AnnotationRetention.BINARY)
+@Scope // <<< CORRECT ANNOTATION FOR A SCOPE
+@Retention(AnnotationRetention.RUNTIME) // Standard for custom Hilt scopes
 annotation class ApplicationScope

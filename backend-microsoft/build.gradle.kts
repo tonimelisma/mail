@@ -5,12 +5,12 @@ plugins {
     alias(libs.plugins.kotlin.android)
     id("org.jetbrains.kotlin.kapt")
     alias(libs.plugins.hilt.gradle)
-    alias(libs.plugins.kotlin.serialization) // <<< APPLY SERIALIZATION PLUGIN
+    alias(libs.plugins.kotlin.serialization)
 }
 
 android {
     namespace = "net.melisma.backend_microsoft"
-    compileSdk = 35
+    compileSdk = 35 // Make sure this is consistent with your project, e.g., 34 if not on preview
 
     defaultConfig {
         minSdk = 26
@@ -34,6 +34,9 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {
@@ -42,7 +45,8 @@ dependencies {
     implementation(project(":core-common"))
 
     // --- MSAL ---
-    implementation(libs.microsoft.msal)
+    // CHANGED 'implementation' to 'api' to expose MSAL to dependent modules like :data
+    api(libs.microsoft.msal) // <<< --- CHANGE HERE
 
     // --- Hilt ---
     implementation(libs.hilt.android)
@@ -52,17 +56,13 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.coroutines.core)
 
-    // --- Ktor Client Dependencies --- ADDED BLOCK ---
+    // --- Ktor Client Dependencies ---
     implementation(libs.ktor.client.core)
     implementation(libs.ktor.client.okhttp)
     implementation(libs.ktor.client.contentnegotiation)
     implementation(libs.ktor.serialization.kotlinx.json)
-    implementation(libs.kotlinx.serialization.json) // Core serialization runtime
-    implementation(libs.ktor.client.logging) // Optional Ktor logging
-    // --- END Ktor Block ---
-
-    // --- JSON Parsing (Old - REMOVE if GraphApiHelper no longer uses org.json) ---
-    // implementation(libs.org.json)
+    implementation(libs.kotlinx.serialization.json)
+    implementation(libs.ktor.client.logging)
 
     // --- Unit Testing ---
     testImplementation(libs.junit)
@@ -70,7 +70,8 @@ dependencies {
     testImplementation(libs.mockk.android)
     testImplementation(libs.mockk.agent)
     testImplementation(libs.kotlinx.coroutines.test)
-    testImplementation(libs.turbine) // Uncommented for testing Flow-based code
+    testImplementation(libs.turbine)
+    testImplementation(libs.ktor.client.mock)
 
     // --- Instrumented Testing ---
     androidTestImplementation(libs.androidx.junit)

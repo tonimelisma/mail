@@ -11,9 +11,11 @@
           <set>
             <option value="$PROJECT_DIR$" />
             <option value="$PROJECT_DIR$/app" />
+            <option value="$PROJECT_DIR$/backend-google" />
             <option value="$PROJECT_DIR$/backend-microsoft" />
             <option value="$PROJECT_DIR$/core-common" />
             <option value="$PROJECT_DIR$/core-data" />
+            <option value="$PROJECT_DIR$/data" />
           </set>
         </option>
       </GradleProjectSettings>

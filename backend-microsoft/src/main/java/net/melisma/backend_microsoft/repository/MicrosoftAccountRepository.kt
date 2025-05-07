@@ -1,4 +1,5 @@
-package net.melisma.backend_microsoft.repository // Still in this package for now
+// File: backend-microsoft/src/main/java/net/melisma/backend_microsoft/repository/MicrosoftAccountRepository.kt
+package net.melisma.backend_microsoft.repository
 
 import android.app.Activity
 import android.util.Log
@@ -12,13 +13,15 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import net.melisma.backend_microsoft.auth.AddAccountResult
 import net.melisma.backend_microsoft.auth.AuthStateListener
 import net.melisma.backend_microsoft.auth.MicrosoftAuthManager
 import net.melisma.backend_microsoft.auth.RemoveAccountResult
-// import net.melisma.backend_microsoft.errors.ErrorMapper // OLD IMPORT
-import net.melisma.core_common.errors.ErrorMapperService // NEW INTERFACE IMPORT
+import net.melisma.core_common.errors.ErrorMapperService
 import net.melisma.core_data.di.ApplicationScope
 import net.melisma.core_data.model.Account
 import net.melisma.core_data.model.AuthState
@@ -26,30 +29,21 @@ import net.melisma.core_data.repository.AccountRepository
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/**
- * Microsoft implementation of the [AccountRepository] interface.
- * Manages Microsoft user accounts and authentication state using [MicrosoftAuthManager].
- * Listens to state changes from the auth manager and translates them into generic
- * [Account] models and [AuthState] exposed via Kotlin Flows.
- * NOTE: This class will be moved to the :data module in Step 1.4.
- */
 @Singleton
 class MicrosoftAccountRepository @Inject constructor(
-    private val microsoftAuthManager: MicrosoftAuthManager, // Injected
-    @ApplicationScope private val externalScope: CoroutineScope, // Use the qualifier
-    private val errorMapper: ErrorMapperService // <-- INJECT THE INTERFACE
-) : AccountRepository, AuthStateListener { // Implement both interfaces
+    private val microsoftAuthManager: MicrosoftAuthManager,
+    @ApplicationScope private val externalScope: CoroutineScope,
+    private val errorMapper: ErrorMapperService
+) : AccountRepository, AuthStateListener {
 
     private val TAG = "MicrosoftAccountRepo"
 
-    // --- State Flows reflecting Manager State ---
     private val _authState = MutableStateFlow(determineInitialAuthState())
     override val authState: StateFlow<AuthState> = _authState.asStateFlow()
 
     private val _accounts = MutableStateFlow(mapToGenericAccounts(microsoftAuthManager.accounts))
     override val accounts: StateFlow<List<Account>> = _accounts.asStateFlow()
 
-    // --- State Flows for Repository Actions ---
     private val _isLoadingAccountAction = MutableStateFlow(false)
     override val isLoadingAccountAction: StateFlow<Boolean> = _isLoadingAccountAction.asStateFlow()
 
@@ -58,63 +52,64 @@ class MicrosoftAccountRepository @Inject constructor(
     )
     override val accountActionMessage: Flow<String?> = _accountActionMessage.asSharedFlow()
 
-    // --- Initialization ---
     init {
         Log.d(TAG, "Initializing and registering as AuthStateListener")
-        // Register this repository to listen for changes from the auth manager.
         microsoftAuthManager.setAuthStateListener(this)
-        // Ensure initial state is synced after registration
         syncStateFromManager()
     }
 
-    // --- AuthStateListener Implementation ---
-    /**
-     * Called by [MicrosoftAuthManager] when its state changes.
-     * Updates the repository's internal state flows.
-     */
     override fun onAuthStateChanged(
         isInitialized: Boolean,
-        accounts: List<IAccount>,
+        msalAccounts: List<IAccount>, // Renamed for clarity
         error: MsalException?
     ) {
         Log.d(
             TAG,
-            "Listener notified: init=$isInitialized, count=${accounts.size}, err=${error != null}"
+            "AuthStateListener notified: init=$isInitialized, msalAccountCount=${msalAccounts.size}, errorPresent=${error != null}"
         )
-        // Update auth state based on manager's status
         _authState.value = determineAuthState(isInitialized, error)
-        // Update the generic account list based on manager's accounts
-        _accounts.value = mapToGenericAccounts(accounts)
-        // Assume any auth state change means a pending action (if any) is complete.
-        _isLoadingAccountAction.value = false // Reset loading indicator
+        _accounts.value = mapToGenericAccounts(msalAccounts)
+        // If an auth state change occurs, it might imply a previous action completed.
+        // However, specific loading states should ideally be managed per action.
+        // For simplicity, we can reset a general loading indicator here, but it's broad.
+        _isLoadingAccountAction.value = false
     }
 
-    // --- AccountRepository Interface Implementation ---
     override suspend fun addAccount(activity: Activity, scopes: List<String>) {
         if (authState.value !is AuthState.Initialized) {
             Log.w(TAG, "addAccount called but auth state is not Initialized: ${authState.value}")
             tryEmitMessage("Authentication system not ready.")
             return
         }
-        _isLoadingAccountAction.value = true // Indicate operation started
-        // Delegate the action to MicrosoftAuthManager
-        microsoftAuthManager.addAccount(activity, scopes) { result ->
-            // Map the MSAL-specific result to a user-friendly message
-            val message = when (result) {
-                is AddAccountResult.Success -> "Account added: ${result.account.username}"
-                is AddAccountResult.Error -> "Error adding account: ${
-                    // Use injected interface instance
-                    errorMapper.mapAuthExceptionToUserMessage(result.exception)
-                }"
-                is AddAccountResult.Cancelled -> "Account addition cancelled."
-                is AddAccountResult.NotInitialized -> "Authentication system not ready."
-                // No need for 'else' if sealed class is handled exhaustively
+        _isLoadingAccountAction.value = true
+
+        // Collect the Flow from MicrosoftAuthManager
+        microsoftAuthManager.addAccount(activity, scopes)
+            .onEach { result -> // Process the single emitted result
+                val message = when (result) {
+                    is AddAccountResult.Success -> "Account added: ${result.account.username}"
+                    is AddAccountResult.Error -> "Error adding account: ${
+                        errorMapper.mapAuthExceptionToUserMessage(result.exception)
+                    }"
+
+                    is AddAccountResult.Cancelled -> "Account addition cancelled."
+                    is AddAccountResult.NotInitialized -> "Authentication system not ready."
+                    // No 'else' needed for sealed class if all direct subtypes are handled.
+                    // If compiler insists, it might be due to older Kotlin/Lint versions or a bug.
+                    // In such cases, an `else -> {}` or `else -> error("Unhandled AddAccountResult: $result")` can be added.
+                }
+                tryEmitMessage(message)
+                // The AuthStateListener (onAuthStateChanged) will handle updating accounts list
+                // and resetting isLoadingAccountAction more broadly.
+                // If more granular control is needed, reset _isLoadingAccountAction here.
+                _isLoadingAccountAction.value = false // Reset after processing the result
             }
-            // Note: State flows (_accounts, _authState) are updated via the listener,
-            // we only need to emit the transient message here.
-            tryEmitMessage(message)
-            // Loading state is reset inside onAuthStateChanged listener for robustness
-        }
+            .catch { e -> // Catch any exceptions from the flow itself (should be rare if MSAL handles errors)
+                Log.e(TAG, "Exception in addAccount flow", e)
+                tryEmitMessage("An unexpected error occurred while adding the account.")
+                _isLoadingAccountAction.value = false
+            }
+            .launchIn(externalScope) // Launch in the external scope
     }
 
     override suspend fun addAccount(
@@ -122,16 +117,16 @@ class MicrosoftAccountRepository @Inject constructor(
         scopes: List<String>,
         providerType: String
     ) {
-        // For Microsoft repository implementation, we ignore the providerType parameter
-        // as this repository can only handle Microsoft accounts
-        if (providerType != "MS") {
-            Log.w(TAG, "addAccount called with unsupported provider type: $providerType")
-            tryEmitMessage("Provider type not supported by this repository: $providerType")
-            return
+        if (providerType.equals("MS", ignoreCase = true)) {
+            addAccount(activity, scopes)
+        } else {
+            Log.w(
+                TAG,
+                "addAccount called with unsupported provider type: $providerType for MicrosoftAccountRepository"
+            )
+            tryEmitMessage("Provider type '$providerType' not supported by Microsoft accounts.")
+            // Optionally set _isLoadingAccountAction.value = false if it was set before this check
         }
-
-        // Delegate to the existing implementation
-        addAccount(activity, scopes)
     }
 
     override suspend fun removeAccount(account: Account) {
@@ -140,73 +135,71 @@ class MicrosoftAccountRepository @Inject constructor(
             tryEmitMessage("Authentication system not ready.")
             return
         }
-        // Find the corresponding MSAL account object using the generic account ID.
-        val accountToRemove = microsoftAuthManager.accounts.find { it.id == account.id }
 
+        val accountToRemove = microsoftAuthManager.accounts.find { it.id == account.id }
         if (accountToRemove == null) {
             Log.e(
                 TAG,
                 "Account to remove (ID: ${account.id}) not found in MicrosoftAuthManager's list."
             )
             tryEmitMessage("Account not found for removal.")
-            _isLoadingAccountAction.value = false // Reset loading as action cannot proceed
-            return
+            return // No need to set loading true if account not found
         }
 
-        _isLoadingAccountAction.value = true // Indicate operation started
-        // Delegate the action to MicrosoftAuthManager
-        microsoftAuthManager.removeAccount(accountToRemove) { result ->
-            // Map the MSAL-specific result to a user-friendly message
-            val message = when (result) {
-                is RemoveAccountResult.Success -> "Account removed: ${accountToRemove.username}"
-                is RemoveAccountResult.Error -> "Error removing account: ${
-                    // Use injected interface instance
-                    errorMapper.mapAuthExceptionToUserMessage(result.exception)
-                }"
-                is RemoveAccountResult.NotInitialized -> "Authentication system not ready."
-                is RemoveAccountResult.AccountNotFound -> "Account to remove not found."
-                // No need for 'else' if sealed class is handled exhaustively
+        _isLoadingAccountAction.value = true
+
+        // Collect the Flow from MicrosoftAuthManager
+        microsoftAuthManager.removeAccount(accountToRemove)
+            .onEach { result -> // Process the single emitted result
+                val message = when (result) {
+                    is RemoveAccountResult.Success -> "Account removed: ${accountToRemove.username}"
+                    is RemoveAccountResult.Error -> "Error removing account: ${
+                        errorMapper.mapAuthExceptionToUserMessage(result.exception)
+                    }"
+
+                    is RemoveAccountResult.NotInitialized -> "Authentication system not ready."
+                    is RemoveAccountResult.AccountNotFound -> "Account to remove not found by authentication manager."
+                    // No 'else' needed for sealed class if all direct subtypes are handled.
+                }
+                tryEmitMessage(message)
+                // AuthStateListener will update account list.
+                _isLoadingAccountAction.value = false // Reset after processing the result
             }
-            // State flows are updated via the listener. Emit the message.
-            tryEmitMessage(message)
-            // Loading state is reset inside onAuthStateChanged
-        }
+            .catch { e ->
+                Log.e(TAG, "Exception in removeAccount flow", e)
+                tryEmitMessage("An unexpected error occurred while removing the account.")
+                _isLoadingAccountAction.value = false
+            }
+            .launchIn(externalScope) // Launch in the external scope
     }
 
-    /** Clears the last emitted transient message. */
     override fun clearAccountActionMessage() {
-        tryEmitMessage(null) // Request emission of null
+        tryEmitMessage(null)
     }
 
-    // --- Helper Functions ---
-
-    /** Safely tries to emit a message on the shared flow using the external scope. */
     private fun tryEmitMessage(message: String?) {
-        // Use the provided external scope (likely application scope) for emission
-        // to avoid issues with ViewModel scope lifecycle if repository outlives ViewModel.
         externalScope.launch {
+            // Using tryEmit for SharedFlow with buffer
             val emitted = _accountActionMessage.tryEmit(message)
             if (!emitted) {
-                // Log if emission failed (e.g., buffer full due to rapid events without collection)
                 Log.w(
                     TAG,
-                    "Failed to emit account action message (buffer full or no subscribers?): $message"
+                    "Failed to emit account action message (buffer full or no active collectors?): $message"
                 )
-            } else {
-                // Log successful emission for debugging
+            } else if (message != null) { // Avoid logging for null (clear) messages if not desired
                 Log.d(TAG, "Account action message emitted: '$message'")
             }
         }
     }
 
-    /** Forces synchronization of state from the manager to the repository flows. */
     private fun syncStateFromManager() {
-        _authState.value = determineInitialAuthState()
-        _accounts.value = mapToGenericAccounts(microsoftAuthManager.accounts)
-        _isLoadingAccountAction.value = false // Reset loading state
+        onAuthStateChanged(
+            microsoftAuthManager.isInitialized,
+            microsoftAuthManager.accounts,
+            microsoftAuthManager.initializationError
+        )
     }
 
-    /** Determines the initial AuthState based on the manager's state at construction time. */
     private fun determineInitialAuthState(): AuthState {
         return determineAuthState(
             microsoftAuthManager.isInitialized,
@@ -214,27 +207,21 @@ class MicrosoftAccountRepository @Inject constructor(
         )
     }
 
-    /** Maps the manager's initialization status and error to the generic [AuthState]. */
     private fun determineAuthState(isInitialized: Boolean, error: MsalException?): AuthState {
         return when {
-            !isInitialized && error != null -> AuthState.InitializationError(error) // Init failed
-            !isInitialized && error == null -> AuthState.Initializing // Still initializing
-            else -> AuthState.Initialized // Successfully initialized
+            !isInitialized && error != null -> AuthState.InitializationError(error)
+            !isInitialized && error == null -> AuthState.Initializing
+            else -> AuthState.Initialized
         }
     }
 
-    /** Maps a list of MSAL [IAccount] objects to a list of generic [Account] models. */
     private fun mapToGenericAccounts(msalAccounts: List<IAccount>): List<Account> {
-        return msalAccounts.map { it.toGenericAccount() }
-    }
-
-    /** Extension function to convert an MSAL [IAccount] to the generic [Account] model. */
-    private fun IAccount.toGenericAccount(): Account {
-        // Perform null checks for safety, although MSAL usually provides these.
-        return Account(
-            id = this.id ?: "", // Use MSAL account ID as the unique ID
-            username = this.username ?: "Unknown User", // Use MSAL username
-            providerType = "MS" // Hardcode the provider type for this repository
-        )
+        return msalAccounts.map { msalAccount ->
+            Account(
+                id = msalAccount.id ?: "",
+                username = msalAccount.username ?: "Unknown User",
+                providerType = "MS"
+            )
+        }
     }
 }

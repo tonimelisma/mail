@@ -7,17 +7,17 @@ plugins {
 
 android {
     namespace = "net.melisma.core_data"
-    compileSdk = 35
+    compileSdk = 35 // Ensure this matches your project's compileSdk
 
     defaultConfig {
-        minSdk = 26
+        minSdk = 26 // Ensure this matches your project's minSdk
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles("consumer-rules.pro")
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = true // You might want this false for easier debugging initially
+            isMinifyEnabled = true // Consider false for easier debugging initially
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -35,41 +35,41 @@ android {
         jvmTarget = "17"
     }
     buildFeatures {
-        // Keeping these features off seems reasonable for this module
         compose = false
         viewBinding = false
-        // androidResources = false // Keep if you truly have no resources
         buildConfig = false
         aidl = false
         renderScript = false
         resValues = false
         shaders = false
     }
-    // Recommended for MockK testing Android classes in unit tests
     testOptions {
         unitTests.isReturnDefaultValues = true
     }
 }
 
 dependencies {
-    // Kotlin Stdlib (Good practice to include explicitly)
-    implementation(libs.kotlin.stdlib) // Already present in your TOML
+    // Kotlin Stdlib
+    implementation(libs.kotlin.stdlib)
 
-    // Coroutines Core (Exported via api)
+    // Coroutines Core (Exported via api for modules that implement core-data interfaces)
     api(libs.kotlinx.coroutines.core)
 
-    // Javax Inject (Used for @Inject annotation, needed by Hilt/Dagger users)
+    // Javax Inject (Used for @Inject annotation, potentially by Hilt/Dagger users of this module's interfaces)
     implementation(libs.javax.inject)
 
-    // --- Unit Testing (test source set) --- // ADDED/UPDATED BLOCK
-    testImplementation(libs.junit)                     // Core JUnit
-    testImplementation(libs.mockk.core)                // MockK core library
-    testImplementation(libs.mockk.android)             // MockK extensions for Android classes (even in unit tests)
-    testImplementation(libs.mockk.agent)               // MockK agent for final classes/methods if needed
-    testImplementation(libs.kotlinx.coroutines.test)   // Coroutine testing utilities (runTest, TestDispatchers)
-    testImplementation(libs.turbine)                   // Flow testing helper
+    // ADDED: AndroidX Core KTX to provide androidx.annotation.RawRes and other utilities
+    implementation(libs.androidx.core.ktx)
 
-    // --- Instrumented Testing (androidTest source set) --- // NO CHANGES HERE
+    // --- Unit Testing ---
+    testImplementation(libs.junit)
+    testImplementation(libs.mockk.core)
+    testImplementation(libs.mockk.android) // For mocking Android classes if needed in core-data tests
+    testImplementation(libs.mockk.agent)   // For mocking final classes/methods if needed
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.turbine)
+
+    // --- Instrumented Testing ---
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
 }

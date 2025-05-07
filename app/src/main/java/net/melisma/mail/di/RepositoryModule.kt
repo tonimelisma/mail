@@ -1,62 +1,53 @@
+// File: app/src/main/java/net/melisma/mail/di/RepositoryModule.kt
 package net.melisma.mail.di
 
-// No longer needs Context import unless used for other providers
+// import net.melisma.core_data.di.ApplicationScope // No longer using @ApplicationScope on the @Provides method
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
-// No longer needs @ApplicationContext unless used for other providers
 import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers // Use standard Dispatchers
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import net.melisma.backend_microsoft.di.AuthConfigProvider // Import the INTERFACE defined in the backend module
-import net.melisma.core_data.di.ApplicationScope // Qualifier for Scope
-import net.melisma.core_data.di.Dispatcher // Qualifier for Dispatcher
-import net.melisma.core_data.di.MailDispatchers // Enum for Dispatcher types
-import net.melisma.mail.R // Import app's R class to provide the resource ID
+import net.melisma.core_data.di.AuthConfigProvider
+import net.melisma.core_data.di.Dispatcher
+import net.melisma.core_data.di.MailDispatchers
+import net.melisma.mail.R
 import javax.inject.Singleton
-
 
 /**
  * Hilt Module for providing Application-level dependencies.
- * Provides the AuthConfigProvider implementation needed by backend modules,
- * the application-wide CoroutineScope, and Dispatchers.
  */
 @Module
 @InstallIn(SingletonComponent::class)
-object RepositoryModule { // Changed to object as it only contains @Provides
+object RepositoryModule {
 
-    // Provide the application-level CoroutineScope, qualified by @ApplicationScope
-    @ApplicationScope
-    @Provides
+    /**
+     * Provides the application-level CoroutineScope.
+     * It's scoped with @Singleton as this module is installed in SingletonComponent.
+     */
+    // CHANGED @ApplicationScope to @Singleton
     @Singleton
+    @Provides
     fun provideApplicationCoroutineScope(
-        @Dispatcher(MailDispatchers.IO) ioDispatcher: CoroutineDispatcher // Inject the IO dispatcher
+        // You can use your @Dispatcher qualifier if you have multiple CoroutineDispatchers
+        // and need to distinguish them. For a single IO dispatcher, it's fine.
+        @Dispatcher(MailDispatchers.IO) ioDispatcher: CoroutineDispatcher
     ): CoroutineScope {
-        // Use SupervisorJob + IO Dispatcher for background tasks independent of ViewModel lifecycle
         return CoroutineScope(SupervisorJob() + ioDispatcher)
     }
 
-    // Provide the IO Dispatcher, qualified by @Dispatcher
-    @Dispatcher(MailDispatchers.IO)
+    @Dispatcher(MailDispatchers.IO) // This is a @Qualifier
     @Provides
-    @Singleton
+    @Singleton // This is the @Scope
     fun provideIoDispatcher(): CoroutineDispatcher = Dispatchers.IO
 
-    // Provide the concrete implementation of AuthConfigProvider needed by MicrosoftAuthManager
     @Provides
     @Singleton
     fun provideAuthConfigProvider(): AuthConfigProvider {
-        // This object implements the interface defined in :backend-microsoft
-        // and provides the actual resource ID from this :app module.
         return object : AuthConfigProvider {
             override fun getMsalConfigResId(): Int = R.raw.auth_config
         }
     }
-
-    // NO LONGER PROVIDES/BINDS:
-    // - MicrosoftAuthManager (provided in :backend-microsoft)
-    // - Repositories (will be bound in :data)
-    // - GraphApiHelper (uses @Inject constructor)
 }

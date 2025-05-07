@@ -39,6 +39,7 @@ dependencies {
     implementation(project(":core-data"))
     implementation(project(":core-common")) // For ErrorMapper
     implementation(project(":backend-microsoft")) // For MS-specific components
+//    implementation(project(":backend-google")) // For Google-specific components
 
     // --- Hilt ---
     implementation(libs.hilt.android)
@@ -46,6 +47,9 @@ dependencies {
 
     // --- Coroutines ---
     implementation(libs.kotlinx.coroutines.core)
+
+    // --- Activity Result API ---
+    implementation(libs.androidx.activity.ktx) // Needed for handling Google sign-in result
 
     // --- Unit Testing ---
     testImplementation(libs.junit)

@@ -1,6 +1,7 @@
+// File: backend-microsoft/src/main/java/net/melisma/backend_microsoft/di/BackendMicrosoftModule.kt
 package net.melisma.backend_microsoft.di
 
-// Import the interface from its own file
+// HttpClient and Json will be provided by NetworkModule.kt, so remove Ktor imports if not used elsewhere here.
 import android.content.Context
 import dagger.Binds
 import dagger.Module
@@ -13,13 +14,10 @@ import net.melisma.backend_microsoft.datasource.MicrosoftTokenProvider
 import net.melisma.backend_microsoft.errors.MicrosoftErrorMapper
 import net.melisma.core_common.errors.ErrorMapperService
 import net.melisma.core_data.datasource.TokenProvider
+import net.melisma.core_data.di.AuthConfigProvider
 import javax.inject.Singleton
 
-// REMOVED Duplicate Interface Definition:
-// interface AuthConfigProvider {
-//     fun getMsalConfigResId(): Int
-// }
-
+// This module binds interfaces to their concrete implementations within this backend module.
 @Module
 @InstallIn(SingletonComponent::class)
 abstract class BackendMicrosoftBindingModule {
@@ -27,16 +25,17 @@ abstract class BackendMicrosoftBindingModule {
     @Binds
     @Singleton
     abstract fun bindErrorMapperService(
-        microsoftErrorMapper: MicrosoftErrorMapper
+        microsoftErrorMapper: MicrosoftErrorMapper // Provided via @Inject constructor
     ): ErrorMapperService
 
     @Binds
     @Singleton
     abstract fun bindTokenProvider(
-        microsoftTokenProvider: MicrosoftTokenProvider
+        microsoftTokenProvider: MicrosoftTokenProvider // Provided via @Inject constructor
     ): TokenProvider
 }
 
+// This module provides instances of classes that need explicit construction.
 @Module
 @InstallIn(SingletonComponent::class)
 object BackendMicrosoftProvidesModule {
@@ -45,11 +44,14 @@ object BackendMicrosoftProvidesModule {
     @Singleton
     fun provideMicrosoftAuthManager(
         @ApplicationContext context: Context,
-        authConfigProvider: AuthConfigProvider // Inject the imported interface
+        authConfigProvider: AuthConfigProvider // Injected by Hilt (implementation from :app module)
     ): MicrosoftAuthManager {
         return MicrosoftAuthManager(context, authConfigProvider)
     }
 
-    // Note: MicrosoftTokenProvider, MicrosoftErrorMapper, and GraphApiHelper
-    // use @Inject constructor(...) and Hilt provides them automatically.
+    // REMOVED: provideKtorJson() - This will now be provided by NetworkModule.kt
+    // REMOVED: provideKtorHttpClient() - This will now be provided by NetworkModule.kt
+
+    // GraphApiHelper, MicrosoftTokenProvider, MicrosoftErrorMapper are assumed to use @Inject constructor.
+    // If GraphApiHelper needs HttpClient, Hilt will inject it from NetworkModule.
 }
