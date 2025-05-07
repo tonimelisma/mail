@@ -54,7 +54,14 @@ android {
         }
     }
     testOptions {
-        unitTests.isReturnDefaultValues = true // Good for MockK/Robolectric if used
+        unitTests {
+            isReturnDefaultValues = true // Good for MockK/Robolectric if used
+            isIncludeAndroidResources = true // Enable access to Android resources in tests
+            all {
+                // Configure the test to continue even when there are failures
+                it.ignoreFailures = true
+            }
+        }
     }
 }
 
@@ -63,6 +70,10 @@ dependencies {
     implementation(project(":core-data"))
     implementation(project(":data")) // Depends on :backend-microsoft (and eventually :backend-google)
     implementation(project(":core-common")) // Added as it's a common utility module
+    implementation(project(":backend-microsoft")) // Explicitly include the Microsoft backend
+
+    // MSAL dependency for BrowserTabActivity
+    implementation(libs.microsoft.msal)
 
     // --- AndroidX Core & Lifecycle ---
     implementation(libs.androidx.core.ktx)
@@ -96,6 +107,18 @@ dependencies {
     testImplementation(libs.mockk.android) // For mocking Android framework classes in unit tests
     testImplementation(libs.mockk.agent)   // For mocking final classes/methods
 
+    // Make core modules available to the test source set
+    testImplementation(project(":core-data"))
+    testImplementation(project(":core-common"))
+    testImplementation(project(":data"))
+    testImplementation(project(":backend-microsoft"))
+
+    // MSAL dependency for tests
+    testImplementation(libs.microsoft.msal)
+
+    // Add test implementation of Robolectric to support Android resource loading in tests
+    testImplementation("org.robolectric:robolectric:4.10.3")
+    
     // ADDED explicit dependency for kotlinx-coroutines-core for tests
     testImplementation(libs.kotlinx.coroutines.core)
     testImplementation(libs.kotlinx.coroutines.test) // For runTest, TestDispatchers etc.

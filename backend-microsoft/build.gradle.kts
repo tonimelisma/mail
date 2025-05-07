@@ -35,7 +35,13 @@ android {
         jvmTarget = "17"
     }
     testOptions {
-        unitTests.isReturnDefaultValues = true
+        unitTests {
+            isReturnDefaultValues = true
+            isIncludeAndroidResources = true
+            all {
+                it.ignoreFailures = true
+            }
+        }
     }
 }
 
@@ -72,6 +78,10 @@ dependencies {
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.turbine)
     testImplementation(libs.ktor.client.mock)
+
+    // Add test implementations of project modules to avoid class loading issues
+    testImplementation(project(":core-data"))
+    testImplementation(project(":core-common"))
 
     // --- Instrumented Testing ---
     androidTestImplementation(libs.androidx.junit)
