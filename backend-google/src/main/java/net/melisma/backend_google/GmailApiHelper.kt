@@ -15,10 +15,9 @@ import net.melisma.backend_google.di.GoogleHttpClient
 import net.melisma.backend_google.model.GmailLabel
 import net.melisma.backend_google.model.GmailLabelList
 import net.melisma.backend_google.model.GmailMessage
-import net.melisma.backend_google.model.GmailMessageIdentifier
 import net.melisma.backend_google.model.GmailMessageList
 import net.melisma.backend_google.model.MessagePartHeader
-import net.melisma.core_common.errors.ErrorMapperService
+import net.melisma.core_data.errors.ErrorMapperService
 import net.melisma.core_data.model.MailFolder
 import net.melisma.core_data.model.Message
 import java.text.SimpleDateFormat
@@ -157,11 +156,7 @@ class GmailApiHelper @Inject constructor(
 
         // Skip certain system labels that aren't useful in the UI
         val skipLabels = listOf("CHAT")
-        if (label.type == "system" && label.name in skipLabels) {
-            return false
-        }
-
-        return true
+        return !(label.type == "system" && label.name in skipLabels)
     }
 
     /**

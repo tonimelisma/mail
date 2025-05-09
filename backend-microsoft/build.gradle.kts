@@ -48,7 +48,6 @@ android {
 dependencies {
     // --- Project Modules ---
     implementation(project(":core-data"))
-    implementation(project(":core-common"))
 
     // --- MSAL ---
     // CHANGED 'implementation' to 'api' to expose MSAL to dependent modules like :data
@@ -81,7 +80,6 @@ dependencies {
 
     // Add test implementations of project modules to avoid class loading issues
     testImplementation(project(":core-data"))
-    testImplementation(project(":core-common"))
 
     // --- Instrumented Testing ---
     androidTestImplementation(libs.androidx.junit)

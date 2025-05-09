@@ -15,8 +15,8 @@ import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.json.Json
 import net.melisma.backend_google.GmailApiHelper
 import net.melisma.backend_google.datasource.GoogleTokenProvider
-import net.melisma.core_common.errors.ErrorMapperService
 import net.melisma.core_data.datasource.TokenProvider
+import net.melisma.core_data.errors.ErrorMapperService
 import java.util.concurrent.TimeUnit
 import javax.inject.Qualifier
 import javax.inject.Singleton

@@ -12,9 +12,9 @@ import dagger.hilt.components.SingletonComponent
 import net.melisma.backend_microsoft.auth.MicrosoftAuthManager
 import net.melisma.backend_microsoft.datasource.MicrosoftTokenProvider
 import net.melisma.backend_microsoft.errors.MicrosoftErrorMapper
-import net.melisma.core_common.errors.ErrorMapperService
 import net.melisma.core_data.datasource.TokenProvider
 import net.melisma.core_data.di.AuthConfigProvider
+import net.melisma.core_data.errors.ErrorMapperService
 import javax.inject.Singleton
 
 // This module binds interfaces to their concrete implementations within this backend module.

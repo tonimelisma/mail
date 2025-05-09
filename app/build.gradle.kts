@@ -69,7 +69,6 @@ dependencies {
     // --- Project Modules ---
     implementation(project(":core-data"))
     implementation(project(":data")) // Depends on :backend-microsoft (and eventually :backend-google)
-    implementation(project(":core-common")) // Added as it's a common utility module
     implementation(project(":backend-microsoft")) // Explicitly include the Microsoft backend
 
     // MSAL dependency for BrowserTabActivity
@@ -109,7 +108,6 @@ dependencies {
 
     // Make core modules available to the test source set
     testImplementation(project(":core-data"))
-    testImplementation(project(":core-common"))
     testImplementation(project(":data"))
     testImplementation(project(":backend-microsoft"))
 

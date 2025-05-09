@@ -13,11 +13,11 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import net.melisma.backend_microsoft.GraphApiHelper
-import net.melisma.core_common.errors.ErrorMapperService
 import net.melisma.core_data.datasource.TokenProvider
 import net.melisma.core_data.di.ApplicationScope
 import net.melisma.core_data.di.Dispatcher
 import net.melisma.core_data.di.MailDispatchers
+import net.melisma.core_data.errors.ErrorMapperService
 import net.melisma.core_data.model.Account
 import net.melisma.core_data.model.MailFolder
 import net.melisma.core_data.model.MessageDataState

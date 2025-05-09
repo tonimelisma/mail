@@ -21,8 +21,8 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import net.melisma.backend_microsoft.GraphApiHelper
-import net.melisma.core_common.errors.ErrorMapperService
 import net.melisma.core_data.datasource.TokenProvider
+import net.melisma.core_data.errors.ErrorMapperService
 import net.melisma.core_data.model.Account
 import net.melisma.core_data.model.MailFolder
 import net.melisma.core_data.model.Message

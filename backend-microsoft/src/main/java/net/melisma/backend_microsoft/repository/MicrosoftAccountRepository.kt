@@ -21,8 +21,8 @@ import net.melisma.backend_microsoft.auth.AddAccountResult
 import net.melisma.backend_microsoft.auth.AuthStateListener
 import net.melisma.backend_microsoft.auth.MicrosoftAuthManager
 import net.melisma.backend_microsoft.auth.RemoveAccountResult
-import net.melisma.core_common.errors.ErrorMapperService
 import net.melisma.core_data.di.ApplicationScope
+import net.melisma.core_data.errors.ErrorMapperService
 import net.melisma.core_data.model.Account
 import net.melisma.core_data.model.AuthState
 import net.melisma.core_data.repository.AccountRepository

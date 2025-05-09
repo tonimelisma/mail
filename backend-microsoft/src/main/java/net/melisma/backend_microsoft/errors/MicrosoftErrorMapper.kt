@@ -6,7 +6,7 @@ import com.microsoft.identity.client.exception.MsalException
 import com.microsoft.identity.client.exception.MsalServiceException
 import com.microsoft.identity.client.exception.MsalUiRequiredException
 import com.microsoft.identity.client.exception.MsalUserCancelException
-import net.melisma.core_common.errors.ErrorMapperService // Import the interface
+import net.melisma.core_data.errors.ErrorMapperService // Import the interface
 import java.io.IOException
 import java.net.UnknownHostException
 import javax.inject.Inject

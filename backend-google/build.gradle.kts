@@ -37,8 +37,7 @@ android {
 
 dependencies {
     // --- Project Modules ---
-    implementation(project(":core-data"))
-    implementation(project(":core-common")) // For ErrorMapper
+    implementation(project(":core-data")) // Includes ErrorMapperService now
 
     // --- Google Sign-In ---
     implementation(libs.google.play.services.auth)

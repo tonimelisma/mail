@@ -10,10 +10,10 @@ import com.google.android.gms.common.api.Scope
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.withContext
-import net.melisma.core_common.errors.ErrorMapperService
 import net.melisma.core_data.datasource.TokenProvider
 import net.melisma.core_data.di.Dispatcher
 import net.melisma.core_data.di.MailDispatchers
+import net.melisma.core_data.errors.ErrorMapperService
 import net.melisma.core_data.model.Account
 import java.io.IOException
 import javax.inject.Inject

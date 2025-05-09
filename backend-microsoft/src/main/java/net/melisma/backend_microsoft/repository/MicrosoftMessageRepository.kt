@@ -1,5 +1,6 @@
 package net.melisma.backend_microsoft.repository // Still in this package for now
 
+// import net.melisma.backend_microsoft.errors.ErrorMapper // OLD IMPORT
 import android.app.Activity
 import android.util.Log
 import kotlinx.coroutines.CoroutineDispatcher
@@ -13,12 +14,11 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import net.melisma.backend_microsoft.GraphApiHelper
-// import net.melisma.backend_microsoft.errors.ErrorMapper // OLD IMPORT
-import net.melisma.core_common.errors.ErrorMapperService // NEW INTERFACE IMPORT
 import net.melisma.core_data.datasource.TokenProvider
 import net.melisma.core_data.di.ApplicationScope
 import net.melisma.core_data.di.Dispatcher
 import net.melisma.core_data.di.MailDispatchers
+import net.melisma.core_data.errors.ErrorMapperService
 import net.melisma.core_data.model.Account
 import net.melisma.core_data.model.MailFolder
 import net.melisma.core_data.model.MessageDataState

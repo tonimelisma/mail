@@ -36,8 +36,7 @@ android {
 
 dependencies {
     // --- Project Modules ---
-    implementation(project(":core-data"))
-    implementation(project(":core-common")) // For ErrorMapper
+    implementation(project(":core-data")) // Includes ErrorMapperService now
     implementation(project(":backend-microsoft")) // For MS-specific components
 //    implementation(project(":backend-google")) // For Google-specific components
 

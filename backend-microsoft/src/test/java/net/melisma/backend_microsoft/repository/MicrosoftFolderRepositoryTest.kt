@@ -1,5 +1,6 @@
 package net.melisma.backend_microsoft.repository
 
+// import net.melisma.backend_microsoft.errors.ErrorMapper // OLD IMPORT
 import android.app.Activity
 import android.util.Log
 import app.cash.turbine.test
@@ -21,9 +22,8 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import net.melisma.backend_microsoft.GraphApiHelper
-// import net.melisma.backend_microsoft.errors.ErrorMapper // OLD IMPORT
-import net.melisma.core_common.errors.ErrorMapperService // NEW INTERFACE IMPORT
 import net.melisma.core_data.datasource.TokenProvider
+import net.melisma.core_data.errors.ErrorMapperService
 import net.melisma.core_data.model.Account
 import net.melisma.core_data.model.FolderFetchState
 import net.melisma.core_data.model.MailFolder
