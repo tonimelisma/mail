@@ -1,6 +1,6 @@
 # Melisma Mail - Comprehensive Project Guide
 
-**Version:** 1.1 (Consolidated and Updated on May 8, 2025)
+**Version:** 1.2 (Consolidated and Updated on May 8, 2025)
 
 ## 1. Project Overview
 
@@ -13,13 +13,14 @@ The application follows a modular architecture utilizing Hilt for dependency inj
 * **Microsoft Account Support:**
     * Users can securely sign in and out using Microsoft accounts (MSAL).
     * Users can fetch and view a list of their mail folders after signing in.
-    * Core refactoring (Phase 1 of `GOOGLE.md`) is largely complete, including centralized error mapping, Ktor networking in `:backend-microsoft`, Flow-based `MicrosoftTokenProvider`, and the `:data` module with default repositories.
+    * Core refactoring (Phase 1 of `GOOGLE.md`) is largely complete, including Ktor networking in `:backend-microsoft`, Flow-based `MicrosoftTokenProvider`, and the `:data` module with default repositories.
+    * `ErrorMapperService` interface defined (to be homed in `:core-data`).
 * **Google Account Support (In Progress):**
     * Foundational components in the `:backend-google` module are implemented (`GoogleAuthManager`, `GoogleTokenProvider`, `GmailApiHelper`, `GmailModels`).
     * **Key Pending Work for Google Integration:**
         1.  **Google Cloud & Project Setup:** Requires adding `app/google-services.json` and activating the Google Services Gradle plugin in `app/build.gradle.kts`. External Google Cloud Console configuration (API enablement, OAuth client, consent screen) must also be verified.
-        2.  **Data Layer Integration:** The `:backend-google` module needs to be enabled as a dependency in `data/build.gradle.kts`. The `DefaultAccountRepository`, `DefaultFolderRepository`, and `DefaultMessageRepository` in the `:data` module need to be updated to inject and use Google-specific components (`GoogleAuthManager`, `GoogleTokenProvider`, `GmailApiHelper`) and handle the "GOOGLE" provider type.
-        3.  **Error Handling:** The `ErrorMapperService` implementation needs to be updated to specifically handle Google-related exceptions (e.g., `ApiException`, `GoogleAuthException`).
+        2.  **Data Layer Integration:** The `:backend-google` module needs to be enabled as a dependency in `data/build.gradle.kts`. The `DefaultAccountRepository`, `DefaultFolderRepository`, and `DefaultMessageRepository` in the `:data` module need to be updated to inject and use Google-specific components (`GoogleAuthManager`, `GoogleTokenProvider`, `GmailApiHelper` or its abstraction) and handle the "GOOGLE" provider type.
+        3.  **Error Handling Refinement:** The `ErrorMapperService` implementation needs to be updated/unified to specifically handle Google-related exceptions.
         4.  **UI/UX Adjustments:** UI elements need updates to support adding Google accounts and displaying Gmail labels/messages correctly.
 
 ### 1.2. Setup & Build
@@ -35,7 +36,7 @@ The application follows a modular architecture utilizing Hilt for dependency inj
 
 ## 2. Requirements & Architecture
 
-*(Derived from DESIGN_DOC.md, Version 0.4)*
+*(Derived from DESIGN_DOC.md, Version 0.4 and subsequent architectural decisions)*
 
 ### 2.1. Core Principles
 
@@ -44,14 +45,15 @@ The application follows a modular architecture utilizing Hilt for dependency inj
 * **Dependency Injection:** Hilt.
 * **Modularity:** See section 2.2.
 
-### 2.2. Modules
+### 2.2. Modules (Revised May 8, 2025)
 
 * **:app**: Main application module with UI (Jetpack Compose), ViewModels, and the `MailApplication` class.
-* **:core-data**: Defines core data interfaces (repositories, data sources), data models (Account, MailFolder, Message, etc.), and DI helpers like `AuthConfigProvider`.
-* **:core-common**: Provides shared utilities, notably the `ErrorMapperService` interface.
-* **:data**: Implements repository interfaces from `:core-data` (`DefaultAccountRepository`, `DefaultFolderRepository`, `DefaultMessageRepository`). This layer coordinates with backend-specific modules.
-* **:backend-microsoft**: Handles Microsoft/Outlook specific logic: MSAL authentication (`MicrosoftAuthManager`, `MicrosoftTokenProvider`), Microsoft Graph API interaction (`GraphApiHelper`), and Microsoft-specific error mapping (`MicrosoftErrorMapper`).
-* **:backend-google**: Handles Google/Gmail specific logic: Google Sign-In (`GoogleAuthManager`), token provision (`GoogleTokenProvider`), Gmail API interaction (`GmailApiHelper`), and Gmail data models (`GmailModels.kt`).
+* **:core-data**: Defines core data interfaces (repositories, data sources like `TokenProvider`), core domain models (Account, MailFolder, Message, etc.), DI helpers like `AuthConfigProvider`, and **shared service interfaces** like `ErrorMapperService` and the proposed `MailApiService`.
+* **:data**: Implements repository interfaces from `:core-data` (`DefaultAccountRepository`, `DefaultFolderRepository`, `DefaultMessageRepository`). This layer coordinates with backend-specific modules, ideally through the `MailApiService` abstraction.
+* **:backend-microsoft**: Handles Microsoft/Outlook specific logic: MSAL authentication (`MicrosoftAuthManager`, `MicrosoftTokenProvider`), Microsoft Graph API interaction (`GraphApiHelper` - to implement `MailApiService`), Ktor client setup for Graph, and Microsoft-specific error mapping (current `MicrosoftErrorMapper` - to be reviewed/unified).
+* **:backend-google**: Handles Google/Gmail specific logic: Google Sign-In (`GoogleAuthManager`), token provision (`GoogleTokenProvider`), Gmail API interaction (`GmailApiHelper` - to implement `MailApiService`), Ktor client setup for Gmail, and (eventually) Google-specific error mapping.
+
+*(Note: `:core-common` module is planned to be deprecated by moving its contents, like `ErrorMapperService` interface, to `:core-data`.)*
 
 ### 2.3. Prioritized Requirements Backlog (Epics)
 
@@ -126,7 +128,7 @@ The application development follows a prioritized backlog of features grouped in
 
 * **Authentication & Core:**
     * **Requirement 5.1 (Authentication - Functional):** As a user, I want to securely sign in and out of my supported email accounts (Microsoft Outlook done, Google Gmail in progress).
-    * **Requirement 5.2 (Basic Error Handling - Functional):** As a user, I want to see clear messages if actions fail (e.g., network error, API error), so I understand what went wrong.
+    * **Requirement 5.2 (Basic Error Handling - Functional):** As a user, I want to see clear messages if actions fail (e.g., network error, API error), so I understand what went wrong. (ErrorMapperService interface to be in `:core-data`, implementation to be unified).
 * **User Experience:**
     * **Requirement 5.3 (Visual Polish - Non-Functional):** The app should adhere to Material 3 guidelines and visually resemble stock Pixel apps for a native Android feel.
     * **Requirement 5.4 (Performance - Non-Functional):** UI interactions should feel smooth and responsive. Network operations should show loading indicators.
@@ -181,39 +183,87 @@ The application development follows a prioritized backlog of features grouped in
 
 ---
 
-### 2.4. Iterative Implementation Strategy & Future Architectural Considerations
+### 2.4. Architectural Vision & Iterative Implementation (Revised May 8, 2025)
 
-* **Iterative Implementation:** The project follows an iterative approach, focusing on delivering core value incrementally based on the prioritized Epics. Foundation (Epics 1, 2, 3, 5 for Microsoft) is largely in place, with Google integration (Epic 9) being the current major focus. Subsequent features like Attachments (Epic 4), Advanced Organization (Epic 6), and Integrations (Epic 8) will build upon this core.
-* **Refactoring Authentication Layer to use Kotlin Flows:** This was implemented for the Microsoft backend (`MicrosoftAuthManager` and `MicrosoftTokenProvider`) by changing callback-based MSAL interactions to use `kotlinx.coroutines.flow.callbackFlow`. This aligns with idiomatic Kotlin, improves testability with libraries like Turbine, and enhances readability. A similar Flow-based approach is implicitly used or can be ensured for Google authentication interactions.
+* **Iterative Implementation:** The project follows an iterative approach, focusing on delivering core value incrementally based on the prioritized Epics.
+* **Core Architectural Refinements (Planned/In Progress):**
+    * **`ErrorMapperService` Interface in `:core-data`:** The `ErrorMapperService` interface will reside in `net.melisma.core_data.errors`. The implementation (e.g., a unified `DefaultErrorMapper` handling both Microsoft and Google exceptions) will likely live in `:backend-microsoft` (renamed) or `:data` and be provided via Hilt. This consolidates error mapping contracts within the core data definition layer. The `:core-common` module will likely be deprecated.
+    * **`MailApiService` Abstraction in `:core-data`:** A new interface, `MailApiService`, will be defined in `:core-data` (e.g., `net.melisma.core_data.datasource.MailApiService`). This interface will define common mail operations like `getFolders`, `getMessages`, etc.
+        * `GraphApiHelper` (in `:backend-microsoft`) and `GmailApiHelper` (in `:backend-google`) will implement this `MailApiService` interface.
+        * Repositories in the `:data` module (e.g., `DefaultFolderRepository`, `DefaultMessageRepository`) will inject a `Map<String, @JvmSuppressWildcards MailApiService>` (keyed by provider type) using Hilt multibindings. This will allow repositories to call `mailApiServices[account.providerType]?.getFolders(...)`, making them cleaner and more agnostic to specific API helper implementations.
+* **Authentication Layer with Kotlin Flows:** This was implemented for the Microsoft backend (`MicrosoftAuthManager` and `MicrosoftTokenProvider`) using `kotlinx.coroutines.flow.callbackFlow`. A similar Flow-based approach is used for Google authentication.
 * **Feature Integration Notes (from DESIGN_DOC.md):**
-    * **Attachments (Epic 4):** Will require file handling logic, permissions (if saving), potentially content providers/intents for previewing/sharing. Integrates into message view (`:app`) and repositories (`:core-data`, backend modules).
-    * **Notifications (Req 5.8, 5.9):** Requires `NotificationManager`, potentially Foreground Services or deeper integration with `WorkManager` for push/sync. Actionable notifications need PendingIntents handled by BroadcastReceivers or Services, likely interacting with repositories via DI.
-    * **UI/UX Enhancements (Unified Inbox, Conversation View, Swipes, Theming):** Implemented primarily within the `:app` module, potentially requiring data layer support (e.g., querying across accounts for Unified Inbox, grouping logic for Conversation View).
-    * **Advanced Organization (Epic 6):** Extends repositories and potentially database queries (`:core-database` if added, `:core-data`, backend modules). UI changes in `:app`.
-    * **Integrations (Epic 8):** May require specific Android Intents to interact with Calendar/Task/Contact apps, or direct API interaction if deeper integration is needed (potentially new modules).
+    * **Attachments (Epic 4):** Will require file handling logic, permissions (if saving), potentially content providers/intents for previewing/sharing. Integrates into message view (`:app`) and repositories (via `MailApiService`).
+    * **Notifications (Req 5.8, 5.9):** Requires `NotificationManager`, potentially Foreground Services or `WorkManager`. Actionable notifications need PendingIntents handled by BroadcastReceivers or Services, interacting with repositories.
+    * **UI/UX Enhancements (Unified Inbox, Conversation View, Swipes, Theming):** Implemented primarily within `:app`, potentially requiring data layer support.
+    * **Advanced Organization (Epic 6):** Extends repositories and potentially database queries. UI changes in `:app`.
+    * **Integrations (Epic 8):** May require Android Intents or direct API interaction.
 
-## 3. Implementation Plan for Google Integration
+## 3. Implementation Plan & Next Steps (Revised May 8, 2025)
 
-*(Derived from the "Next Steps Required" section of the updated GOOGLE.MD)*
+The immediate focus is on completing the Google Account integration, alongside key architectural refinements that will facilitate this and future development.
 
-The immediate focus is on completing the Google Account integration.
+### 3.1. Priority Task Groups:
 
-1.  **Finalize Google Cloud & Project Setup:**
+**Group A: Foundational Google Enablement & Core Architectural Refinements (Do these first, can be parallelized where possible)**
+
+1.  **Finalize Google Cloud & Project Setup (Blocking for Google Functionality):**
     * Verify Google Cloud Console settings (APIs, OAuth Client ID, Consent Screen).
-    * Add `google-services.json` to the `app/` directory.
-    * Activate the `com.google.gms.google-services` Gradle plugin in `app/build.gradle.kts`.
-2.  **Integrate Google into Default Repositories (`:data` module):**
-    * Enable the `:backend-google` dependency in `data/build.gradle.kts`.
-    * Update `DefaultAccountRepository.kt` to inject `GoogleAuthManager` and implement Google account addition/removal and state observation.
-    * Update `DefaultFolderRepository.kt` and `DefaultMessageRepository.kt` to use Hilt multibindings for `TokenProvider`s and API helpers (requiring a common `MailApiHelper` interface), and update logic to use `GmailApiHelper` for Google accounts.
-    * Enhance error handling (e.g., modify `MicrosoftErrorMapper` or implement a new strategy) to specifically map Google exceptions.
-3.  **UI/UX Adjustments & Final Testing:**
-    * Update UI for adding Google accounts and displaying Gmail labels.
-    * Conduct thorough end-to-end testing for both Microsoft and Google account functionalities.
+    * **Action:** Add `google-services.json` to the `app/` directory.
+    * **Action:** Activate the `com.google.gms.google-services` Gradle plugin in `app/build.gradle.kts`.
+2.  **Refactor Error Handling & Module Structure:**
+    * **Action:** Move `ErrorMapperService` interface definition to `net.melisma.core_data.errors`.
+    * **Action:** Update `MicrosoftErrorMapper` (consider renaming to `DefaultErrorMapper` and keeping in `:backend-microsoft` or moving to `:data`) to implement the moved interface and **add specific handling for Google exceptions** (`ApiException`, `GoogleAuthException`). Update Hilt bindings if its location changes.
+    * **Action:** If `:core-common` is now empty, remove it from the project and update `settings.gradle.kts` and any dependent `build.gradle.kts` files.
+3.  **Implement `MailApiService` Abstraction:**
+    * **Action:** Define `MailApiService` interface in `:core-data` (e.g., `net.melisma.core_data.datasource.MailApiService`) with methods for `getFolders`, `getMessages`, etc.
+    * **Action:** Modify `GraphApiHelper` in `:backend-microsoft` to implement `MailApiService`. Update its Hilt provision if necessary (e.g., to be part of a multibinding map).
+    * **Action:** Modify `GmailApiHelper` in `:backend-google` to implement `MailApiService`. Update its Hilt provision (e.g., to be part of a multibinding map).
+
+**Group B: Integrate Google into Data Layer (Depends on Group A)**
+
+4.  **Enable `:backend-google` Dependency in `:data`:**
+    * **Action:** In `data/build.gradle.kts`, uncomment `implementation(project(":backend-google"))`.
+5.  **Update `DefaultAccountRepository.kt` for Google:**
+    * **Action:** Inject `GoogleAuthManager`.
+    * **Action:** Fully implement the `"GOOGLE"` provider type branches in `addAccount` and `removeAccount` using `GoogleAuthManager`.
+    * **Action:** Update `accounts` StateFlow to correctly combine/observe accounts from both `MicrosoftAuthManager` and `GoogleAuthManager`.
+6.  **Update `DefaultFolderRepository.kt` and `DefaultMessageRepository.kt` for Google & `MailApiService`:**
+    * **Action:** Modify constructors to inject `Map<String, @JvmSuppressWildcards TokenProvider>` and `Map<String, @JvmSuppressWildcards MailApiService>`.
+    * **Action:** Update internal logic to use the correct `TokenProvider` and `MailApiService` implementation from the maps based on `account.providerType`.
+
+**Group C: UI/UX and Final Testing (Depends on Group B)**
+
+7.  **UI/UX Adjustments for Google:**
+    * **Action:** Modify `SettingsScreen` for distinct "Add Google Account".
+    * **Action:** Update `MailDrawerContent` to handle Gmail labels.
+    * **Action:** Review `MessageListContent` and `MessageListItem` for consistency.
+8.  **Thorough End-to-End Testing:**
+    * **Action:** Test all features for both Microsoft and Google accounts.
+
+### 3.2. Prioritization Judgement Call:
+
+**It is recommended to tackle Group A tasks first, with a strong emphasis on items 1 (Google Cloud Setup) and 2 (Error Handling & Module Structure) concurrently or in close succession.**
+
+* **Google Cloud Setup (Item 1)** is a fundamental blocker for any Google functionality. Without `google-services.json` and the plugin, Google Sign-In cannot work.
+* **Error Handling & Module Structure (Item 2)** and **`MailApiService` Abstraction (Item 3)** are important architectural cleanups. Implementing the `MailApiService` abstraction (Item 3) before or alongside fully wiring up Google logic in the repositories (Group B) will lead to a cleaner and more maintainable `:data` layer. Consolidating `ErrorMapperService` is a straightforward cleanup.
+
+**Therefore, the suggested order is:**
+
+1.  **Immediately:**
+    * Address **Item 1** (Google Cloud & Project Setup).
+    * Start **Item 2** (Refactor Error Handling & Module Structure - moving `ErrorMapperService` interface, updating its implementation for Google errors, and potentially removing `:core-common`).
+    * Start **Item 3** (Implement `MailApiService` Abstraction - define interface, update helpers to implement it).
+2.  **Next (once Item 1 is unblocked and Items 2 & 3 are substantially complete):**
+    * Proceed with **Group B** (Integrate Google into Data Layer - enabling dependency, updating repositories to use `GoogleAuthManager` and the new `MailApiService` abstraction).
+3.  **Finally:**
+    * Complete **Group C** (UI/UX Adjustments and Final Testing).
+
+This approach prioritizes unblocking Google functionality while simultaneously making architectural improvements that will benefit the Google integration process itself, particularly in the `:data` layer repositories.
 
 ## 4. Test Strategy
 
-*(Derived from TESTING.MD, Version 1.0)*
+*(Derived from TESTING.MD, Version 1.0 - No changes in this section from previous version of this guide)*
 
 ### 4.1. Goals
 
@@ -267,7 +317,7 @@ The immediate focus is on completing the Google Account integration.
 
 ## 5. Developer & AI Guidance
 
-*(Derived from CLAUDE.MD)*
+*(Derived from CLAUDE.MD - No changes in this section from previous version of this guide)*
 
 ### 5.1. Key Architectural Patterns & Conventions
 
@@ -277,7 +327,7 @@ The immediate focus is on completing the Google Account integration.
 * **Dependency Injection:** Hilt.
 * **Asynchronous Operations:** Kotlin Coroutines and Flow.
 * **Networking:** Ktor with OkHttp engine. Avoid direct `HttpURLConnection`.
-* **Error Handling:** Use the `ErrorMapperService` from `:core-common` to map exceptions to user-friendly messages.
+* **Error Handling:** Use the `ErrorMapperService` from `:core-data` (interface) to map exceptions to user-friendly messages.
 * **Authentication:**
     * Microsoft: Uses `MicrosoftAuthManager` and `MicrosoftTokenProvider` in `:backend-microsoft`.
     * Google: Uses `GoogleAuthManager` and `GoogleTokenProvider` in `:backend-google`.
@@ -297,7 +347,7 @@ The immediate focus is on completing the Google Account integration.
 
 ### 5.3. Current Development Focus
 
-The primary focus is completing Google Account Integration (Epic 9), followed by the prioritized backlog items (Core Mail Viewing, Basic Mail Actions, etc.). Refer to the "Implementation Plan for Google Integration" (Section 3) for immediate next steps.
+The primary focus is completing Google Account Integration (Epic 9), followed by the prioritized backlog items (Core Mail Viewing, Basic Mail Actions, etc.). Refer to the "Implementation Plan & Next Steps" (Section 3) for immediate next steps.
 
 ---
 
