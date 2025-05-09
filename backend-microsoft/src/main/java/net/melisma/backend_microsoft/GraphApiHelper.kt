@@ -6,12 +6,21 @@ import io.ktor.client.call.body
 import io.ktor.client.request.accept
 import io.ktor.client.request.bearerAuth
 import io.ktor.client.request.get
+import io.ktor.client.request.patch
+import io.ktor.client.request.post
+import io.ktor.client.request.delete
+import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.isSuccess
+import io.ktor.http.ContentType.Application.Json
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import net.melisma.core_data.datasource.MailApiService
 import net.melisma.core_data.model.MailFolder
 import net.melisma.core_data.model.Message
 import java.io.IOException
@@ -63,12 +72,13 @@ private data class GraphEmailAddress(
 /**
  * Helper class for making calls to the Microsoft Graph API (v1.0) using Ktor.
  * Encapsulates network request logic and JSON parsing for mail-related data.
+ * Implements the MailApiService interface to provide a standardized API for mail operations.
  * Provided as a Singleton by Hilt.
  */
 @Singleton
 class GraphApiHelper @Inject constructor(
     private val httpClient: HttpClient // Inject the configured Ktor client
-) {
+) : MailApiService {
 
     companion object {
         private const val TAG = "GraphApiHelper"
@@ -77,8 +87,11 @@ class GraphApiHelper @Inject constructor(
 
     /**
      * Fetches the list of mail folders for the authenticated user using Ktor.
+     *
+     * @param accessToken The authentication token to use for this request
+     * @return Result containing the list of mail folders or an error
      */
-    suspend fun getMailFolders(accessToken: String): Result<List<MailFolder>> {
+    override suspend fun getMailFolders(accessToken: String): Result<List<MailFolder>> {
         return try {
             Log.d(TAG, "Fetching mail folders...")
             val response: HttpResponse = httpClient.get("$MS_GRAPH_ROOT_ENDPOINT/me/mailFolders") {
@@ -117,12 +130,18 @@ class GraphApiHelper @Inject constructor(
 
     /**
      * Fetches a list of messages for a specific mail folder using Ktor.
+     *
+     * @param accessToken The authentication token to use for this request
+     * @param folderId The ID of the folder to fetch messages from
+     * @param selectFields Optional list of fields to include in the response
+     * @param maxResults Maximum number of messages to return (pagination limit)
+     * @return Result containing the list of messages or an error
      */
-    suspend fun getMessagesForFolder(
+    override suspend fun getMessagesForFolder(
         accessToken: String,
         folderId: String,
-        selectFields: List<String>, // Keep for potential future use with $select
-        top: Int
+        selectFields: List<String>,
+        maxResults: Int
     ): Result<List<Message>> {
         return try {
             Log.d(TAG, "Fetching messages for folder: $folderId")
@@ -132,7 +151,7 @@ class GraphApiHelper @Inject constructor(
                     bearerAuth(accessToken)
                     url {
                         parameters.append("\$select", selectFields.joinToString(","))
-                        parameters.append("\$top", top.toString())
+                        parameters.append("\$top", maxResults.toString())
                         parameters.append("\$orderby", "receivedDateTime desc")
                     }
                     accept(ContentType.Application.Json)
@@ -166,4 +185,119 @@ class GraphApiHelper @Inject constructor(
     }
 
     // Removed makeGraphApiCall and parsing methods as Ktor handles this now.
+
+    /**
+     * Marks a message as read or unread.
+     *
+     * @param accessToken The authentication token to use for this request
+     * @param messageId The ID of the message to update
+     * @param isRead Whether the message should be marked as read (true) or unread (false)
+     * @return Result indicating success or failure
+     */
+    override suspend fun markMessageRead(
+        accessToken: String,
+        messageId: String,
+        isRead: Boolean
+    ): Result<Boolean> {
+        return try {
+            Log.d(TAG, "Marking message $messageId as ${if (isRead) "read" else "unread"}")
+            val endpoint = "$MS_GRAPH_ROOT_ENDPOINT/me/messages/$messageId"
+
+            val requestBody = buildJsonObject {
+                put("isRead", isRead)
+            }
+
+            val response = httpClient.patch(endpoint) {
+                bearerAuth(accessToken)
+                accept(Json)
+                setBody(requestBody)
+            }
+
+            if (response.status.isSuccess()) {
+                Log.d(TAG, "Successfully marked message $messageId as ${if (isRead) "read" else "unread"}")
+                Result.success(true)
+            } else {
+                val errorBody = response.bodyAsText()
+                Log.e(TAG, "Error marking message: ${response.status} - $errorBody")
+                Result.failure(IOException("Error marking message: ${response.status}"))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception marking message $messageId as ${if (isRead) "read" else "unread"}", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Deletes a message (moves it to trash/deleted items folder).
+     *
+     * @param accessToken The authentication token to use for this request
+     * @param messageId The ID of the message to delete
+     * @return Result indicating success or failure
+     */
+    override suspend fun deleteMessage(
+        accessToken: String,
+        messageId: String
+    ): Result<Boolean> {
+        return try {
+            Log.d(TAG, "Deleting message $messageId")
+            val endpoint = "$MS_GRAPH_ROOT_ENDPOINT/me/messages/$messageId"
+
+            val response = httpClient.delete(endpoint) {
+                bearerAuth(accessToken)
+            }
+
+            if (response.status.isSuccess()) {
+                Log.d(TAG, "Successfully deleted message $messageId")
+                Result.success(true)
+            } else {
+                val errorBody = response.bodyAsText()
+                Log.e(TAG, "Error deleting message: ${response.status} - $errorBody")
+                Result.failure(IOException("Error deleting message: ${response.status}"))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception deleting message $messageId", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Moves a message to a different folder.
+     *
+     * @param accessToken The authentication token to use for this request
+     * @param messageId The ID of the message to move
+     * @param targetFolderId The ID of the destination folder
+     * @return Result indicating success or failure
+     */
+    override suspend fun moveMessage(
+        accessToken: String,
+        messageId: String,
+        targetFolderId: String
+    ): Result<Boolean> {
+        return try {
+            Log.d(TAG, "Moving message $messageId to folder $targetFolderId")
+            val endpoint = "$MS_GRAPH_ROOT_ENDPOINT/me/messages/$messageId/move"
+
+            val requestBody = buildJsonObject {
+                put("destinationId", targetFolderId)
+            }
+
+            val response = httpClient.post(endpoint) {
+                bearerAuth(accessToken)
+                accept(Json)
+                setBody(requestBody)
+            }
+
+            if (response.status.isSuccess()) {
+                Log.d(TAG, "Successfully moved message $messageId to folder $targetFolderId")
+                Result.success(true)
+            } else {
+                val errorBody = response.bodyAsText()
+                Log.e(TAG, "Error moving message: ${response.status} - $errorBody")
+                Result.failure(IOException("Error moving message: ${response.status}"))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception moving message $messageId to folder $targetFolderId", e)
+            Result.failure(e)
+        }
+    }
 }

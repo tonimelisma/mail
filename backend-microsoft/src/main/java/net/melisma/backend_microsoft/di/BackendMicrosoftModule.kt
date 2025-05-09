@@ -9,11 +9,17 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
+import dagger.multibindings.IntoMap
+import dagger.multibindings.StringKey
+import net.melisma.backend_microsoft.GraphApiHelper
 import net.melisma.backend_microsoft.auth.MicrosoftAuthManager
 import net.melisma.backend_microsoft.datasource.MicrosoftTokenProvider
 import net.melisma.backend_microsoft.errors.MicrosoftErrorMapper
+import net.melisma.core_data.datasource.MailApiService
 import net.melisma.core_data.datasource.TokenProvider
+import net.melisma.core_data.di.ApiHelperType
 import net.melisma.core_data.di.AuthConfigProvider
+import net.melisma.core_data.di.TokenProviderType
 import net.melisma.core_data.errors.ErrorMapperService
 import javax.inject.Singleton
 
@@ -29,10 +35,22 @@ abstract class BackendMicrosoftBindingModule {
     ): ErrorMapperService
 
     @Binds
+    @TokenProviderType("MS")
+    @IntoMap
+    @StringKey("MS")
     @Singleton
     abstract fun bindTokenProvider(
         microsoftTokenProvider: MicrosoftTokenProvider // Provided via @Inject constructor
     ): TokenProvider
+
+    @Binds
+    @ApiHelperType("MS")
+    @IntoMap
+    @StringKey("MS")
+    @Singleton
+    abstract fun bindMailApiService(
+        graphApiHelper: GraphApiHelper // Provided via @Inject constructor
+    ): MailApiService
 }
 
 // This module provides instances of classes that need explicit construction.
