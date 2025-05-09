@@ -4,7 +4,6 @@ import android.util.Base64
 import android.util.Log
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
-import io.ktor.client.request.delete
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
 import io.ktor.client.request.parameter
@@ -40,22 +39,24 @@ import javax.inject.Singleton
 
 /**
  * Helper class for interacting with Gmail API.
+ * Implements the MailApiService interface to provide a standardized API for mail operations.
  */
 @Singleton
 class GmailApiHelper @Inject constructor(
     @GoogleHttpClient private val httpClient: HttpClient,
     private val errorMapper: ErrorMapperService
-) {
+) : MailApiService {
     private val TAG = "GmailApiHelper"
     private val BASE_URL = "https://gmail.googleapis.com/gmail/v1/users/me"
 
     /**
      * Fetches all available labels from Gmail API and maps them to MailFolder objects.
+     * Implements the MailApiService.getMailFolders interface method.
      *
      * @param accessToken OAuth access token for Gmail API
      * @return Result containing a list of MailFolder objects or an exception
      */
-    suspend fun getLabels(accessToken: String): Result<List<MailFolder>> {
+    override suspend fun getMailFolders(accessToken: String): Result<List<MailFolder>> {
         return try {
             val response = httpClient.get("$BASE_URL/labels") {
                 headers {
@@ -77,17 +78,20 @@ class GmailApiHelper @Inject constructor(
     }
 
     /**
-     * Fetches messages for a specific label from Gmail API.
+     * Fetches messages for a specific folder (label in Gmail) from Gmail API.
+     * Implements the MailApiService.getMessagesForFolder interface method.
      *
      * @param accessToken OAuth access token for Gmail API
-     * @param labelIds List of label IDs to filter messages by
+     * @param folderId The ID of the folder (label) to fetch messages from
+     * @param selectFields Optional list of fields to include in the response (not used in Gmail implementation)
      * @param maxResults Maximum number of messages to return
      * @return Result containing a list of Message objects or an exception
      */
-    suspend fun getMessagesForLabel(
+    override suspend fun getMessagesForFolder(
         accessToken: String,
-        labelIds: List<String>,
-        maxResults: Int = 20
+        folderId: String,
+        selectFields: List<String>,
+        maxResults: Int
     ): Result<List<Message>> {
         return try {
             // 1. Get message IDs for the specified label
@@ -96,16 +100,14 @@ class GmailApiHelper @Inject constructor(
                     append(HttpHeaders.Authorization, "Bearer $accessToken")
                 }
                 parameter("maxResults", maxResults)
-                // Add all label IDs as separate parameters
-                labelIds.forEach {
-                    parameter("labelIds", it)
-                }
+                // Add the folder ID (label ID in Gmail) as a parameter
+                parameter("labelIds", folderId)
             }
 
             val messageList = messageIdsResponse.body<GmailMessageList>()
 
             if (messageList.messages.isEmpty()) {
-                Log.d(TAG, "No messages found for labels: $labelIds")
+                Log.d(TAG, "No messages found for folder (label): $folderId")
                 return Result.success(emptyList())
             }
 
@@ -118,7 +120,10 @@ class GmailApiHelper @Inject constructor(
                 }.awaitAll().filterNotNull()
             }
 
-            Log.d(TAG, "Successfully fetched ${messages.size} messages for labels: $labelIds")
+            Log.d(
+                TAG,
+                "Successfully fetched ${messages.size} messages for folder (label): $folderId"
+            )
             Result.success(messages)
         } catch (e: Exception) {
             Log.e(TAG, "Error fetching Gmail messages", e)
@@ -297,6 +302,201 @@ class GmailApiHelper @Inject constructor(
         } catch (e: Exception) {
             Log.e(TAG, "Error decoding message body", e)
             ""
+        }
+    }
+
+    /**
+     * Marks a message as read or unread.
+     *
+     * @param accessToken The authentication token to use for this request
+     * @param messageId The ID of the message to update
+     * @param isRead Whether the message should be marked as read (true) or unread (false)
+     * @return Result indicating success or failure
+     */
+    override suspend fun markMessageRead(
+        accessToken: String,
+        messageId: String,
+        isRead: Boolean
+    ): Result<Boolean> {
+        return try {
+            Log.d(TAG, "Marking message $messageId as ${if (isRead) "read" else "unread"}")
+
+            // In Gmail API, we modify the labels - adding or removing UNREAD label
+            val endpoint = "$BASE_URL/messages/$messageId/modify"
+
+            val requestBody = buildJsonObject {
+                if (isRead) {
+                    putJsonObject("removeLabelIds") {
+                        put("0", "UNREAD")
+                    }
+                } else {
+                    putJsonObject("addLabelIds") {
+                        put("0", "UNREAD")
+                    }
+                }
+            }
+
+            val response: HttpResponse = httpClient.post(endpoint) {
+                headers {
+                    append(HttpHeaders.Authorization, "Bearer $accessToken")
+                    append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                }
+                setBody(requestBody.toString())
+            }
+
+            if (response.status.isSuccess()) {
+                Log.d(
+                    TAG,
+                    "Successfully marked message $messageId as ${if (isRead) "read" else "unread"}"
+                )
+                Result.success(true)
+            } else {
+                val errorBody = response.bodyAsText()
+                Log.e(TAG, "Error marking message: ${response.status} - $errorBody")
+                Result.failure(IOException("Error marking message: ${response.status}"))
+            }
+        } catch (e: Exception) {
+            Log.e(
+                TAG,
+                "Exception marking message $messageId as ${if (isRead) "read" else "unread"}",
+                e
+            )
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Deletes a message (moves it to trash/deleted items folder).
+     * In Gmail, this moves the message to the trash. The user can recover the message from trash
+     * within the configured period (usually 30 days).
+     *
+     * @param accessToken The authentication token to use for this request
+     * @param messageId The ID of the message to delete
+     * @return Result indicating success or failure
+     */
+    override suspend fun deleteMessage(
+        accessToken: String,
+        messageId: String
+    ): Result<Boolean> {
+        return try {
+            Log.d(TAG, "Trashing message $messageId")
+            val endpoint = "$BASE_URL/messages/$messageId/trash"
+
+            val response: HttpResponse = httpClient.post(endpoint) {
+                headers {
+                    append(HttpHeaders.Authorization, "Bearer $accessToken")
+                }
+            }
+
+            if (response.status.isSuccess()) {
+                Log.d(TAG, "Successfully trashed message $messageId")
+                Result.success(true)
+            } else {
+                val errorBody = response.bodyAsText()
+                Log.e(TAG, "Error trashing message: ${response.status} - $errorBody")
+                Result.failure(IOException("Error trashing message: ${response.status}"))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception trashing message $messageId", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Moves a message to a different folder by modifying its labels.
+     * In Gmail, folders are represented as labels. This operation removes the old label
+     * and adds the new target label.
+     *
+     * @param accessToken The authentication token to use for this request
+     * @param messageId The ID of the message to move
+     * @param targetFolderId The ID of the destination folder (label)
+     * @return Result indicating success or failure
+     */
+    override suspend fun moveMessage(
+        accessToken: String,
+        messageId: String,
+        targetFolderId: String
+    ): Result<Boolean> {
+        return try {
+            Log.d(TAG, "Moving message $messageId to folder (label) $targetFolderId")
+
+            // First, we need to get the current labels of the message
+            val messageResponse = httpClient.get("$BASE_URL/messages/$messageId") {
+                headers {
+                    append(HttpHeaders.Authorization, "Bearer $accessToken")
+                }
+                parameter("format", "minimal") // Only need minimal info to get labels
+            }
+
+            if (!messageResponse.status.isSuccess()) {
+                val errorBody = messageResponse.bodyAsText()
+                Log.e(
+                    TAG,
+                    "Error fetching message for label modification: ${messageResponse.status} - $errorBody"
+                )
+                return Result.failure(IOException("Error fetching message: ${messageResponse.status}"))
+            }
+
+            val message = messageResponse.body<GmailMessage>()
+
+            // Filter system labels we want to keep and user labels except the target one
+            message.labelIds.filter {
+                it.startsWith("CATEGORY_") || it in setOf("INBOX", "SENT", "IMPORTANT", "STARRED")
+            }
+
+            // We'll keep system labels and remove all other user labels
+            val removeLabels = message.labelIds.filter {
+                !it.startsWith("CATEGORY_") && it !in setOf(
+                    "INBOX",
+                    "SENT",
+                    "IMPORTANT",
+                    "STARRED",
+                    targetFolderId
+                )
+            }
+
+            // Create the modify request
+            val endpoint = "$BASE_URL/messages/$messageId/modify"
+
+            // Build the JSON with addLabelIds and removeLabelIds
+            val requestBody = buildJsonObject {
+                if (targetFolderId.isNotEmpty()) {
+                    putJsonObject("addLabelIds") {
+                        put("0", targetFolderId)
+                    }
+                }
+
+                if (removeLabels.isNotEmpty()) {
+                    putJsonObject("removeLabelIds") {
+                        removeLabels.forEachIndexed { index, labelId ->
+                            put(index.toString(), labelId)
+                        }
+                    }
+                }
+            }
+
+            val response: HttpResponse = httpClient.post(endpoint) {
+                headers {
+                    append(HttpHeaders.Authorization, "Bearer $accessToken")
+                    append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+                }
+                setBody(requestBody.toString())
+            }
+
+            if (response.status.isSuccess()) {
+                Log.d(
+                    TAG,
+                    "Successfully moved message $messageId to folder (label) $targetFolderId"
+                )
+                Result.success(true)
+            } else {
+                val errorBody = response.bodyAsText()
+                Log.e(TAG, "Error moving message: ${response.status} - $errorBody")
+                Result.failure(IOException("Error moving message: ${response.status}"))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception moving message $messageId to folder $targetFolderId", e)
+            Result.failure(e)
         }
     }
 }

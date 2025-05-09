@@ -4,6 +4,8 @@ import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
+import dagger.multibindings.IntoMap
+import dagger.multibindings.StringKey
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
@@ -15,7 +17,10 @@ import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.json.Json
 import net.melisma.backend_google.GmailApiHelper
 import net.melisma.backend_google.datasource.GoogleTokenProvider
+import net.melisma.core_data.datasource.MailApiService
 import net.melisma.core_data.datasource.TokenProvider
+import net.melisma.core_data.di.ApiHelperType
+import net.melisma.core_data.di.TokenProviderType
 import net.melisma.core_data.errors.ErrorMapperService
 import java.util.concurrent.TimeUnit
 import javax.inject.Qualifier
@@ -82,6 +87,8 @@ object BackendGoogleModule {
     @Provides
     @Singleton
     @TokenProviderType("GOOGLE")
+    @IntoMap
+    @StringKey("GOOGLE")
     fun provideGoogleTokenProvider(tokenProvider: GoogleTokenProvider): TokenProvider {
         return tokenProvider
     }
@@ -97,11 +104,19 @@ object BackendGoogleModule {
     ): GmailApiHelper {
         return GmailApiHelper(httpClient, errorMapper)
     }
+
+    /**
+     * Provides the GmailApiHelper as a MailApiService implementation
+     * with the appropriate qualifier for multi-binding
+     */
+    @Provides
+    @Singleton
+    @ApiHelperType("GOOGLE")
+    @IntoMap
+    @StringKey("GOOGLE")
+    fun provideGmailApiAsMailService(gmailApiHelper: GmailApiHelper): MailApiService {
+        return gmailApiHelper
+    }
 }
 
-/**
- * Qualifier for different provider types in multi-binding
- */
-@Qualifier
-@Retention(AnnotationRetention.BINARY)
-annotation class TokenProviderType(val value: String)
+// TokenProviderType is now imported from core-data module

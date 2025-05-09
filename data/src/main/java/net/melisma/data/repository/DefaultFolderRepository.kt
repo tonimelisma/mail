@@ -13,7 +13,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import net.melisma.backend_microsoft.GraphApiHelper
+import net.melisma.core_data.datasource.MailApiService
 import net.melisma.core_data.datasource.TokenProvider
 import net.melisma.core_data.di.ApplicationScope
 import net.melisma.core_data.di.Dispatcher
@@ -34,8 +34,8 @@ import kotlin.coroutines.cancellation.CancellationException
  */
 @Singleton
 class DefaultFolderRepository @Inject constructor(
-    private val tokenProvider: TokenProvider,
-    private val graphApiHelper: GraphApiHelper, // Will be replaced with a Map<String, ApiHelper> in future
+    private val tokenProviders: Map<String, @JvmSuppressWildcards TokenProvider>,
+    private val mailApiServices: Map<String, @JvmSuppressWildcards MailApiService>,
     @Dispatcher(MailDispatchers.IO) private val ioDispatcher: CoroutineDispatcher,
     @ApplicationScope private val externalScope: CoroutineScope,
     private val errorMapper: ErrorMapperService
@@ -52,9 +52,18 @@ class DefaultFolderRepository @Inject constructor(
 
     override suspend fun manageObservedAccounts(accounts: List<Account>) {
         withContext(externalScope.coroutineContext + ioDispatcher) {
-            // Currently only filter for Microsoft accounts
-            // Future: Handle accounts of all supported provider types
-            val supportedAccounts = accounts.filter { it.providerType == "MS" }
+            // Filter for accounts that have a provider in our map (MS and Google)
+            val supportedAccounts = accounts.filter {
+                tokenProviders.containsKey(it.providerType) && mailApiServices.containsKey(it.providerType)
+            }
+
+            if (supportedAccounts.size < accounts.size) {
+                Log.w(
+                    TAG, "Some accounts have unsupported provider types: ${
+                    accounts.filter { it !in supportedAccounts }.map { it.providerType }
+                }")
+            }
+
             val newAccountIds = supportedAccounts.map { it.id }.toSet()
             val currentAccountIds = observedAccounts.keys.toSet()
 
@@ -111,6 +120,7 @@ class DefaultFolderRepository @Inject constructor(
         forceRefresh: Boolean = false
     ) {
         val accountId = account.id
+        val providerType = account.providerType
 
         if (!forceRefresh && folderFetchJobs[accountId]?.isActive == true) {
             Log.d(TAG, "Folder fetch job already active for account $accountId. Skipping.")
@@ -126,10 +136,13 @@ class DefaultFolderRepository @Inject constructor(
             currentMap + (accountId to FolderFetchState.Loading)
         }
 
-        // Based on account provider type, use different API helpers
-        // Currently, only Microsoft is supported
-        if (account.providerType != "MS") {
-            Log.w(TAG, "Unsupported account provider type: ${account.providerType}")
+        // Get the appropriate token provider and mail API service for this account type
+        val tokenProvider = tokenProviders[providerType]
+        val mailApiService = mailApiServices[providerType]
+
+        // Check if we have the necessary services for this account type
+        if (tokenProvider == null || mailApiService == null) {
+            Log.w(TAG, "No provider available for account type: $providerType")
             _folderStates.update { it + (accountId to FolderFetchState.Error("Unsupported account provider type")) }
             return
         }
@@ -143,7 +156,7 @@ class DefaultFolderRepository @Inject constructor(
                 if (tokenResult.isSuccess) {
                     val accessToken = tokenResult.getOrThrow()
                     Log.d(TAG, "Token acquired for ${account.username}, fetching folders...")
-                    val foldersResult = graphApiHelper.getMailFolders(accessToken)
+                    val foldersResult = mailApiService.getMailFolders(accessToken)
                     ensureActive()
 
                     val newState = if (foldersResult.isSuccess) {

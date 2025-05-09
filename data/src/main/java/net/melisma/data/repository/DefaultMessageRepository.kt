@@ -12,7 +12,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import net.melisma.backend_microsoft.GraphApiHelper
+import net.melisma.core_data.datasource.MailApiService
 import net.melisma.core_data.datasource.TokenProvider
 import net.melisma.core_data.di.ApplicationScope
 import net.melisma.core_data.di.Dispatcher
@@ -33,8 +33,8 @@ import kotlin.coroutines.cancellation.CancellationException
  */
 @Singleton
 class DefaultMessageRepository @Inject constructor(
-    private val tokenProvider: TokenProvider,
-    private val graphApiHelper: GraphApiHelper, // Will be replaced with a Map<String, ApiHelper> in future
+    private val tokenProviders: Map<String, @JvmSuppressWildcards TokenProvider>,
+    private val mailApiServices: Map<String, @JvmSuppressWildcards MailApiService>,
     @Dispatcher(MailDispatchers.IO) private val ioDispatcher: CoroutineDispatcher,
     @ApplicationScope private val externalScope: CoroutineScope,
     private val errorMapper: ErrorMapperService
@@ -72,23 +72,24 @@ class DefaultMessageRepository @Inject constructor(
             if (account == null || folder == null) {
                 _messageDataState.value = MessageDataState.Initial
             } else {
-                // Handle different provider types
-                when (account.providerType) {
-                    "MS" -> {
-                        _messageDataState.value = MessageDataState.Loading
-                        launchMicrosoftMessageFetchJob(
-                            account,
-                            folder,
-                            isRefresh = false,
-                            activity = null
-                        )
-                    }
+                val providerType = account.providerType
 
-                    else -> {
-                        Log.w(TAG, "Unsupported account provider type: ${account.providerType}")
-                        _messageDataState.value =
-                            MessageDataState.Error("Unsupported account provider type")
-                    }
+                // Check if we have providers for this account type
+                if (tokenProviders.containsKey(providerType) && mailApiServices.containsKey(
+                        providerType
+                    )
+                ) {
+                    _messageDataState.value = MessageDataState.Loading
+                    launchMessageFetchJob(
+                        account,
+                        folder,
+                        isRefresh = false,
+                        activity = null
+                    )
+                } else {
+                    Log.w(TAG, "Unsupported account provider type: $providerType")
+                    _messageDataState.value =
+                        MessageDataState.Error("Unsupported account provider type")
                 }
             }
         }
@@ -103,22 +104,21 @@ class DefaultMessageRepository @Inject constructor(
             return
         }
 
-        // Handle different provider types
-        when (account.providerType) {
-            "MS" -> refreshMicrosoftMessages(account, folder, activity)
-            else -> {
-                Log.w(
-                    TAG,
-                    "refreshMessages called for unsupported account type: ${account.providerType}"
-                )
-            }
+        val providerType = account.providerType
+        if (tokenProviders.containsKey(providerType) && mailApiServices.containsKey(providerType)) {
+            refreshMessagesForProvider(account, folder, activity)
+        } else {
+            Log.w(
+                TAG,
+                "refreshMessages called for unsupported account type: $providerType"
+            )
         }
     }
 
     /**
-     * Microsoft-specific refresh implementation.
+     * Provider-agnostic refresh implementation.
      */
-    private suspend fun refreshMicrosoftMessages(
+    private suspend fun refreshMessagesForProvider(
         account: Account,
         folder: MailFolder,
         activity: Activity?
@@ -133,14 +133,14 @@ class DefaultMessageRepository @Inject constructor(
         withContext(externalScope.coroutineContext) {
             // Set loading state immediately before launching the job
             _messageDataState.value = MessageDataState.Loading
-            launchMicrosoftMessageFetchJob(account, folder, isRefresh = true, activity = activity)
+            launchMessageFetchJob(account, folder, isRefresh = true, activity = activity)
         }
     }
 
     /**
-     * Microsoft-specific message fetch job.
+     * Provider-agnostic message fetch job.
      */
-    private fun launchMicrosoftMessageFetchJob(
+    private fun launchMessageFetchJob(
         account: Account,
         folder: MailFolder,
         isRefresh: Boolean,
@@ -149,9 +149,21 @@ class DefaultMessageRepository @Inject constructor(
         // Cancel previous job before starting a new one
         cancelAndClearJob()
 
+        val providerType = account.providerType
+
+        // Get the appropriate token provider and mail API service
+        val tokenProvider = tokenProviders[providerType]
+        val mailApiService = mailApiServices[providerType]
+
+        if (tokenProvider == null || mailApiService == null) {
+            Log.e(TAG, "No provider available for account type: $providerType")
+            _messageDataState.value = MessageDataState.Error("Unsupported account provider type")
+            return
+        }
+
         Log.d(
             TAG,
-            "Launching message fetch job for ${folder.id}/${account.username}. Refresh: $isRefresh"
+            "Launching message fetch job for ${folder.id}/${account.username}. Refresh: $isRefresh, Provider: $providerType"
         )
         messageFetchJob = externalScope.launch(ioDispatcher) { // Launch in IO dispatcher
             try {
@@ -164,8 +176,8 @@ class DefaultMessageRepository @Inject constructor(
                     val accessToken = tokenResult.getOrThrow()
                     Log.d(TAG, "Token acquired for ${account.username}, fetching messages...")
 
-                    // 2. Fetch Messages
-                    val messagesResult = graphApiHelper.getMessagesForFolder(
+                    // 2. Fetch Messages using the appropriate mail API service
+                    val messagesResult = mailApiService.getMessagesForFolder(
                         accessToken, folder.id, messageListSelectFields, messageListPageSize
                     )
                     ensureActive() // Check for cancellation

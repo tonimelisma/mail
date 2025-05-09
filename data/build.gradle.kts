@@ -38,7 +38,7 @@ dependencies {
     // --- Project Modules ---
     implementation(project(":core-data")) // Includes ErrorMapperService now
     implementation(project(":backend-microsoft")) // For MS-specific components
-//    implementation(project(":backend-google")) // For Google-specific components
+    implementation(project(":backend-google")) // For Google-specific components
 
     // --- Hilt ---
     implementation(libs.hilt.android)
