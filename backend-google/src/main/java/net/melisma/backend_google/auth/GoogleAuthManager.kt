@@ -77,9 +77,36 @@ class GoogleAuthManager @Inject constructor(
         return currentNonce!!
     }
 
-    suspend fun signIn(
+    /**
+     * Signs in with Google using CredentialManager to obtain an ID Token.
+     * Implements enhanced account discovery by first trying with authorized accounts,
+     * then falling back to all accounts if that fails.
+     */
+    suspend fun signInWithGoogle(activity: Activity): GoogleSignInResult {
+        return try {
+            // First attempt with authorized accounts only
+            val result = attemptSignIn(activity, true)
+
+            // If no credentials available, retry with all accounts
+            if (result is GoogleSignInResult.NoCredentialsAvailable) {
+                Log.d(TAG, "No authorized accounts found, retrying with all accounts")
+                attemptSignIn(activity, false)
+            } else {
+                result
+            }
+        } catch (e: Exception) {
+            currentNonce = null
+            Log.e(TAG, "An unexpected error occurred during Google Sign-In", e)
+            GoogleSignInResult.Error(e, "An unexpected error occurred: ${e.message}")
+        }
+    }
+
+    /**
+     * Internal helper method that attempts sign-in with specified filtering option
+     */
+    private suspend fun attemptSignIn(
         activity: Activity,
-        filterByAuthorizedAccounts: Boolean = true
+        filterByAuthorizedAccounts: Boolean
     ): GoogleSignInResult {
         val nonce = generateNonce()
         val googleIdOption: GetGoogleIdOption = GetGoogleIdOption.Builder()
@@ -166,6 +193,18 @@ class GoogleAuthManager @Inject constructor(
             Log.e(TAG, "An unexpected error occurred during Google Sign-In", e)
             GoogleSignInResult.Error(e, "An unexpected error occurred: ${e.message}")
         }
+    }
+
+    /**
+     * Legacy method for backward compatibility
+     * @deprecated Use signInWithGoogle() instead
+     */
+    @Deprecated("Use signInWithGoogle() instead", ReplaceWith("signInWithGoogle(activity)"))
+    suspend fun signIn(
+        activity: Activity,
+        filterByAuthorizedAccounts: Boolean = true
+    ): GoogleSignInResult {
+        return signInWithGoogle(activity)
     }
 
     suspend fun signOut() {

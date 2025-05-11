@@ -41,6 +41,20 @@
             </intent-filter>
         </activity>
 
+        <!-- AppAuth RedirectUriReceiverActivity for Google OAuth -->
+        <activity
+            android:name="net.openid.appauth.RedirectUriReceiverActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
+                <data android:scheme="${appAuthRedirectScheme}" />
+            </intent-filter>
+        </activity>
+
     </application>
 
 </manifest>

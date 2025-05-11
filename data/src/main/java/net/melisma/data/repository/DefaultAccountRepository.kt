@@ -3,7 +3,7 @@ package net.melisma.data.repository
 
 import android.app.Activity
 import android.content.Intent
-import android.content.IntentSender
+import android.net.Uri
 import android.util.Log
 import com.microsoft.identity.client.IAccount
 import com.microsoft.identity.client.exception.MsalException
@@ -19,9 +19,10 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import net.melisma.backend_google.auth.AppAuthHelperService
 import net.melisma.backend_google.auth.GoogleAuthManager
-import net.melisma.backend_google.auth.GoogleScopeAuthResult
 import net.melisma.backend_google.auth.GoogleSignInResult
+import net.melisma.backend_google.auth.GoogleTokenPersistenceService
 import net.melisma.backend_microsoft.auth.AddAccountResult
 import net.melisma.backend_microsoft.auth.AuthStateListener
 import net.melisma.backend_microsoft.auth.MicrosoftAuthManager
@@ -31,7 +32,6 @@ import net.melisma.core_data.errors.ErrorMapperService
 import net.melisma.core_data.model.Account
 import net.melisma.core_data.model.AuthState
 import net.melisma.core_data.repository.AccountRepository
-import net.melisma.core_data.repository.capabilities.GoogleAccountCapability
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -39,9 +39,11 @@ import javax.inject.Singleton
 class DefaultAccountRepository @Inject constructor(
     private val microsoftAuthManager: MicrosoftAuthManager,
     private val googleAuthManager: GoogleAuthManager,
+    private val appAuthHelperService: AppAuthHelperService,
+    private val googleTokenPersistenceService: GoogleTokenPersistenceService,
     @ApplicationScope private val externalScope: CoroutineScope,
     private val errorMappers: Map<String, @JvmSuppressWildcards ErrorMapperService>
-) : AccountRepository, AuthStateListener, GoogleAccountCapability {
+) : AccountRepository, AuthStateListener {
 
     private val TAG = "DefaultAccountRepo" // Logging TAG
 
@@ -58,6 +60,19 @@ class DefaultAccountRepository @Inject constructor(
         replay = 0, extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
     override val accountActionMessage: Flow<String?> = _accountActionMessage.asSharedFlow()
+
+    // SharedFlow for AppAuth authorization intent
+    private val _appAuthAuthorizationIntent = MutableSharedFlow<Intent?>(
+        replay = 0, // No replay needed
+        extraBufferCapacity = 1, // Buffer one intent
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    val appAuthAuthorizationIntent: Flow<Intent?> = _appAuthAuthorizationIntent.asSharedFlow()
+
+    // Variables to temporarily hold user details during the multi-step auth flow
+    private var pendingGoogleAccountId: String? = null
+    private var pendingGoogleEmail: String? = null // Store email if available from ID token
+    private var pendingGoogleDisplayName: String? = null // Store display name if available
 
     init {
         Log.d(
@@ -101,65 +116,6 @@ class DefaultAccountRepository @Inject constructor(
         }
     }
 
-    // IntentSender for Google OAuth scope consent
-    // Implementation for GoogleAccountCapability interface
-    private val _googleConsentIntentInternal = MutableSharedFlow<IntentSender?>(
-        replay = 0, extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST
-    )
-    override val googleConsentIntent: Flow<IntentSender?> =
-        _googleConsentIntentInternal.asSharedFlow()
-
-    // Implementation for GoogleAccountCapability interface
-    override suspend fun finalizeGoogleScopeConsent(
-        account: Account,
-        intent: Intent?,
-        activity: Activity
-    ) {
-        Log.d(TAG, "finalizeGoogleScopeConsent called for account: ${account.username}")
-        val errorMapper = getErrorMapperForProvider("GOOGLE")
-        if (errorMapper == null) {
-            Log.e(TAG, "finalizeGoogleScopeConsent: Google Error handler not found.")
-            tryEmitMessage("Internal error: Google Error handler not found.")
-            return
-        }
-
-        _isLoadingAccountAction.value = true
-        val result = googleAuthManager.handleScopeConsentResult(intent)
-        Log.d(TAG, "finalizeGoogleScopeConsent: Result from GoogleAuthManager: $result")
-
-        when (result) {
-            is GoogleScopeAuthResult.Success -> {
-                Log.i(TAG, "Google scope consent successful. Access token received.")
-                tryEmitMessage("Google account access granted successfully.")
-                // Here you would typically store the access token securely
-                // and mark the account as fully ready in your account store
-            }
-
-            is GoogleScopeAuthResult.Error -> {
-                Log.e(TAG, "Error in Google scope consent: ${result.exception.message}")
-                tryEmitMessage(
-                    "Error completing Google account setup: ${
-                        errorMapper.mapAuthExceptionToUserMessage(
-                            result.exception
-                        )
-                    }"
-                )
-            }
-
-            is GoogleScopeAuthResult.ConsentRequired -> {
-                // This is unusual - we shouldn't get another consent required after processing a consent
-                Log.w(
-                    TAG,
-                    "Additional consent required after finalizeGoogleScopeConsent. Requesting again."
-                )
-                externalScope.launch {
-                    _googleConsentIntentInternal.emit(result.pendingIntent)
-                }
-                tryEmitMessage("Additional permissions needed for Gmail access.")
-            }
-        }
-        _isLoadingAccountAction.value = false
-    }
 
     override suspend fun addAccount(activity: Activity, scopes: List<String>) {
         Log.d(
@@ -379,7 +335,7 @@ class DefaultAccountRepository @Inject constructor(
     }
 
     private suspend fun addGoogleAccount(activity: Activity, scopes: List<String>) {
-        Log.d(TAG, "addGoogleAccount: Attempting with scopes: $scopes")
+        Log.d(TAG, "addGoogleAccount (AppAuth Flow): Initiating for scopes: $scopes")
         val errorMapper = getErrorMapperForProvider("GOOGLE")
         if (errorMapper == null) {
             Log.e(TAG, "addGoogleAccount: Google Error handler not found.")
@@ -388,65 +344,100 @@ class DefaultAccountRepository @Inject constructor(
             return
         }
 
-        _isLoadingAccountAction.value = true
-        Log.d(TAG, "addGoogleAccount: Calling GoogleAuthManager.signIn...")
+        _isLoadingAccountAction.value = true // Indicate loading state
 
-        when (val signInResult =
-            googleAuthManager.signIn(activity, filterByAuthorizedAccounts = false)) {
+        // Step 1: Initial Sign-In with CredentialManager to get ID Token
+        when (val signInResult = googleAuthManager.signInWithGoogle(activity)) {
             is GoogleSignInResult.Success -> {
-                Log.i(TAG, "Google sign-in successful.")
                 val idTokenCredential = signInResult.idTokenCredential
-                val newAccount = googleAuthManager.toGenericAccount(idTokenCredential)
-
-                // We would store the new account here in a more complete implementation
-
-                Log.d(
+                Log.i(
                     TAG,
-                    "Google account added successfully, now requesting access token for scopes: $scopes"
+                    "Google Sign-In (CredentialManager) successful. User ID: ${idTokenCredential.id}"
                 )
 
-                // Gmail API scopes (at minimum read-only)
-                val gmailScopes = listOf("https://www.googleapis.com/auth/gmail.readonly")
-                // Request access to Gmail API
-                when (val scopeResult =
-                    googleAuthManager.requestAccessToken(activity, newAccount.id, gmailScopes)) {
-                    is GoogleScopeAuthResult.Success -> {
-                        Log.i(TAG, "Gmail access token acquired successfully.")
-                        // Store the token for future use (in a secure way)
-                        // Mark account as fully authorized
-                        tryEmitMessage("Google account added: ${newAccount.username}")
-                    }
+                // Store details temporarily for the AppAuth flow
+                pendingGoogleAccountId = idTokenCredential.id
+                pendingGoogleEmail = idTokenCredential.email // May be null
+                pendingGoogleDisplayName = idTokenCredential.displayName
 
-                    is GoogleScopeAuthResult.ConsentRequired -> {
-                        Log.i(
-                            TAG,
-                            "Gmail access requires user consent. Signaling UI to launch consent intent."
-                        )
-                        // Signal ViewModel/UI to launch the consent intent
-                        externalScope.launch {
-                            _googleConsentIntentInternal.emit(scopeResult.pendingIntent)
-                        }
-                        tryEmitMessage("Additional permissions needed for Gmail access.")
-                    }
+                // Step 2: Check if valid tokens already exist for this account
+                val existingTokens =
+                    googleTokenPersistenceService.getTokens(pendingGoogleAccountId!!)
+                // Check if token exists and is not expired (expiresIn == 0L means no expiry info or non-expiring refresh token scenario)
+                // Add a small buffer (e.g., 5 minutes) to expiry check if desired: System.currentTimeMillis() < (existingTokens.expiresIn - 300000)
+                if (existingTokens != null && (existingTokens.expiresIn == 0L || existingTokens.expiresIn > System.currentTimeMillis())) {
+                    Log.i(
+                        TAG,
+                        "Valid AppAuth tokens already exist for account ${pendingGoogleAccountId}. Finalizing account setup."
+                    )
+                    val account = Account(
+                        id = pendingGoogleAccountId!!,
+                        username = pendingGoogleDisplayName ?: pendingGoogleEmail ?: "Google User",
+                        providerType = "GOOGLE"
+                    )
+                    updateAccountsListWithNewAccount(account) // Ensure this adds to _accounts StateFlow
+                    tryEmitMessage("Google account '${account.username}' is already configured.")
+                    _isLoadingAccountAction.value = false
+                    // Reset pending state as we are done for this account
+                    resetPendingGoogleAccountState()
+                    return
+                }
+                Log.i(
+                    TAG,
+                    "No valid AppAuth tokens found for ${pendingGoogleAccountId}. Proceeding with AppAuth flow."
+                )
 
-                    is GoogleScopeAuthResult.Error -> {
-                        Log.e(
-                            TAG,
-                            "Error requesting Gmail access: ${scopeResult.exception.message}"
-                        )
-                        tryEmitMessage(
-                            "Error setting up Gmail access: ${
-                                errorMapper.mapAuthExceptionToUserMessage(
-                                    scopeResult.exception
-                                )
-                            }"
-                        )
-                    }
+                // Step 3: Initiate AppAuth Authorization Code Flow
+                try {
+                    // IMPORTANT: Replace with your actual Android Client ID from Google Cloud Console
+                    val androidClientId =
+                        "326576675855-6vc6rrjhijjfch6j6106sd5ui2htbh61.apps.googleusercontent.com"
+                    // This redirect URI must match exactly what's configured in Google Cloud Console for your Android Client ID
+                    // and in your AndroidManifest.xml for RedirectUriReceiverActivity.
+                    val redirectUri =
+                        Uri.parse("net.melisma.mail:/oauth2redirect") // Example, ensure it matches manifest placeholder
+
+                    val requiredScopesString =
+                        scopes.joinToString(" ").ifBlank { AppAuthHelperService.GMAIL_SCOPES }
+
+                    Log.d(
+                        TAG,
+                        "Requesting AppAuth intent for Client ID: $androidClientId, Redirect URI: $redirectUri, Scopes: $requiredScopesString"
+                    )
+
+                    // AppAuthHelperService creates the request. The ViewModel/Activity will get this intent and launch it.
+                    val authIntent = appAuthHelperService.initiateAuthorizationRequest(
+                        activity = activity, // Note: AppAuthHelperService needs activity context for launching Custom Tab.
+                        // If repo is true singleton, activity context can be problematic.
+                        // Alternative: AppAuthHelperService.buildAuthorizationRequest() returns request,
+                        // ViewModel gets it, then Activity uses AuthorizationService.getAuthorizationRequestIntent()
+                        clientId = androidClientId,
+                        redirectUri = redirectUri,
+                        scopes = requiredScopesString
+                    )
+                    _appAuthAuthorizationIntent.tryEmit(authIntent) // Emit intent for UI to launch
+                    // Message for user
+                    tryEmitMessage("Please follow the prompts to authorize your Google account.")
+                    // isLoadingAccountAction will be set to false after handling the AppAuth redirect result.
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to initiate AppAuth authorization request", e)
+                    tryEmitMessage(
+                        "Error starting Google authorization: ${
+                            errorMapper.mapAuthExceptionToUserMessage(
+                                e
+                            )
+                        }"
+                    )
+                    _isLoadingAccountAction.value = false
+                    resetPendingGoogleAccountState()
                 }
             }
-
             is GoogleSignInResult.Error -> {
-                Log.e(TAG, "Google sign-in error: ${signInResult.exception.message}")
+                Log.e(
+                    TAG,
+                    "Google Sign-In (CredentialManager) error: ${signInResult.exception.message}",
+                    signInResult.exception
+                )
                 tryEmitMessage(
                     "Error adding Google account: ${
                         errorMapper.mapAuthExceptionToUserMessage(
@@ -454,24 +445,135 @@ class DefaultAccountRepository @Inject constructor(
                         )
                     }"
                 )
+                _isLoadingAccountAction.value = false
+                resetPendingGoogleAccountState()
             }
-
             is GoogleSignInResult.Cancelled -> {
-                Log.d(TAG, "Google sign-in was cancelled by the user.")
+                Log.d(TAG, "Google Sign-In (CredentialManager) was cancelled.")
                 tryEmitMessage("Google account addition cancelled.")
+                _isLoadingAccountAction.value = false
+                resetPendingGoogleAccountState()
             }
-
             is GoogleSignInResult.NoCredentialsAvailable -> {
-                Log.d(TAG, "No Google credentials available for sign-in.")
-                tryEmitMessage("No Google accounts available. Please add a Google account to your device.")
+                Log.d(TAG, "No Google credentials available for CredentialManager sign-in.")
+                tryEmitMessage("No Google accounts found on this device. Please add one via device settings.")
+                _isLoadingAccountAction.value = false
+                resetPendingGoogleAccountState()
             }
         }
+    }
 
-        _isLoadingAccountAction.value = false
+    private fun resetPendingGoogleAccountState() {
+        pendingGoogleAccountId = null
+        pendingGoogleEmail = null
+        pendingGoogleDisplayName = null
+    }
+
+    // Helper to update the accounts list
+    private fun updateAccountsListWithNewAccount(newAccount: Account) {
+        val currentList = _accounts.value.toMutableList()
+        currentList.removeAll { it.id == newAccount.id && it.providerType == newAccount.providerType } // Avoid duplicates
+        currentList.add(newAccount)
+        _accounts.value = currentList // Update the StateFlow
+        Log.d(TAG, "Account list updated with: ${newAccount.username}")
+    }
+
+    suspend fun finalizeGoogleAccountSetupWithAppAuth(intentData: Intent) {
+        val errorMapper = getErrorMapperForProvider("GOOGLE")
+        if (errorMapper == null) {
+            Log.e(TAG, "finalizeGoogleAccountSetupWithAppAuth: Google Error handler not found.")
+            tryEmitMessage("Internal error: Google Error handler not found.")
+            _isLoadingAccountAction.value = false
+            resetPendingGoogleAccountState()
+            return
+        }
+
+        val currentAccountId = pendingGoogleAccountId
+        if (currentAccountId == null) {
+            Log.e(
+                TAG,
+                "finalizeGoogleAccountSetupWithAppAuth called but no pendingGoogleAccountId was set."
+            )
+            tryEmitMessage("Error completing Google setup: Session data missing.")
+            _isLoadingAccountAction.value = false
+            resetPendingGoogleAccountState() // Clean up
+            return
+        }
+
+        Log.d(
+            TAG,
+            "finalizeGoogleAccountSetupWithAppAuth: Processing AppAuth redirect for account ID: $currentAccountId"
+        )
+        _isLoadingAccountAction.value = true // Start loading
+
+        val authResponse = appAuthHelperService.handleAuthorizationResponse(intentData)
+        if (authResponse == null) {
+            val appAuthError =
+                appAuthHelperService.lastError.value ?: "Unknown AppAuth authorization error."
+            Log.e(TAG, "AppAuth authorization response was null or error: $appAuthError")
+            tryEmitMessage("Google authorization failed: $appAuthError")
+            _isLoadingAccountAction.value = false
+            resetPendingGoogleAccountState() // Clean up
+            return
+        }
+
+        // Step 4: Exchange Authorization Code for Tokens
+        try {
+            Log.d(TAG, "Exchanging authorization code for tokens via AppAuthHelperService...")
+            val tokenResponse = appAuthHelperService.performTokenRequest(authResponse)
+            Log.i(
+                TAG,
+                "Token exchange successful. Access token received: ${tokenResponse.accessToken != null}"
+            )
+
+            // Step 5: Persist Tokens Securely
+            val success = googleTokenPersistenceService.saveTokens(
+                accountId = currentAccountId,
+                tokenResponse = tokenResponse, // Pass the raw TokenResponse to save all details
+                email = pendingGoogleEmail,
+                displayName = pendingGoogleDisplayName
+            )
+
+            if (success) {
+                val newAccount = Account(
+                    id = currentAccountId,
+                    username = pendingGoogleDisplayName ?: pendingGoogleEmail
+                    ?: "Google User ($currentAccountId)",
+                    providerType = "GOOGLE"
+                )
+                updateAccountsListWithNewAccount(newAccount)
+                tryEmitMessage("Google account '${newAccount.username}' successfully added and configured!")
+                Log.i(
+                    TAG,
+                    "Google account setup complete with AppAuth tokens for $currentAccountId."
+                )
+            } else {
+                Log.e(
+                    TAG,
+                    "Failed to save Google tokens to GoogleTokenPersistenceService for $currentAccountId."
+                )
+                tryEmitMessage("Critical error: Failed to save Google account credentials securely.")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception during token exchange or saving tokens for $currentAccountId", e)
+            tryEmitMessage(
+                "Error finalizing Google account setup: ${
+                    errorMapper.mapAuthExceptionToUserMessage(
+                        e
+                    )
+                }"
+            )
+        } finally {
+            _isLoadingAccountAction.value = false
+            resetPendingGoogleAccountState() // Clean up pending state
+        }
     }
 
     private suspend fun removeGoogleAccount(account: Account) {
-        Log.d(TAG, "removeGoogleAccount: Attempting for account: ${account.username}")
+        Log.d(
+            TAG,
+            "removeGoogleAccount (AppAuth Flow): Attempting for account: ${account.username} (ID: ${account.id})"
+        )
         val errorMapper = getErrorMapperForProvider("GOOGLE")
         if (errorMapper == null) {
             Log.e(TAG, "removeGoogleAccount: Google Error handler not found.")
@@ -480,23 +582,51 @@ class DefaultAccountRepository @Inject constructor(
             return
         }
 
+        _isLoadingAccountAction.value = true
+        var message = "Google account '${account.username}' removed." // Default success message
+
         try {
-            Log.d(TAG, "Calling googleAuthManager.signOut() to clear credential state.")
+            // Step 1: Attempt to revoke tokens on server (Best effort)
+            // AppAuth library itself doesn't have a high-level revoke utility for Google.
+            // This typically involves a direct HTTPS POST/GET to Google's revocation endpoint.
+            // Example: POST to [https://oauth2.googleapis.com/revoke?token=TOKEN_TO_REVOKE](https://oauth2.googleapis.com/revoke?token=TOKEN_TO_REVOKE)
+            // You'd need to fetch the access or refresh token from GoogleTokenPersistenceService first.
+            // This is an advanced step; for now, we'll focus on local cleanup.
+            // val tokens = googleTokenPersistenceService.getTokens(account.id)
+            // tokens?.accessToken?.let { /* TODO: Implement appAuthHelperService.revokeToken(it) or direct Ktor call */ }
+            // tokens?.refreshToken?.let { /* TODO: Implement appAuthHelperService.revokeToken(it) or direct Ktor call */ }
+            Log.d(TAG, "Server-side token revocation (TODO) for ${account.id}")
+
+
+            // Step 2: Clear local tokens from AccountManager and remove the account entry
+            val clearedLocally =
+                googleTokenPersistenceService.clearTokens(account.id, removeAccount = true)
+            if (clearedLocally) {
+                Log.i(TAG, "Local Google tokens and account entry cleared for ${account.id}.")
+            } else {
+                Log.w(TAG, "Failed to clear all local Google tokens/account for ${account.id}.")
+                message =
+                    "Google account '${account.username}' removed, but some local data might persist."
+            }
+
+            // Step 3: Clear CredentialManager sign-in state for this app
+            // This helps ensure user isn't automatically signed back in via CredentialManager's "one-tap"
+            // if they add the same account again.
             googleAuthManager.signOut()
+            Log.i(TAG, "CredentialManager state cleared for Google Sign-Out.")
 
-            // In a complete implementation, we would also remove the account from our local store
+            // Step 4: Update internal accounts list in the repository
+            val currentList = _accounts.value.toMutableList()
+            currentList.removeAll { it.id == account.id && it.providerType == "GOOGLE" }
+            _accounts.value = currentList
+            Log.i(TAG, "Account ${account.username} removed from repository's list.")
 
-            tryEmitMessage("Google account removed: ${account.username}")
         } catch (e: Exception) {
-            Log.e(TAG, "Error removing Google account", e)
-            tryEmitMessage(
-                "Error removing Google account: ${
-                    errorMapper.mapAuthExceptionToUserMessage(
-                        e
-                    )
-                }"
-            )
+            Log.e(TAG, "Error removing Google account ${account.id}", e)
+            message =
+                "Error removing Google account: ${errorMapper.mapAuthExceptionToUserMessage(e)}"
         } finally {
+            tryEmitMessage(message)
             _isLoadingAccountAction.value = false
         }
     }

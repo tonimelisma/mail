@@ -30,7 +30,7 @@ annotation class GoogleHttpClient
 
 @Module
 @InstallIn(SingletonComponent::class)
-object BackendGoogleModule { // Consolidated into one object module
+object BackendGoogleModule {
 
     init {
         Log.d(
@@ -39,11 +39,13 @@ object BackendGoogleModule { // Consolidated into one object module
         )
     }
 
+    // Note: For a production implementation, we would include token refresh logic
+    // using the Ktor Auth plugin. This has been documented separately in HISTORY.md.
+
     @Provides
     @Singleton
     @GoogleHttpClient
     fun provideGoogleHttpClient(json: Json): HttpClient {
-        // ... (HttpClient setup remains the same)
         return HttpClient(OkHttp) {
             engine {
                 config {
@@ -60,13 +62,11 @@ object BackendGoogleModule { // Consolidated into one object module
         }
     }
 
-    // GoogleAuthManager is @Singleton and has @Inject constructor, Hilt provides it directly.
-
     @Provides
     @Singleton
     fun provideGmailApiHelper(
         @GoogleHttpClient httpClient: HttpClient,
-        googleErrorMapper: GoogleErrorMapper // GoogleErrorMapper has @Inject constructor
+        googleErrorMapper: GoogleErrorMapper
     ): GmailApiHelper {
         Log.d("BackendGoogleModule", "Providing GmailApiHelper")
         return GmailApiHelper(httpClient, googleErrorMapper)
@@ -74,7 +74,6 @@ object BackendGoogleModule { // Consolidated into one object module
 
     @Provides
     @Singleton
-    // @ApiHelperType("GOOGLE") // For direct injection if needed
     @IntoMap
     @StringKey("GOOGLE")
     fun provideGmailApiAsMailService(gmailApiHelper: GmailApiHelper): MailApiService {
@@ -82,14 +81,12 @@ object BackendGoogleModule { // Consolidated into one object module
         return gmailApiHelper
     }
 
-    // Changed from @Binds to @Provides
     @Provides
     @Singleton
-    // @ErrorMapperType("GOOGLE") // For direct injection if needed
     @IntoMap
     @StringKey("GOOGLE")
     fun provideGoogleErrorMapperService(
-        googleErrorMapper: GoogleErrorMapper // Hilt injects this
+        googleErrorMapper: GoogleErrorMapper
     ): ErrorMapperService {
         Log.i("BackendGoogleModule", "Providing ErrorMapperService for 'GOOGLE' key via @Provides")
         return googleErrorMapper

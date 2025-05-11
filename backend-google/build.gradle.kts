@@ -44,6 +44,8 @@ dependencies {
     implementation(libs.androidx.credentials)
     implementation(libs.androidx.credentials.play.services.auth)
     implementation(libs.google.id) // For com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+    implementation(libs.appauth) // For OpenID AppAuth OAuth 2.0 implementation
+    implementation(libs.androidx.browser) // For CustomTabs to improve OAuth UI experience
 
     implementation(libs.androidx.activity.ktx) // Useful for ActivityResultLauncher
 
@@ -52,6 +54,8 @@ dependencies {
     implementation(libs.ktor.client.okhttp)
     implementation(libs.ktor.client.contentnegotiation)
     implementation(libs.ktor.serialization.kotlinx.json)
+    implementation(libs.ktor.client.auth)
+    implementation(libs.ktor.client.logging)
     implementation(libs.kotlinx.serialization.json)
 
     // --- Hilt ---
