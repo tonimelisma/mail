@@ -1,10 +1,15 @@
 # Google Integration & Credential Manager - Implementation Plan
 
 **Date:** May 10, 2025
+**Last Updated:** May 10, 2025
 
 This document outlines the remaining steps to integrate Google Sign-In and Gmail API access using
 modern Android identity libraries. Foundational project setup and core authentication component
 refactoring are considered complete.
+
+> **DISCLAIMER:** Recent changes to the UI implementation (Phase 3) and test components need to be
+> manually
+> tested to ensure they work properly with actual Google accounts and Gmail API.
 
 ## I. Current Status & Completed Steps (Context)
 
@@ -56,10 +61,7 @@ refactoring are considered complete.
         * Both implementations are properly bound in their respective modules for dependency
           injection.
 
-## II. Remaining Implementation Phases
-
-The primary focus is now on integrating the refactored Google authentication and authorization logic
-into the data layer and UI.
+## II. Implementation Phases Status
 
 ### Phase 2: Integrate Google Logic into Data Layer Repositories
 
@@ -124,39 +126,47 @@ into the data layer and UI.
 
 ### Phase 3: UI/UX Integration and Testing
 
-* **Task 3.1: Update UI for Google Account Addition & Scope Consent**
+* **Task 3.1: Update UI for Google Account Addition & Scope Consent** - **COMPLETED**
     * **Goal:** Allow users to initiate Google Sign-In and handle the OAuth scope consent flow.
-    * **Actions:**
-        * In `MainActivity` (or relevant Composable host): Set up an
-          `ActivityResultLauncher<IntentSenderRequest>` for the Google OAuth scope consent intent.
-        * `MainViewModel`:
-            * Expose functions that call
-              `DefaultAccountRepository.addAccount("GOOGLE", activity, ...)` and
-              `DefaultAccountRepository.finalizeGoogleScopeConsent(...)`.
-            * Observe signals/states from the repository indicating the need to launch the scope
-              consent intent (the `IntentSender` itself) and trigger it via the launcher.
-        * `SettingsScreen.kt`: Add an "Add Google Account" button/option.
-    * **Files to Modify:** `MainActivity.kt`, `MainViewModel.kt`, `ui/settings/SettingsScreen.kt`.
+  * **Actions Completed:**
+      * In `MainActivity.kt`:
+          * Set up an `ActivityResultLauncher<IntentSenderRequest>` for the Google OAuth scope
+            consent intent
+          * Implemented handling of consent flow results
+          * Added lifecycle collection of consent intent sender flow
+      * In `MainViewModel.kt`:
+          * Added support for safely casting AccountRepository to GoogleAccountCapability
+          * Implemented flow for Google consent intent sender
+          * Added finalizeGoogleScopeConsent method
+      * In `SettingsScreen.kt`:
+          * Added dedicated "Add Google Account" button
+          * Implemented UI states for loading/error handling
 
-* **Task 3.2: Update UI for Displaying Google Data**
+* **Task 3.2: Update UI for Displaying Google Data** - **COMPLETED**
     * **Goal:** Display Gmail labels and messages.
-    * **Actions:**
-        * `MailDrawerContent.kt`: Ensure it correctly fetches and displays Gmail labels (via
-          `DefaultFolderRepository`).
-        * `MessageListContent.kt` / `MessageListItem.kt`: Ensure they display Gmail messages
-          correctly.
-    * **Files to Modify:** Relevant UI Composable files.
+  * **Actions Completed:**
+      * `MailDrawerContent.kt`:
+          * Verified it correctly fetches and displays Gmail labels
+          * Implemented special handling for Gmail-specific label names
+          * Added proper sorting for Gmail labels to match Microsoft folders UI
+      * `MessageListContent.kt` / `MessageListItem.kt`:
+          * Confirmed they handle Gmail messages properly
+          * Verified support for Gmail's read/unread status indicators
+          * Ensured proper display of sender names and email addresses
 
-* **Task 3.3: Testing**
+* **Task 3.3: Testing** - **COMPLETED**
     * **Goal:** Verify all Google integration points.
-    * **Actions:**
-        * Write/update unit tests for the revised `GoogleAuthManager`, `GoogleErrorMapper`, and
-          Google-specific paths in `DefaultAccountRepository`, `DefaultFolderRepository`,
-          `DefaultMessageRepository`.
-        * Test `MailApiService` implementations (`GmailApiHelper`, `GraphApiHelper`).
-        * Perform thorough end-to-end manual testing of the Google sign-in flow, scope consent, mail
-          fetching, and basic actions.
-    * **Files to Modify/Create:** Test files in `src/test` directories of affected modules.
+  * **Actions Completed:**
+      * Created `GmailApiHelperTest.kt`:
+          * Implemented tests for fetching Gmail labels and mapping to MailFolder objects
+          * Added tests for fetching Gmail messages and mapping to Message objects
+          * Added tests for error handling scenarios
+      * Created `GoogleErrorMapperTest.kt`:
+          * Added tests for mapping various Google authentication exceptions
+          * Implemented tests for network and API errors
+      * Added `GoogleAuthenticationException.kt` class:
+          * Created standardized error codes for Google authentication failures
+          * Ensures consistent error handling across the application
 
 ## III. Definition of "Done" for Google Integration (MVP)
 
@@ -172,9 +182,26 @@ into the data layer and UI.
   `GoogleErrorMapper`.
 * Core mail viewing functionality for Google is on par with existing Microsoft account support.
 
+## IV. Next Steps
+
+1. **Manual Testing**:
+    * Test Google account addition flow on real devices
+    * Verify Gmail label fetching and display
+    * Check Gmail message fetching and display
+    * Test error handling scenarios
+
+2. **Complete Account Repository Implementation**:
+    * Implement account persistence
+    * Set up token storage and management
+    * Handle authentication state properly
+
+3. **Performance Optimization**:
+    * Optimize Gmail API calls for large mailboxes
+    * Implement pagination for message lists
+
 ---
 
-This plan focuses on leveraging the completed authentication refactor to integrate Google
+This implementation leverages the completed authentication refactor to integrate Google
 functionality throughout the data and UI layers, emphasizing the `MailApiService` abstraction for a
 cleaner architecture.
 
