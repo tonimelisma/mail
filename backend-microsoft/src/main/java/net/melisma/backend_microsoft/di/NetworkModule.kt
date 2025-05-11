@@ -26,15 +26,6 @@ object NetworkModule {
 
     @Provides
     @Singleton
-    fun provideJson(): Json = Json {
-        prettyPrint = true
-        isLenient = true
-        ignoreUnknownKeys = true // Important!
-        encodeDefaults = true
-    }
-
-    @Provides
-    @Singleton
     fun provideKtorHttpClient(json: Json): HttpClient {
         return HttpClient(OkHttp) {
             // Configure OkHttp engine

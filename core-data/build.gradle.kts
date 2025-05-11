@@ -2,7 +2,9 @@
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
-    // No Kapt or Hilt plugin needed here if it only contains interfaces, models, and non-Hilt injected classes
+    kotlin("kapt")
+    alias(libs.plugins.hilt.gradle)
+    alias(libs.plugins.kotlin.serialization)
 }
 
 android {
@@ -60,6 +62,13 @@ dependencies {
 
     // ADDED: AndroidX Core KTX to provide androidx.annotation.RawRes and other utilities
     implementation(libs.androidx.core.ktx)
+
+    // Kotlinx Serialization
+    implementation(libs.kotlinx.serialization.json)
+
+    // Hilt
+    implementation(libs.hilt.android)
+    kapt(libs.hilt.compiler)
 
     // --- Unit Testing ---
     testImplementation(libs.junit)

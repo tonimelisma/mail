@@ -171,19 +171,10 @@ class GoogleAuthManager @Inject constructor(
     suspend fun signOut() {
         try {
             credentialManager.clearCredentialState(ClearCredentialStateRequest())
-            Log.d(TAG, "CredentialManager state cleared.")
+            Log.i(TAG, "CredentialManager state cleared for sign-out.")
         } catch (e: ClearCredentialException) {
-            Log.e(TAG, "Error clearing CredentialManager state", e)
-        }
-        try {
-            oneTapClient.signOut()
-                .await() // From com.google.android.gms.auth.api.identity.Identity.getSignInClient
-            Log.d(TAG, "Google One Tap Client Sign-Out complete.")
-        } catch (e: Exception) {
-            Log.w(
-                TAG,
-                "Error signing out from Google One Tap Client (might be normal if not used directly): ${e.message}"
-            )
+            Log.e(TAG, "Error clearing CredentialManager state during sign-out", e)
+            // Optionally, rethrow or handle more specifically if needed
         }
     }
 
