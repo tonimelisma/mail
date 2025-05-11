@@ -29,6 +29,7 @@ import net.melisma.core_data.model.MessageDataState // Updated
 import net.melisma.core_data.repository.AccountRepository // Updated
 import net.melisma.core_data.repository.FolderRepository // Updated
 import net.melisma.core_data.repository.MessageRepository // Updated
+import net.melisma.core_data.repository.capabilities.GoogleAccountCapability // Added for Google capability
 import javax.inject.Inject
 
 
@@ -255,16 +256,26 @@ class MainViewModel @Inject constructor(
     private val _needGoogleConsent = MutableStateFlow(false)
     val needGoogleConsent: StateFlow<Boolean> = _needGoogleConsent.asStateFlow()
 
+    // Safely cast to GoogleAccountCapability if supported
+    private val googleAccountCapability = accountRepository as? GoogleAccountCapability
+
     init {
-        // Observe Google consent intent from the repository
-        accountRepository.googleConsentIntent
-            .onEach { intentSender ->
-                if (intentSender != null) {
-                    Log.d(TAG, "Google consent intent received. Signaling UI to launch consent.")
-                    _googleConsentIntentSender.value = intentSender
-                    _needGoogleConsent.value = true
-                }
-            }.launchIn(viewModelScope)
+        // Observe Google consent intent from the repository if it supports the capability
+        googleAccountCapability?.let { capability ->
+            capability.googleConsentIntent
+                .onEach { intentSender ->
+                    if (intentSender != null) {
+                        Log.d(
+                            TAG,
+                            "Google consent intent received. Signaling UI to launch consent."
+                        )
+                        _googleConsentIntentSender.value = intentSender
+                        _needGoogleConsent.value = true
+                    }
+                }.launchIn(viewModelScope)
+        } ?: run {
+            Log.d(TAG, "GoogleAccountCapability not available from AccountRepository")
+        }
     }
 
     // IntentSender for Google OAuth consent
@@ -277,8 +288,15 @@ class MainViewModel @Inject constructor(
         intent: android.content.Intent?,
         activity: Activity
     ) {
+        // Check if the capability is available
+        if (googleAccountCapability == null) {
+            Log.e(TAG, "Cannot finalize Google consent: GoogleAccountCapability not available")
+            tryEmitToastMessage("Error: Cannot complete Google account setup")
+            return
+        }
+
         viewModelScope.launch {
-            accountRepository.finalizeGoogleScopeConsent(account, intent, activity)
+            googleAccountCapability.finalizeGoogleScopeConsent(account, intent, activity)
             _needGoogleConsent.value = false
             _googleConsentIntentSender.value = null
         }

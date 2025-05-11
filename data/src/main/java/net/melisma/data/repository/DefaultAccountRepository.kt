@@ -31,6 +31,7 @@ import net.melisma.core_data.errors.ErrorMapperService
 import net.melisma.core_data.model.Account
 import net.melisma.core_data.model.AuthState
 import net.melisma.core_data.repository.AccountRepository
+import net.melisma.core_data.repository.capabilities.GoogleAccountCapability
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -40,7 +41,7 @@ class DefaultAccountRepository @Inject constructor(
     private val googleAuthManager: GoogleAuthManager,
     @ApplicationScope private val externalScope: CoroutineScope,
     private val errorMappers: Map<String, @JvmSuppressWildcards ErrorMapperService>
-) : AccountRepository, AuthStateListener {
+) : AccountRepository, AuthStateListener, GoogleAccountCapability {
 
     private val TAG = "DefaultAccountRepo" // Logging TAG
 
@@ -101,12 +102,19 @@ class DefaultAccountRepository @Inject constructor(
     }
 
     // IntentSender for Google OAuth scope consent
-    private val _googleConsentIntent = MutableSharedFlow<IntentSender?>(
+    // Implementation for GoogleAccountCapability interface
+    private val _googleConsentIntentInternal = MutableSharedFlow<IntentSender?>(
         replay = 0, extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
-    override val googleConsentIntent: Flow<IntentSender?> = _googleConsentIntent.asSharedFlow()
+    override val googleConsentIntent: Flow<IntentSender?> =
+        _googleConsentIntentInternal.asSharedFlow()
 
-    suspend fun finalizeGoogleScopeConsent(account: Account, intent: Intent?, activity: Activity) {
+    // Implementation for GoogleAccountCapability interface
+    override suspend fun finalizeGoogleScopeConsent(
+        account: Account,
+        intent: Intent?,
+        activity: Activity
+    ) {
         Log.d(TAG, "finalizeGoogleScopeConsent called for account: ${account.username}")
         val errorMapper = getErrorMapperForProvider("GOOGLE")
         if (errorMapper == null) {
@@ -145,7 +153,7 @@ class DefaultAccountRepository @Inject constructor(
                     "Additional consent required after finalizeGoogleScopeConsent. Requesting again."
                 )
                 externalScope.launch {
-                    _googleConsentIntent.emit(result.pendingIntent)
+                    _googleConsentIntentInternal.emit(result.pendingIntent)
                 }
                 tryEmitMessage("Additional permissions needed for Gmail access.")
             }
@@ -416,7 +424,7 @@ class DefaultAccountRepository @Inject constructor(
                         )
                         // Signal ViewModel/UI to launch the consent intent
                         externalScope.launch {
-                            _googleConsentIntent.emit(scopeResult.pendingIntent)
+                            _googleConsentIntentInternal.emit(scopeResult.pendingIntent)
                         }
                         tryEmitMessage("Additional permissions needed for Gmail access.")
                     }

@@ -1,7 +1,6 @@
 package net.melisma.core_data.repository
 
 import android.app.Activity
-import android.content.IntentSender
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import net.melisma.core_data.model.Account
@@ -40,12 +39,7 @@ interface AccountRepository {
      */
     val accountActionMessage: Flow<String?>
 
-    /**
-     * A [Flow] emitting the IntentSender for Google OAuth scope consent when required.
-     * When a Google account is being added and requires OAuth consent for Gmail API scopes,
-     * this flow will emit the IntentSender that should be launched by the UI layer.
-     */
-    val googleConsentIntent: Flow<IntentSender?>
+    // Google-specific functionality has been moved to a separate capability interface
 
     /**
      * Initiates the flow to add a new account interactively via the underlying auth provider.

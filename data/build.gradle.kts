@@ -40,6 +40,11 @@ dependencies {
     implementation(project(":backend-microsoft")) // For MS-specific components
     implementation(project(":backend-google")) // For Google-specific components
 
+    // --- Google Identity Library ---
+    // Add this line because DefaultAccountRepository now directly uses
+    // com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+    implementation(libs.google.id)
+
     // --- Hilt ---
     implementation(libs.hilt.android)
     kapt(libs.hilt.compiler)

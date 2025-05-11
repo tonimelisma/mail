@@ -1,9 +1,10 @@
 // File: app/src/main/java/net/melisma/mail/ui/settings/SettingsScreen.kt
-// Updated to use generic Account type
+// Updated to use generic Account type and add missing Column import
 
 package net.melisma.mail.ui.settings
 
 import android.app.Activity
+import androidx.compose.foundation.layout.Column // <<< ADDED IMPORT
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -95,14 +96,14 @@ fun SettingsScreen(
             )
         },
         floatingActionButton = {
-            Column {
+            Column { // Using Column for multiple FABs or grouped buttons
                 // Microsoft account button
                 Button(
                     // Trigger add Microsoft account action in ViewModel
                     onClick = { viewModel.addAccount(activity) },
                     // Use isLoadingAccountAction from the updated state
                     enabled = !state.isLoadingAccountAction,
-                    modifier = Modifier.padding(bottom = 8.dp)
+                    modifier = Modifier.padding(bottom = 8.dp) // Add some spacing between buttons
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         // Show loading indicator based on isLoadingAccountAction
@@ -151,7 +152,7 @@ fun SettingsScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(paddingValues)
-                .padding(top = 16.dp)
+                .padding(top = 16.dp) // Add some padding at the top of the list
         ) {
             item {
                 Text(
@@ -177,6 +178,9 @@ fun SettingsScreen(
                         headlineContent = {
                             // Use username from generic Account
                             Text(account.username)
+                        },
+                        supportingContent = { // Display provider type
+                            Text("Provider: ${account.providerType}")
                         },
                         leadingContent = {
                             Icon(
@@ -206,7 +210,7 @@ fun SettingsScreen(
                 }
             }
 
-            item { Spacer(modifier = Modifier.height(80.dp)) } // Space for FAB
+            item { Spacer(modifier = Modifier.height(120.dp)) } // Increased space for the two FAB-like buttons
 
         } // End LazyColumn
 

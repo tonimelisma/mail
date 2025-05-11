@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
@@ -51,6 +52,11 @@ class MicrosoftAccountRepository @Inject constructor(
         replay = 0, extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
     override val accountActionMessage: Flow<String?> = _accountActionMessage.asSharedFlow()
+
+    // This is a dummy implementation since Microsoft accounts don't use Google OAuth consent
+    // We return an empty flow since this property is now removed from AccountRepository interface
+    // and should be accessed via GoogleAccountCapability interface
+    val googleConsentIntent: Flow<android.content.IntentSender?> = flowOf(null)
 
     init {
         Log.d(TAG, "Initializing and registering as AuthStateListener")
