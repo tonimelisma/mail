@@ -68,8 +68,9 @@ android {
 dependencies {
     // --- Project Modules ---
     implementation(project(":core-data"))
-    implementation(project(":data")) // Depends on :backend-microsoft (and eventually :backend-google)
+    implementation(project(":data"))
     implementation(project(":backend-microsoft")) // Explicitly include the Microsoft backend
+    implementation(project(":backend-google"))   // ADDED: Explicitly include the Google backend
 
     // MSAL dependency for BrowserTabActivity
     implementation(libs.microsoft.msal)
@@ -110,6 +111,7 @@ dependencies {
     testImplementation(project(":core-data"))
     testImplementation(project(":data"))
     testImplementation(project(":backend-microsoft"))
+    testImplementation(project(":backend-google")) // ADDED: for tests too, if needed
 
     // MSAL dependency for tests
     testImplementation(libs.microsoft.msal)

@@ -27,8 +27,8 @@ import net.melisma.backend_microsoft.auth.RemoveAccountResult
 // import net.melisma.backend_google.auth.GoogleScopeAuthResult
 import net.melisma.core_data.di.ApplicationScope
 import net.melisma.core_data.errors.ErrorMapperService
-import net.melisma.core_data.model.Account // Assuming Account.kt is in this package
-import net.melisma.core_data.model.AuthState // Assuming AuthState.kt is in this package
+import net.melisma.core_data.model.Account
+import net.melisma.core_data.model.AuthState
 import net.melisma.core_data.repository.AccountRepository
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -36,12 +36,12 @@ import javax.inject.Singleton
 @Singleton
 class DefaultAccountRepository @Inject constructor(
     private val microsoftAuthManager: MicrosoftAuthManager,
-    // private val googleAuthManager: GoogleAuthManager, // TODO: Uncomment and inject when GoogleAuthManager is ready
+    // private val googleAuthManager: GoogleAuthManager, // TODO: Uncomment when GoogleAuthManager is ready
     @ApplicationScope private val externalScope: CoroutineScope,
     private val errorMappers: Map<String, @JvmSuppressWildcards ErrorMapperService>
 ) : AccountRepository, AuthStateListener {
 
-    private val TAG = "DefaultAccountRepo"
+    private val TAG = "DefaultAccountRepo" // Logging TAG
 
     private val _authState = MutableStateFlow(determineInitialAuthState())
     override val authState: StateFlow<AuthState> = _authState.asStateFlow()
@@ -58,7 +58,11 @@ class DefaultAccountRepository @Inject constructor(
     override val accountActionMessage: Flow<String?> = _accountActionMessage.asSharedFlow()
 
     init {
-        Log.d(TAG, "Initializing and registering as AuthStateListener for MicrosoftAuthManager")
+        Log.d(
+            TAG,
+            "Initializing DefaultAccountRepository. Injected errorMappers keys: ${errorMappers.keys}"
+        )
+        Log.d(TAG, "Registering as AuthStateListener for MicrosoftAuthManager")
         microsoftAuthManager.setAuthStateListener(this)
         syncStateFromManager()
     }
@@ -70,10 +74,12 @@ class DefaultAccountRepository @Inject constructor(
     ) {
         Log.d(
             TAG,
-            "MS AuthStateListener notified: init=$isInitialized, msAccountCount=${msAccounts.size}, errorPresent=${error != null}"
+            "onAuthStateChanged (MSAL): init=$isInitialized, msAccountCount=${msAccounts.size}, errorPresent=${error != null}"
         )
         _authState.value = determineAuthState(isInitialized, error)
-        _accounts.value = mapToGenericAccounts(msAccounts)
+        val newGenericAccounts = mapToGenericAccounts(msAccounts)
+        Log.d(TAG, "onAuthStateChanged: Mapped to ${newGenericAccounts.size} generic accounts.")
+        _accounts.value = newGenericAccounts
         _isLoadingAccountAction.value = false
     }
 
@@ -82,10 +88,11 @@ class DefaultAccountRepository @Inject constructor(
         scopes: List<String>,
         providerType: String
     ) {
+        Log.d(TAG, "addAccount called. ProviderType: $providerType, Scopes: $scopes")
         when (providerType.uppercase()) {
             "MS" -> addMicrosoftAccount(activity, scopes)
             "GOOGLE" -> {
-                Log.i(TAG, "Attempting to add Google account.")
+                Log.i(TAG, "Attempting to add Google account. (Not yet implemented)")
                 tryEmitMessage("Google account addition coming soon.")
             }
             else -> {
@@ -96,19 +103,26 @@ class DefaultAccountRepository @Inject constructor(
     }
 
     override suspend fun addAccount(activity: Activity, scopes: List<String>) {
-        Log.d(TAG, "addAccount (legacy) called, defaulting to MS provider.")
+        Log.d(
+            TAG,
+            "addAccount (legacy overload) called, defaulting to MS provider. Scopes: $scopes"
+        )
         addMicrosoftAccount(activity, scopes)
     }
 
     override suspend fun removeAccount(account: Account) {
+        Log.d(
+            TAG,
+            "removeAccount called for account: ${account.username} (Provider: ${account.providerType})"
+        )
         _isLoadingAccountAction.value = true
         when (account.providerType.uppercase()) {
             "MS" -> removeMicrosoftAccount(account)
             "GOOGLE" -> {
                 Log.i(
                     TAG,
-                    "Attempting to remove Google account: ${account.username}"
-                ) // CORRECTED: Using account.username
+                    "Attempting to remove Google account: ${account.username}. (Not yet implemented)"
+                )
                 tryEmitMessage("Google account removal coming soon.")
                 _isLoadingAccountAction.value = false
             }
@@ -124,41 +138,49 @@ class DefaultAccountRepository @Inject constructor(
     }
 
     override fun clearAccountActionMessage() {
+        Log.d(TAG, "clearAccountActionMessage called.")
         tryEmitMessage(null)
     }
 
     private fun getErrorMapperForProvider(providerType: String): ErrorMapperService? {
-        val mapper = errorMappers[providerType.uppercase()]
+        val providerKey = providerType.uppercase()
+        Log.d(
+            TAG,
+            "getErrorMapperForProvider: Attempting to get mapper for key '$providerKey'. Available keys: ${errorMappers.keys}"
+        )
+        val mapper = errorMappers[providerKey]
         if (mapper == null) {
-            Log.e(
-                TAG,
-                "No ErrorMapperService found for provider type: $providerType. Available mappers: ${errorMappers.keys}"
-            )
+            Log.e(TAG, "No ErrorMapperService found for provider type: $providerKey")
         }
         return mapper
     }
 
     private suspend fun addMicrosoftAccount(activity: Activity, scopes: List<String>) {
+        Log.d(TAG, "addMicrosoftAccount: Attempting for scopes: $scopes")
         val errorMapper = getErrorMapperForProvider("MS")
         if (errorMapper == null) {
+            Log.e(TAG, "addMicrosoftAccount: MS Error handler not found.")
             tryEmitMessage("Internal error: MS Error handler not found.")
             _isLoadingAccountAction.value = false
             return
         }
 
-        if (determineAuthState(
-                microsoftAuthManager.isInitialized,
-                microsoftAuthManager.initializationError
-            ) !is AuthState.Initialized
-        ) {
+        val currentAuthState = determineAuthState(
+            microsoftAuthManager.isInitialized,
+            microsoftAuthManager.initializationError
+        )
+        Log.d(TAG, "addMicrosoftAccount: Current MS Auth State before adding: $currentAuthState")
+        if (currentAuthState !is AuthState.Initialized) {
             Log.w(TAG, "addMicrosoftAccount called but MS auth state is not Initialized.")
             tryEmitMessage("Microsoft authentication system not ready.")
             _isLoadingAccountAction.value = false
             return
         }
         _isLoadingAccountAction.value = true
+        Log.d(TAG, "addMicrosoftAccount: Calling MicrosoftAuthManager.addAccount...")
         microsoftAuthManager.addAccount(activity, scopes)
             .onEach { result ->
+                Log.d(TAG, "addMicrosoftAccount: Result from MicrosoftAuthManager: $result")
                 val message = when (result) {
                     is AddAccountResult.Success -> "Microsoft account added: ${result.account.username}"
                     is AddAccountResult.Error -> "Error adding Microsoft account: ${
@@ -179,18 +201,24 @@ class DefaultAccountRepository @Inject constructor(
     }
 
     private suspend fun removeMicrosoftAccount(account: Account) {
+        Log.d(TAG, "removeMicrosoftAccount: Attempting for account: ${account.username}")
         val errorMapper = getErrorMapperForProvider("MS")
         if (errorMapper == null) {
+            Log.e(TAG, "removeMicrosoftAccount: MS Error handler not found.")
             tryEmitMessage("Internal error: MS Error handler not found.")
             _isLoadingAccountAction.value = false
             return
         }
 
-        if (determineAuthState(
-                microsoftAuthManager.isInitialized,
-                microsoftAuthManager.initializationError
-            ) !is AuthState.Initialized
-        ) {
+        val currentAuthState = determineAuthState(
+            microsoftAuthManager.isInitialized,
+            microsoftAuthManager.initializationError
+        )
+        Log.d(
+            TAG,
+            "removeMicrosoftAccount: Current MS Auth State before removing: $currentAuthState"
+        )
+        if (currentAuthState !is AuthState.Initialized) {
             Log.w(TAG, "removeMicrosoftAccount called but MS auth state is not Initialized.")
             tryEmitMessage("Microsoft authentication system not ready.")
             _isLoadingAccountAction.value = false
@@ -199,14 +227,22 @@ class DefaultAccountRepository @Inject constructor(
 
         val msalAccountToRemove = microsoftAuthManager.accounts.find { it.id == account.id }
         if (msalAccountToRemove == null) {
-            Log.e(TAG, "Microsoft account to remove (ID: ${account.id}) not found in MS manager.")
+            Log.e(
+                TAG,
+                "Microsoft account to remove (ID: ${account.id}, Username: ${account.username}) not found in MS manager."
+            )
             tryEmitMessage("Microsoft account not found for removal.")
             _isLoadingAccountAction.value = false
             return
         }
 
+        Log.d(
+            TAG,
+            "removeMicrosoftAccount: Calling MicrosoftAuthManager.removeAccount for MSAL account: ${msalAccountToRemove.username}"
+        )
         microsoftAuthManager.removeAccount(msalAccountToRemove)
             .onEach { result ->
+                Log.d(TAG, "removeMicrosoftAccount: Result from MicrosoftAuthManager: $result")
                 val message = when (result) {
                     is RemoveAccountResult.Success -> "Microsoft account removed: ${msalAccountToRemove.username}"
                     is RemoveAccountResult.Error -> "Error removing Microsoft account: ${
@@ -227,15 +263,17 @@ class DefaultAccountRepository @Inject constructor(
     }
 
     private fun tryEmitMessage(message: String?) {
+        Log.d(TAG, "tryEmitMessage: '$message'")
         externalScope.launch {
             val emitted = _accountActionMessage.tryEmit(message)
             if (!emitted) {
-                Log.w(TAG, "Failed to emit account action message: $message")
+                Log.w(TAG, "Failed to emit account action message (Buffer full?): $message")
             }
         }
     }
 
     private fun syncStateFromManager() {
+        Log.d(TAG, "syncStateFromManager called.")
         onAuthStateChanged(
             microsoftAuthManager.isInitialized,
             microsoftAuthManager.accounts,
@@ -244,27 +282,39 @@ class DefaultAccountRepository @Inject constructor(
     }
 
     private fun determineInitialAuthState(): AuthState {
-        return determineAuthState(
+        val state = determineAuthState(
             microsoftAuthManager.isInitialized,
             microsoftAuthManager.initializationError
         )
+        Log.d(TAG, "determineInitialAuthState: $state")
+        return state
     }
 
     private fun determineAuthState(isInitialized: Boolean, error: MsalException?): AuthState {
-        return when {
+        val state = when {
             !isInitialized && error != null -> AuthState.InitializationError(error)
             !isInitialized && error == null -> AuthState.Initializing
             else -> AuthState.Initialized
         }
+        Log.v(
+            TAG,
+            "determineAuthState: isInitialized=$isInitialized, errorPresent=${error != null} -> $state"
+        )
+        return state
     }
 
     private fun mapToGenericAccounts(msalAccounts: List<IAccount>): List<Account> {
+        Log.d(TAG, "mapToGenericAccounts: Mapping ${msalAccounts.size} MSAL accounts.")
         return msalAccounts.map { msalAccount ->
             Account(
                 id = msalAccount.id ?: "",
-                // CORRECTED: Removed 'email = msalAccount.username' as Account constructor doesn't have it
                 username = msalAccount.username ?: "Unknown User",
                 providerType = "MS"
+            )
+        }.also {
+            Log.d(
+                TAG,
+                "mapToGenericAccounts: Resulting generic accounts: ${it.joinToString { acc -> acc.username }}"
             )
         }
     }
