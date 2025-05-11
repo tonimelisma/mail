@@ -1,7 +1,5 @@
-// File: backend-microsoft/src/main/java/net/melisma/backend_microsoft/di/BackendMicrosoftModule.kt
 package net.melisma.backend_microsoft.di
 
-// HttpClient and Json will be provided by NetworkModule.kt, so remove Ktor imports if not used elsewhere here.
 import android.content.Context
 import dagger.Binds
 import dagger.Module
@@ -19,6 +17,7 @@ import net.melisma.core_data.datasource.MailApiService
 import net.melisma.core_data.datasource.TokenProvider
 import net.melisma.core_data.di.ApiHelperType
 import net.melisma.core_data.di.AuthConfigProvider
+import net.melisma.core_data.di.ErrorMapperType // Import the new qualifier
 import net.melisma.core_data.di.TokenProviderType
 import net.melisma.core_data.errors.ErrorMapperService
 import javax.inject.Singleton
@@ -30,6 +29,9 @@ abstract class BackendMicrosoftBindingModule {
 
     @Binds
     @Singleton
+    @ErrorMapperType("MS") // Qualify this implementation
+    @IntoMap // Add to map
+    @StringKey("MS") // Key for the map
     abstract fun bindErrorMapperService(
         microsoftErrorMapper: MicrosoftErrorMapper // Provided via @Inject constructor
     ): ErrorMapperService
@@ -67,9 +69,8 @@ object BackendMicrosoftProvidesModule {
         return MicrosoftAuthManager(context, authConfigProvider)
     }
 
-    // REMOVED: provideKtorJson() - This will now be provided by NetworkModule.kt
-    // REMOVED: provideKtorHttpClient() - This will now be provided by NetworkModule.kt
-
-    // GraphApiHelper, MicrosoftTokenProvider, MicrosoftErrorMapper are assumed to use @Inject constructor.
-    // If GraphApiHelper needs HttpClient, Hilt will inject it from NetworkModule.
+    // MicrosoftErrorMapper is assumed to use @Inject constructor.
+    // MicrosoftTokenProvider is assumed to use @Inject constructor.
+    // GraphApiHelper is assumed to use @Inject constructor.
+    // If GraphApiHelper needs HttpClient, Hilt will inject it from :backend-microsoft/di/NetworkModule.kt
 }

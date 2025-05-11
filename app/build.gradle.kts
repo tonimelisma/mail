@@ -6,7 +6,7 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     id("org.jetbrains.kotlin.kapt") // Apply kapt using its standard ID
     alias(libs.plugins.hilt.gradle)
-    // id("com.google.gms.google-services") // Ensure this is uncommented if you've set up google-services.json
+    // id("com.google.gms.google-services") // Removed - Not needed for Credential Manager
 }
 
 android {
@@ -116,7 +116,7 @@ dependencies {
 
     // Add test implementation of Robolectric to support Android resource loading in tests
     testImplementation("org.robolectric:robolectric:4.10.3")
-    
+
     // ADDED explicit dependency for kotlinx-coroutines-core for tests
     testImplementation(libs.kotlinx.coroutines.core)
     testImplementation(libs.kotlinx.coroutines.test) // For runTest, TestDispatchers etc.

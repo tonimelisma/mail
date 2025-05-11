@@ -6,6 +6,7 @@ import dagger.hilt.components.SingletonComponent
 import dagger.multibindings.Multibinds
 import net.melisma.core_data.datasource.MailApiService
 import net.melisma.core_data.datasource.TokenProvider
+import net.melisma.core_data.errors.ErrorMapperService // ADDED: Import for ErrorMapperService
 
 /**
  * This module declares the multi-bound maps for dependency injection.
@@ -26,4 +27,10 @@ abstract class MultiBindingModule {
      */
     @Multibinds
     abstract fun mailApiServices(): Map<String, MailApiService>
+
+    /**
+     * Declares a map binding for ErrorMapperService implementations keyed by provider type.
+     */
+    @Multibinds // ADDED: Multibinding for ErrorMapperService map
+    abstract fun errorMapperServices(): Map<String, @JvmSuppressWildcards ErrorMapperService>
 }

@@ -1,5 +1,6 @@
 package net.melisma.backend_google.di
 
+import dagger.Binds
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -16,11 +17,12 @@ import io.ktor.http.HttpHeaders
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.json.Json
 import net.melisma.backend_google.GmailApiHelper
-import net.melisma.backend_google.datasource.GoogleTokenProvider
+import net.melisma.backend_google.errors.GoogleErrorMapper // Import the new error mapper
 import net.melisma.core_data.datasource.MailApiService
-import net.melisma.core_data.datasource.TokenProvider
+// import net.melisma.core_data.datasource.TokenProvider // TokenProvider for Google is removed
 import net.melisma.core_data.di.ApiHelperType
-import net.melisma.core_data.di.TokenProviderType
+import net.melisma.core_data.di.ErrorMapperType // Import the new qualifier
+// import net.melisma.core_data.di.TokenProviderType // TokenProviderType for Google is removed
 import net.melisma.core_data.errors.ErrorMapperService
 import java.util.concurrent.TimeUnit
 import javax.inject.Qualifier
@@ -38,7 +40,7 @@ annotation class GoogleHttpClient
  */
 @Module
 @InstallIn(SingletonComponent::class)
-object BackendGoogleModule {
+object BackendGoogleModule { // Changed to object module for @Provides
 
     /**
      * Provides a JSON serializer configured for Google APIs
@@ -80,29 +82,32 @@ object BackendGoogleModule {
         }
     }
 
-    /**
-     * Binds the Google token provider to the TokenProvider interface with a
-     * qualifier for multi-binding in the data module later
-     */
-    @Provides
-    @Singleton
-    @TokenProviderType("GOOGLE")
-    @IntoMap
-    @StringKey("GOOGLE")
-    fun provideGoogleTokenProvider(tokenProvider: GoogleTokenProvider): TokenProvider {
-        return tokenProvider
-    }
+    // GoogleAuthManager is @Singleton and has @Inject constructor, so Hilt provides it directly.
+    // No need to explicitly provide GoogleAuthManager here unless binding to an interface.
+
+    // REMOVED: provideGoogleTokenProvider, as GoogleTokenProvider.kt is deleted.
+    // The functionality is now within GoogleAuthManager.
 
     /**
-     * Provides the GmailApiHelper for injection
+     * Provides the GmailApiHelper for injection.
+     * It now takes GoogleErrorMapper directly if needed, or a map of ErrorMapperServices.
+     * For simplicity, if GmailApiHelper needs an error mapper specifically for Google errors,
+     * it can inject GoogleErrorMapper directly. If it needs a generic one,
+     * it would inject ErrorMapperService with a qualifier or the map.
+     * Assuming GmailApiHelper might use a generic error mapping strategy or a specific one.
+     * Let's assume it can take the specific GoogleErrorMapper for now.
      */
     @Provides
     @Singleton
     fun provideGmailApiHelper(
         @GoogleHttpClient httpClient: HttpClient,
-        errorMapper: ErrorMapperService
+        googleErrorMapper: GoogleErrorMapper // Injecting specific mapper for simplicity
+        // Alternatively, inject Map<String, ErrorMapperService>
+        // and select the "GOOGLE" one.
     ): GmailApiHelper {
-        return GmailApiHelper(httpClient, errorMapper)
+        // If GmailApiHelper's constructor expects ErrorMapperService,
+        // then googleErrorMapper (which implements it) can be passed.
+        return GmailApiHelper(httpClient, googleErrorMapper)
     }
 
     /**
@@ -119,4 +124,17 @@ object BackendGoogleModule {
     }
 }
 
-// TokenProviderType is now imported from core-data module
+// Abstract module for Binds
+@Module
+@InstallIn(SingletonComponent::class)
+abstract class BackendGoogleBindingModule {
+
+    @Binds
+    @Singleton
+    @ErrorMapperType("GOOGLE") // Qualify this implementation
+    @IntoMap // Add to map
+    @StringKey("GOOGLE") // Key for the map
+    abstract fun bindGoogleErrorMapperService(
+        googleErrorMapper: GoogleErrorMapper // Provided via @Inject constructor
+    ): ErrorMapperService
+}

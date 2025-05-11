@@ -2,24 +2,24 @@
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
-    id("org.jetbrains.kotlin.kapt")
+    id("org.jetbrains.kotlin.kapt") // For Hilt
     alias(libs.plugins.hilt.gradle)
     alias(libs.plugins.kotlin.serialization) // For kotlinx.serialization
 }
 
 android {
     namespace = "net.melisma.backend_google"
-    compileSdk = 35
+    compileSdk = 35 // Or your project's compileSdk
 
     defaultConfig {
-        minSdk = 26
+        minSdk = 26 // Or your project's minSdk
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles("consumer-rules.pro")
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = false // Or true, with appropriate Proguard rules
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -37,18 +37,22 @@ android {
 
 dependencies {
     // --- Project Modules ---
-    implementation(project(":core-data")) // Includes ErrorMapperService now
+    implementation(project(":core-data"))
 
-    // --- Google Sign-In ---
-    implementation(libs.google.play.services.auth)
-    implementation(libs.androidx.activity.ktx) // Needed for ActivityResultLauncher
+    // --- Google Identity, Auth, and Credential Manager ---
+    implementation(libs.google.play.services.auth) // For com.google.android.gms.auth.api.identity.*
+    implementation(libs.androidx.credentials)
+    implementation(libs.androidx.credentials.play.services.auth)
+    implementation(libs.google.id) // For com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
+
+    implementation(libs.androidx.activity.ktx) // Useful for ActivityResultLauncher
 
     // --- Ktor Client ---
     implementation(libs.ktor.client.core)
     implementation(libs.ktor.client.okhttp)
     implementation(libs.ktor.client.contentnegotiation)
     implementation(libs.ktor.serialization.kotlinx.json)
-    implementation(libs.kotlinx.serialization.json) // Core serialization runtime
+    implementation(libs.kotlinx.serialization.json)
 
     // --- Hilt ---
     implementation(libs.hilt.android)
@@ -56,12 +60,13 @@ dependencies {
 
     // --- Coroutines ---
     implementation(libs.kotlinx.coroutines.core)
+    implementation(libs.kotlinx.coroutines.play.services) // For Task.await()
 
     // --- Unit Testing ---
     testImplementation(libs.junit)
     testImplementation(libs.mockk.core)
-    testImplementation(libs.mockk.android)
-    testImplementation(libs.mockk.agent)
+    testImplementation(libs.mockk.android) // if using Android specific parts in unit tests
+    testImplementation(libs.mockk.agent)   // if needing final class/method mocking
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.turbine)
 

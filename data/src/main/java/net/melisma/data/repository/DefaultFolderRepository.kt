@@ -27,18 +27,13 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.cancellation.CancellationException
 
-/**
- * Default implementation of the [FolderRepository] interface.
- * Currently only handles Microsoft accounts using Microsoft Graph API.
- * Future: Will be extended to support multiple account types (Google, etc.).
- */
 @Singleton
 class DefaultFolderRepository @Inject constructor(
     private val tokenProviders: Map<String, @JvmSuppressWildcards TokenProvider>,
     private val mailApiServices: Map<String, @JvmSuppressWildcards MailApiService>,
     @Dispatcher(MailDispatchers.IO) private val ioDispatcher: CoroutineDispatcher,
     @ApplicationScope private val externalScope: CoroutineScope,
-    private val errorMapper: ErrorMapperService
+    private val errorMappers: Map<String, @JvmSuppressWildcards ErrorMapperService>
 ) : FolderRepository {
 
     private val TAG = "DefaultFolderRepo"
@@ -52,15 +47,17 @@ class DefaultFolderRepository @Inject constructor(
 
     override suspend fun manageObservedAccounts(accounts: List<Account>) {
         withContext(externalScope.coroutineContext + ioDispatcher) {
-            // Filter for accounts that have a provider in our map (MS and Google)
             val supportedAccounts = accounts.filter {
-                tokenProviders.containsKey(it.providerType) && mailApiServices.containsKey(it.providerType)
+                tokenProviders.containsKey(it.providerType.uppercase()) && // Use uppercase for map key consistency
+                        mailApiServices.containsKey(it.providerType.uppercase()) &&
+                        errorMappers.containsKey(it.providerType.uppercase())
             }
 
             if (supportedAccounts.size < accounts.size) {
                 Log.w(
-                    TAG, "Some accounts have unsupported provider types: ${
-                    accounts.filter { it !in supportedAccounts }.map { it.providerType }
+                    TAG, "Some accounts have unsupported provider types or missing services: ${
+                    accounts.filterNot { acc -> supportedAccounts.any { it.id == acc.id } }
+                        .map { it.providerType }
                 }")
             }
 
@@ -79,24 +76,31 @@ class DefaultFolderRepository @Inject constructor(
 
             val addedAccounts = supportedAccounts.filter { it.id !in currentAccountIds }
             if (addedAccounts.isNotEmpty()) {
-                Log.d(TAG, "Adding observed accounts: ${addedAccounts.map { it.id }}")
+                Log.d(
+                    TAG,
+                    "Adding observed accounts: ${addedAccounts.map { it.username }}"
+                ) // CORRECTED: account.username
                 addedAccounts.forEach { account ->
                     observedAccounts[account.id] = account
                     val currentState = _folderStates.value[account.id]
-                    if (currentState == null || currentState is FolderFetchState.Error) {
+                    // Fetch if no state, or if there was an error previously.
+                    // Also fetch if current state is Success but has no folders (initial successful fetch might be empty)
+                    if (currentState == null || currentState is FolderFetchState.Error ||
+                        (currentState is FolderFetchState.Success && currentState.folders.isEmpty())
+                    ) { // CORRECTED: Logic for initial/refetch
                         launchFolderFetchJob(account, isInitialLoad = true)
                     } else {
                         Log.d(
                             TAG,
                             "Skipping initial fetch for ${account.username}, state already exists: $currentState"
-                        )
+                        ) // CORRECTED: account.username
                     }
                 }
             }
             Log.d(
                 TAG,
-                "Finished managing observed accounts. Now tracking: ${observedAccounts.keys}"
-            )
+                "Finished managing observed accounts. Now tracking: ${observedAccounts.values.map { it.username }}"
+            ) // CORRECTED: account.username
         }
     }
 
@@ -104,12 +108,27 @@ class DefaultFolderRepository @Inject constructor(
         val accountsToRefresh = observedAccounts.values.toList()
         Log.d(TAG, "Refreshing folders for ${accountsToRefresh.size} observed accounts...")
         accountsToRefresh.forEach { account ->
-            launchFolderFetchJob(
-                account,
-                isInitialLoad = false,
-                activity = activity,
-                forceRefresh = true
-            )
+            val providerType =
+                account.providerType.uppercase() // Use uppercase for map key consistency
+            if (tokenProviders.containsKey(providerType) &&
+                mailApiServices.containsKey(providerType) &&
+                errorMappers.containsKey(providerType)
+            ) {
+                launchFolderFetchJob(
+                    account,
+                    isInitialLoad = false,
+                    activity = activity,
+                    forceRefresh = true
+                )
+            } else {
+                Log.w(
+                    TAG,
+                    "Skipping refresh for account ${account.username} due to unsupported provider type or missing services. Available mappers: ${errorMappers.keys}"
+                ) // CORRECTED: account.username
+                _folderStates.update { currentMap ->
+                    currentMap + (account.id to FolderFetchState.Error("Cannot refresh: Unsupported account provider type: ${account.providerType}, or missing services."))
+                }
+            }
         }
     }
 
@@ -120,10 +139,13 @@ class DefaultFolderRepository @Inject constructor(
         forceRefresh: Boolean = false
     ) {
         val accountId = account.id
-        val providerType = account.providerType
+        val providerType = account.providerType.uppercase() // Use uppercase for map key consistency
 
         if (!forceRefresh && folderFetchJobs[accountId]?.isActive == true) {
-            Log.d(TAG, "Folder fetch job already active for account $accountId. Skipping.")
+            Log.d(
+                TAG,
+                "Folder fetch job already active for account ${account.username}. Skipping."
+            ) // CORRECTED: account.username
             return
         }
         cancelAndRemoveJob(accountId)
@@ -131,19 +153,21 @@ class DefaultFolderRepository @Inject constructor(
         Log.d(
             TAG,
             "Launching folder fetch job for account ${account.username} (ID: $accountId). Force: $forceRefresh, Initial: $isInitialLoad"
-        )
+        ) // CORRECTED: account.username
         _folderStates.update { currentMap ->
             currentMap + (accountId to FolderFetchState.Loading)
         }
 
-        // Get the appropriate token provider and mail API service for this account type
         val tokenProvider = tokenProviders[providerType]
         val mailApiService = mailApiServices[providerType]
+        val errorMapper = errorMappers[providerType]
 
-        // Check if we have the necessary services for this account type
-        if (tokenProvider == null || mailApiService == null) {
-            Log.w(TAG, "No provider available for account type: $providerType")
-            _folderStates.update { it + (accountId to FolderFetchState.Error("Unsupported account provider type")) }
+        if (tokenProvider == null || mailApiService == null || errorMapper == null) {
+            Log.w(
+                TAG,
+                "No provider, API service, or error mapper available for account type: $providerType. Available mappers: ${errorMappers.keys}"
+            )
+            _folderStates.update { it + (accountId to FolderFetchState.Error("Setup error for account type: $providerType")) }
             return
         }
 
@@ -155,7 +179,10 @@ class DefaultFolderRepository @Inject constructor(
 
                 if (tokenResult.isSuccess) {
                     val accessToken = tokenResult.getOrThrow()
-                    Log.d(TAG, "Token acquired for ${account.username}, fetching folders...")
+                    Log.d(
+                        TAG,
+                        "Token acquired for ${account.username}, fetching folders..."
+                    ) // CORRECTED: account.username
                     val foldersResult = mailApiService.getMailFolders(accessToken)
                     ensureActive()
 
@@ -164,7 +191,7 @@ class DefaultFolderRepository @Inject constructor(
                         Log.d(
                             TAG,
                             "Successfully fetched ${folders.size} folders for ${account.username}"
-                        )
+                        ) // CORRECTED: account.username
                         FolderFetchState.Success(folders)
                     } else {
                         val errorMsg =
@@ -173,64 +200,65 @@ class DefaultFolderRepository @Inject constructor(
                             TAG,
                             "Failed to fetch folders for ${account.username}: $errorMsg",
                             foldersResult.exceptionOrNull()
-                        )
+                        ) // CORRECTED: account.username
                         FolderFetchState.Error(errorMsg)
                     }
-                    if (observedAccounts.containsKey(accountId)) {
+                    if (isActive && observedAccounts.containsKey(accountId)) {
                         _folderStates.update { it + (accountId to newState) }
                     } else {
                         Log.w(
                             TAG,
-                            "Folder fetch completed but account $accountId no longer observed. Discarding result."
-                        )
+                            "Folder fetch completed but account ${account.username} no longer observed or coroutine inactive. Discarding result."
+                        ) // CORRECTED: account.username
                     }
-
-                } else { // Token failure
+                } else {
                     val errorMsg =
                         errorMapper.mapAuthExceptionToUserMessage(tokenResult.exceptionOrNull())
                     Log.e(
                         TAG,
                         "Failed to acquire token for ${account.username}: $errorMsg",
                         tokenResult.exceptionOrNull()
-                    )
+                    ) // CORRECTED: account.username
                     ensureActive()
-                    if (observedAccounts.containsKey(accountId)) {
+                    if (isActive && observedAccounts.containsKey(accountId)) {
                         _folderStates.update { it + (accountId to FolderFetchState.Error(errorMsg)) }
                     } else {
                         Log.w(
                             TAG,
-                            "Token fetch failed but account $accountId no longer observed. Discarding error."
-                        )
+                            "Token fetch failed but account ${account.username} no longer observed or coroutine inactive. Discarding error."
+                        ) // CORRECTED: account.username
                     }
                 }
-
             } catch (e: CancellationException) {
-                Log.w(TAG, "Folder fetch job for ${account.username} cancelled.", e)
-                // Optionally reset state if cancelled during loading
-                if (observedAccounts.containsKey(accountId) && _folderStates.value[accountId] is FolderFetchState.Loading) {
+                Log.w(
+                    TAG,
+                    "Folder fetch job for ${account.username} cancelled.",
+                    e
+                ) // CORRECTED: account.username
+                if (isActive && observedAccounts.containsKey(accountId) && _folderStates.value[accountId] is FolderFetchState.Loading) {
                     _folderStates.update { currentMap ->
-                        if (currentMap[accountId] is FolderFetchState.Loading) {
-                            currentMap - accountId // Remove loading state on cancel
-                        } else {
-                            currentMap // Keep success/error state if already set
-                        }
+                        // Remove the loading state, effectively resetting it to "not loaded" or whatever the absence of a state implies
+                        currentMap - accountId // CORRECTED: No specific "Initial" state, just remove current loading state
                     }
                 }
-                throw e // Re-throw cancellation
+                throw e
             } catch (e: Exception) {
-                Log.e(TAG, "Exception during folder fetch for ${account.username}", e)
+                Log.e(
+                    TAG,
+                    "Exception during folder fetch for ${account.username}",
+                    e
+                ) // CORRECTED: account.username
                 ensureActive()
-                val errorMsg = errorMapper.mapAuthExceptionToUserMessage(e)
-                if (observedAccounts.containsKey(accountId)) {
+                val errorMsg = errorMapper.mapNetworkOrApiException(e)
+                if (isActive && observedAccounts.containsKey(accountId)) {
                     _folderStates.update { it + (accountId to FolderFetchState.Error(errorMsg)) }
                 } else {
                     Log.w(
                         TAG,
-                        "Exception caught but account $accountId no longer observed. Discarding error."
-                    )
+                        "Exception caught but account ${account.username} no longer observed or coroutine inactive. Discarding error."
+                    ) // CORRECTED: account.username
                 }
             } finally {
-                // Clean up job reference if this is the job completing
                 if (folderFetchJobs[accountId] == coroutineContext[Job]) {
                     folderFetchJobs.remove(accountId)
                 }
@@ -238,12 +266,14 @@ class DefaultFolderRepository @Inject constructor(
         }
         folderFetchJobs[accountId] = job
 
-        // Optional: Handle unhandled job failures
         job.invokeOnCompletion { cause ->
             if (cause != null && cause !is CancellationException && externalScope.isActive) {
-                Log.e(TAG, "Unhandled error in folder fetch job for $accountId", cause)
+                Log.e(TAG, "Unhandled error in folder fetch job for account ID $accountId", cause)
                 if (observedAccounts.containsKey(accountId) && _folderStates.value[accountId] !is FolderFetchState.Error) {
-                    val errorMsg = errorMapper.mapAuthExceptionToUserMessage(cause)
+                    val providerErrorMapper =
+                        errorMappers[account.providerType.uppercase()] // Use uppercase for consistency
+                    val errorMsg = providerErrorMapper?.mapNetworkOrApiException(cause)
+                        ?: "Unknown error after job completion for $providerType."
                     _folderStates.update { it + (accountId to FolderFetchState.Error(errorMsg)) }
                 }
             }
@@ -253,7 +283,6 @@ class DefaultFolderRepository @Inject constructor(
     private fun cancelAndRemoveJob(accountId: String) {
         folderFetchJobs.remove(accountId)?.apply {
             if (isActive) {
-                // Provide a more specific cancellation message
                 cancel(CancellationException("Job cancelled for account $accountId due to removal or refresh."))
                 Log.d(TAG, "Cancelled active job for account $accountId")
             }

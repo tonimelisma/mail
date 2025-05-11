@@ -1,137 +1,230 @@
-# **Refactoring and Google Backend Integration Plan (Updated May 8, 2025)**
+# Google Integration & Credential Manager - Updated Implementation Plan
 
-This plan details the steps to refactor the existing codebase for better modularity and networking, followed by the implementation of Google account support using Gmail APIs.
+**Date:** May 10, 2025
 
-**Assumptions:**
+This document outlines the remaining steps to integrate Google Sign-In and Gmail API access using
+modern Android identity libraries. It assumes foundational project setup (dependencies for
+`androidx.credentials`, `com.google.android.libraries.identity.googleid`, and
+`com.google.android.gms:play-services-auth`; Web OAuth Client ID) is complete.
 
-* Ktor with OkHttp engine will be used for networking.
-* kotlinx.serialization will be used for JSON parsing.
-* A :data module houses default repository implementations managing multiple providers.
-* A :core-common module holds shared utilities like ErrorMapperService.
-* No server-side backend exists; all operations are within the Android app.
-* Offline access for Google accounts is not required initially.
-* User has access to the Google Cloud Console and the Android project's signing keys (for SHA-1).
+## II. Remaining Implementation Phases
 
-## **Completed Steps**
+### Phase 1: Finalize Authentication & Authorization Components
 
-### **Phase 1: Core Refactoring**
+* **Task 1.1: Implement `GoogleAuthManager.kt` (Authentication & Authorization)**
+    * **Goal:** Manage Google Sign-In using `androidx.credentials.CredentialManager` to obtain an ID
+      Token, and subsequently use
+      `com.google.android.gms.auth.api.identity.Identity.getAuthorizationClient()` to obtain an
+      OAuth2 Access Token for Gmail API scopes.
+    * **Details (`GoogleAuthManager.kt`):**
+        * **Sign-In (ID Token Retrieval):**
+            * Inject `CredentialManager.create(context)`.
+            * Implement a
+              `suspend fun signIn(activity: Activity, filterByAuthorizedAccounts: Boolean): GoogleSignInResult`.
+            * Inside `signIn`:
+                * Generate and store a secure `nonce`.
+                * Construct `com.google.android.libraries.identity.googleid.GetGoogleIdOption` using
+                  its `Builder`. Configure it with:
+                    * The Web Application Client ID (`setServerClientId`).
+                    * The generated `nonce` (`setNonce`).
+                    * `setFilterByAuthorizedAccounts(filterByAuthorizedAccounts)`.
+                    * `setAutoSelectEnabled(filterByAuthorizedAccounts)`.
+                * Create `androidx.credentials.GetCredentialRequest`, adding the
+                  `GetGoogleIdOption`.
+                * Call `credentialManager.getCredential(activity, request)`.
+                * Handle `GetCredentialResponse`:
+                    * Verify `response.credential` is `CustomCredential` and its `type` is
+                      `com.google.android.libraries.identity.googleid.GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL`.
+                    * Parse `credential.data` using
+                      `GoogleIdTokenCredential.createFrom(credential.data)`.
+                    * Consume the `nonce`. (Optional: Perform strict client-side nonce validation by
+                      parsing the ID token JWT).
+                    * Return `GoogleSignInResult.Success(googleIdTokenCredential)` or appropriate
+                      error/cancelled states (e.g., `UserCancellationException`,
+                      `NoCredentialException`).
+        * **Access Token Request (Scope Authorization):**
+            * Implement
+              `suspend fun requestAccessToken(activity: Activity, accountEmail: String?, scopes: List<String>): GoogleScopeAuthResult`.
+            * Inside `requestAccessToken`:
+                * Use `Identity.getAuthorizationClient(context)`.
+                * Create `com.google.android.gms.auth.api.identity.AuthorizationRequest` using its
+                  `Builder`, setting the requested `List<Scope>`.
+                * Call `authorizationClient.authorize(authorizationRequest).await()`.
+                * If `AuthorizationResult.hasResolution()` is true, return
+                  `GoogleScopeAuthResult.ConsentRequired(pendingIntent)`.
+                * If false, and `AuthorizationResult.accessToken` is available, return
+                  `GoogleScopeAuthResult.Success(accessToken, grantedScopes)`.
+                * Handle errors appropriately.
+        * **Handle Scope Consent Result:**
+            * Implement
+              `suspend fun handleScopeConsentResult(intent: Intent?): GoogleScopeAuthResult`.
+            * Inside, use `authorizationClient.getAuthorizationResultFromIntent(intent)`.
+            * Extract and return `accessToken` via `GoogleScopeAuthResult.Success` or handle errors.
+        * **Sign-Out:**
+            * Implement `suspend fun signOut()`.
+            * Call `credentialManager.clearCredentialState(ClearCredentialStateRequest())`.
+            * Call `authorizationClient.signOut().await()`.
+        * **Account Mapping:**
+            * Implement `fun toGenericAccount(idTokenCredential: GoogleIdTokenCredential): Account`
+              to map to `core_data.model.Account`.
+    * **Files to Modify/Create:**
+      `backend-google/src/main/java/net/melisma/backend_google/auth/GoogleAuthManager.kt`.
+    * **Note:** The previous `GoogleTokenProvider.kt` (using `GoogleAuthUtil.getToken()`) should be
+      **removed or deprecated** as its functionality for access token retrieval is now part of
+      `GoogleAuthManager` using the modern `AuthorizationClient`.
 
-* **Step 1.1: Centralize Error Mapping:**
-    * Moved `ErrorMapperService` interface to `:core-common`.
-    * `MicrosoftErrorMapper` in `:backend-microsoft` implements this interface.
-* **Step 1.2: Refactor Networking to Ktor (backend-microsoft):**
-    * Replaced `HttpsURLConnection`-based networking in `GraphApiHelper` with Ktor.
-    * Ktor `HttpClient` and `Json` serializer provided via Hilt in `:backend-microsoft`.
-* **Step 1.3: Refactor MicrosoftTokenProvider:**
-    * `MicrosoftAuthManager` now exposes authentication results as Kotlin Flows.
-    * `MicrosoftTokenProvider` consumes these Flows.
-* **Step 1.4: Implement :data Module and Default Repositories:**
-    * Centralized repository implementations (`DefaultAccountRepository`, `DefaultFolderRepository`, `DefaultMessageRepository`) in the `:data` module.
-    * `:data` module binds these implementations to interfaces from `:core-data` via Hilt.
+### Phase 2: Refactor Error Handling for Google & Hilt Setup
 
-### **Phase 2: Google Backend Implementation (Foundational Components)**
+* **Task 2.1: Define Hilt Qualifier for Error Mappers**
+    * **Goal:** Allow distinct error mappers for different backends.
+    * **Action:** Add a new Hilt qualifier annotation, e.g., `@ErrorMapperType(val value: String)`,
+      to `core-data/src/main/java/net/melisma/core_data/di/Qualifiers.kt`.
+    * **Files to Modify:** `core-data/src/main/java/net/melisma/core_data/di/Qualifiers.kt`.
 
-* **Step 2.2: Create :backend-google Module:**
-    * Dedicated module `:backend-google` created and configured with necessary dependencies (Google Sign-In, Ktor, Hilt).
-* **Step 2.3: Implement Google Authentication (:backend-google):**
-    * `GoogleAuthManager.kt` implemented with Google Sign-In/Sign-Out logic using `GoogleSignInClient`.
-    * Provided via Hilt using `@Inject constructor()`.
-* **Step 2.4: Implement Google Token Provider (:backend-google):**
-    * `GoogleTokenProvider.kt` implemented, using `GoogleAuthUtil.getToken` for OAuth2 access tokens.
-    * Provided via Hilt and qualified with `@TokenProviderType("GOOGLE")`.
-* **Step 2.5: Implement Gmail API Helper (:backend-google):**
-    * `GmailApiHelper.kt` created for interacting with Gmail API endpoints using Ktor.
-    * `GmailModels.kt` created for Gmail API response serialization.
-    * Provided via Hilt, injecting a Google-specific Ktor `HttpClient`.
+* **Task 2.2: Create `GoogleErrorMapper.kt`**
+    * **Goal:** Implement `ErrorMapperService` for Google-specific exceptions.
+    * **Action:** Create `GoogleErrorMapper.kt` in
+      `backend-google/src/main/java/net/melisma/backend_google/errors/`.
+    * **Details:**
+        * Implement `ErrorMapperService`.
+        * Handle exceptions from `GoogleAuthManager`:
+            * `androidx.credentials.exceptions.GetCredentialException` subtypes (from `signIn`).
+            * `ApiException` (from `handleScopeConsentResult`).
+            * Other exceptions from `requestAccessToken`.
+        * Map these to user-friendly error messages or states.
+    * **Files to Create:**
+      `backend-google/src/main/java/net/melisma/backend_google/errors/GoogleErrorMapper.kt`.
 
-## **Next Steps Required**
+* **Task 2.3: Update Hilt Modules for Qualified ErrorMappers**
+    * **Goal:** Provide qualified `ErrorMapperService` implementations for each backend and set up
+      multibinding for a map.
+    * **Action (Microsoft):**
+        * Modify
+          `backend-microsoft/src/main/java/net/melisma/backend_microsoft/di/BackendMicrosoftModule.kt`.
+        * Change the existing `bindErrorMapperService` from a direct `@Binds` to an `@IntoMap`
+          provision, qualified with `@ErrorMapperType("MS")` and `@StringKey("MS")`.
+    * **Action (Google):**
+        * Modify
+          `backend-google/src/main/java/net/melisma/backend_google/di/BackendGoogleModule.kt`.
+        * Add a new `@Provides` or `@Binds` method to provide `GoogleErrorMapper` as
+          `ErrorMapperService`, qualified with `@ErrorMapperType("GOOGLE")` and
+          `@StringKey("GOOGLE")` into a map.
+    * **Action (Data Layer Multibindings):**
+        * Ensure the Hilt module that declares `@Multibinds` for
+          `Map<String, @JvmSuppressWildcards TokenProvider>` (if `TokenProvider` interface is still
+          used for Microsoft) and `Map<String, @JvmSuppressWildcards MailApiService>` (expected to
+          be `data/src/main/java/net/melisma/data/di/MultiBindingModule.kt`) also declares
+          `@Multibinds abstract fun provideErrorMapperServices(): Map<String, @JvmSuppressWildcards ErrorMapperService>`.
+    * **Files to Modify:** `BackendMicrosoftModule.kt`, `BackendGoogleModule.kt`, and the Hilt
+      module for `@Multibinds` (e.g., `data/MultiBindingModule.kt`).
 
-### **Step 2.1: Finalize Google Cloud & Project Setup**
+### Phase 3: Integrate Google Logic into `DefaultAccountRepository`
 
-* **Goal:** Complete client-side Google services configuration and ensure Google Cloud Console is correctly set up.
-* **Actions:**
-    1.  **Google Cloud Console Verification (External):**
-        * Ensure your project in the [Google Cloud Console](https://console.cloud.google.com/) is active.
-        * Verify that the **Gmail API** and **Google People API** are enabled under "APIs & Services" -> "Library".
-        * Under "APIs & Services" -> "Credentials", confirm an **OAuth 2.0 Client ID** of type "Android" exists.
-            * It must be configured with your app's package name (`net.melisma.mail`) and the correct **SHA-1 signing certificate fingerprint** for your debug and release builds.
-        * Under "APIs & Services" -> "OAuth consent screen":
-            * Fill in all required information (App name, User support email, Developer contact info).
-            * Ensure the following scopes are added and saved:
-                * `.../auth/userinfo.email` (View your email address)
-                * `.../auth/userinfo.profile` (See your personal info)
-                * `openid` (Associate you with your personal info on Google)
-                * `https://www.googleapis.com/auth/gmail.readonly` (View your email messages and settings)
-                * *(Consider adding `.../auth/gmail.modify`, `.../auth/gmail.labels`, `.../auth/gmail.send` later for more features)*.
-    2.  **Add `google-services.json` to Project:**
-        * If not already done after configuring the OAuth client ID, download the `google-services.json` file from the Google Cloud Console (Credentials page).
-        * **Crucial:** Copy this `google-services.json` file into the **`app/`** directory of your Android Studio project. (Currently confirmed as MISSING).
-    3.  **Activate Google Services Gradle Plugin:**
-        * In your **`app/build.gradle.kts`** file, uncomment or add the Google Services plugin at the top:
-            ```kotlin
-            plugins {
-                // ... other plugins
-                id("com.google.gms.google-services") // Ensure this line is active
-            }
-            ```
-        * Ensure the corresponding plugin classpath is in your project-level `build.gradle.kts` (usually handled by `alias(libs.plugins.google.services)` if using version catalogs, or explicitly `classpath 'com.google.gms:google-services:...'`).
-* **Verification:**
-    * After adding `google-services.json` and activating the plugin, sync Gradle. The project should build without errors related to Google Services.
-    * Initial Google Sign-In attempts (once integrated into repositories) should not fail due to misconfiguration.
+* **Task 3.1: Update `DefaultAccountRepository.kt`**
+    * **Goal:** Enable adding, authenticating, managing Google accounts, and handling scope
+      authorization.
+    * **Actions:**
+        * Inject `googleAuthManager: GoogleAuthManager` and
+          `mapOfErrorMappers: Map<String, ErrorMapperService>`.
+        * In `addAccount(providerType="GOOGLE", activity, ...)`:
+            * Call `googleAuthManager.signIn(activity, filterByAuthorizedAccounts = false)`.
+            * On `GoogleSignInResult.Success(idTokenCredential)`:
+                * Call `googleAuthManager.toGenericAccount(idTokenCredential)` to create an
+                  `Account` object.
+                * Store this new `Account` (e.g., in-memory list, update `_accounts` StateFlow).
+                * **Crucially, after successful sign-in, trigger the request for Gmail API access
+                  tokens:**
+                    * Call
+                      `googleAuthManager.requestAccessToken(activity, newAccount.email, listOf("https://www.googleapis.com/auth/gmail.readonly", ...other_scopes...))`.
+                    * Handle the `GoogleScopeAuthResult`:
+                        * `GoogleScopeAuthResult.Success(accessToken, _)`: Store the access token
+                          securely (e.g., in memory associated with the account for the session) or
+                          indicate the account is fully ready.
+                        * `GoogleScopeAuthResult.ConsentRequired(pendingIntent)`: Signal to the
+                          ViewModel/UI to launch this `pendingIntent`.
+                        * `GoogleScopeAuthResult.Error`: Handle error, potentially remove the
+                          partially added account or mark it as needing authorization.
+            * Handle `GoogleSignInResult.Error`, `Cancelled`, `NoCredentialsAvailable` by emitting
+              user messages via the appropriate error mapper.
+        * Modify `getAccessTokenForAccount(account, scopes, activity)` (or a similar method for
+          refreshing/ensuring tokens):
+            * If `account.providerType == "GOOGLE"`:
+                * Call `googleAuthManager.requestAccessToken(activity, account.email, scopes)`.
+                * If it returns `GoogleScopeAuthResult.ConsentRequired(pendingIntent)`, the
+                  repository must signal to the ViewModel/UI to launch the intent. This requires a
+                  mechanism (e.g., a `SharedFlow<IntentSender>` event or a specific state in
+                  `AuthState`) for the UI to observe and act upon.
+                * On `GoogleScopeAuthResult.Success`, return/store the token.
+        * Implement a new method, e.g.,
+          `suspend fun finalizeGoogleScopeConsent(account: Account, intent: Intent?, activity: Activity)`,
+          to be called after the consent intent finishes.
+            * Inside, call `googleAuthManager.handleScopeConsentResult(intent)`.
+            * On `GoogleScopeAuthResult.Success(accessToken, _)`: Store the token, mark the account
+              as fully authorized.
+            * On `GoogleScopeAuthResult.Error`: Handle error.
+        * In `removeAccount(account)` for Google:
+            * Call `googleAuthManager.signOut()`.
+            * Remove the account from the internal list and update `_accounts` StateFlow.
+        * Update `_accounts` StateFlow management to correctly reflect
+          addition/removal/authorization status of Google accounts.
+    * **Files to Modify:**
+      `data/src/main/java/net/melisma/data/repository/DefaultAccountRepository.kt`.
 
-### **Step 2.6: Integrate Google into Default Repositories (:data)**
+### Phase 4: UI/UX Integration and Testing
 
-* **Goal:** Modify the repository implementations in the `:data` module to fully support both Microsoft and Google providers, and enhance error mapping.
-* **Actions:**
-    1.  **Enable `:backend-google` Dependency:**
-        * In **`data/build.gradle.kts`**, uncomment the dependency:
-            ```kotlin
-            dependencies {
-                // ... other dependencies
-                implementation(project(":backend-google")) // Uncomment this line
-            }
-            ```
-    2.  **Update `DefaultAccountRepository.kt`:**
-        * Inject `GoogleAuthManager`.
-        * Modify `addAccount` and `removeAccount`: Fully implement the `"GOOGLE"` provider type branches to call the appropriate methods on `GoogleAuthManager` (e.g., `googleAuthManager.signIn(...)`, `googleAuthManager.signOut(...)`, and use `googleAuthManager.handleSignInResult(...)`).
-        * Update `accounts` StateFlow: Implement logic to observe and combine account information from both `MicrosoftAuthManager` and `GoogleAuthManager` (e.g., using `GoogleAuthManager.getLastSignedInAccount()` and results from `handleSignInResult`). This will require careful state management to present a unified list of accounts.
-    3.  **Update `DefaultFolderRepository.kt` and `DefaultMessageRepository.kt`:**
-        * **Dependency Injection:**
-            * Modify constructors to inject a map of `TokenProvider`s, keyed by provider type (e.g., `"MS"`, `"GOOGLE"`): `private val tokenProviders: Map<String, @JvmSuppressWildcards TokenProvider>`. Hilt's multibindings with `@TokenProviderType` qualifier can achieve this.
-            * Similarly, inject a map of API helpers (e.g., `Map<String, MailApiHelper>`). This will require creating a common interface (e.g., `MailApiHelper`) that `GraphApiHelper` and `GmailApiHelper` implement, and then providing them with type qualifiers in their respective backend Hilt modules.
-        * **Logic Updates:**
-            * In methods like `manageObservedAccounts`, `refreshAllFolders` (for `DefaultFolderRepository`), `setTargetFolder`, and `refreshMessages` (for `DefaultMessageRepository`), retrieve the correct `TokenProvider` and `ApiHelper` from the injected maps based on `account.providerType`.
-            * Use the selected `GmailApiHelper` for Google accounts to fetch labels (as folders) and messages.
-            * Remove hardcoded Microsoft-only logic (e.g., `if (account.providerType == "MS")` checks that currently exclude other types).
-    4.  **Enhance Error Handling for Google Exceptions:**
-        * **Goal:** Ensure Google-specific exceptions are mapped to user-friendly messages.
-        * **Option 1 (Recommended - Modify `MicrosoftErrorMapper`):**
-            * Rename `MicrosoftErrorMapper.kt` to a more generic name like `DefaultErrorMapper.kt` (still in `:backend-microsoft` or move to `:core-common` if it becomes truly generic).
-            * Update its `mapAuthExceptionToUserMessage` and `mapNetworkOrApiException` methods to include `when` branches or `is` checks for Google-specific exceptions like `com.google.android.gms.common.api.ApiException` (for sign-in issues) and `com.google.android.gms.auth.GoogleAuthException` (for token issues from `GoogleAuthUtil`).
-            * Map common Google error codes/scenarios to appropriate user messages.
-        * **Option 2 (Alternative - Separate `GoogleErrorMapper`):**
-            * Create `GoogleErrorMapper.kt` in `:backend-google` implementing `ErrorMapperService`.
-            * Modify Hilt bindings: Instead of `BackendMicrosoftModule` directly binding `MicrosoftErrorMapper` to `ErrorMapperService`, you might need a new module in `:data` or `:app` that provides `ErrorMapperService` by deciding which concrete mapper to use, or inject `Map<String, ErrorMapperService>` into repositories. This is more complex.
-* **Verification:**
-    * After these changes, the app should allow adding and removing both Microsoft and Google accounts.
-    * Selecting a Google account should fetch and display Gmail labels (as folders) and messages using `GmailApiHelper`.
-    * Errors encountered during Google authentication or Gmail API calls should be mapped to user-friendly messages.
+* **Task 4.1: Update UI for Google Account Addition & Scope Consent**
+    * **Goal:** Allow users to initiate Google Sign-In and handle the OAuth scope consent flow.
+    * **Actions:**
+        * In `MainActivity` (or relevant Composable host):
+            * Set up an `ActivityResultLauncher<IntentSenderRequest>` for the Google OAuth scope
+              consent intent.
+        * `MainViewModel`:
+            * Expose functions that call
+              `DefaultAccountRepository.addAccount("GOOGLE", activity, ...)` and
+              `DefaultAccountRepository.finalizeGoogleScopeConsent(...)`.
+            * Observe signals/states from the repository indicating the need to launch the scope
+              consent intent (the `IntentSender` itself) and trigger it via the launcher.
+        * `SettingsScreen.kt`:
+            * Add an "Add Google Account" button/option.
+            * On click, call the ViewModel method to start the Google sign-in flow.
+    * **Files to Modify:** `MainActivity.kt`, `MainViewModel.kt`, `ui/settings/SettingsScreen.kt`.
 
-### **Step 2.7: UI/UX Adjustments & Final Testing**
+* **Task 4.2: Update UI for Displaying Google Data**
+    * **Goal:** Display Gmail labels and messages.
+    * **Actions:**
+        * `MailDrawerContent.kt`: Ensure it correctly fetches and displays Gmail labels (via
+          `DefaultFolderRepository`) alongside Microsoft folders.
+        * `MessageListContent.kt` / `MessageListItem.kt`: Ensure they display Gmail messages
+          correctly.
+    * **Files to Modify:** Relevant UI Composable files.
 
-* **Goal:** Ensure a polished and functional user experience supporting both account providers.
-* **Actions:**
-    1.  **UI Updates:**
-        * Modify `SettingsScreen` or equivalent: Provide distinct "Add Microsoft Account" and "Add Google Account" options/buttons that correctly pass the `providerType` to `DefaultAccountRepository.addAccount(...)`.
-        * Modify `MailDrawerContent`: Ensure accounts are grouped or visually distinct if desired. Handle the display of Gmail "Labels" appropriately alongside MS "Folders" (Gmail labels can be nested and have different semantics).
-        * Review `MessageListContent` and `MessageListItem`: Ensure data from `Message` objects (mapped from MS Graph API or Gmail API) displays correctly and consistently.
-    2.  **Thorough Testing:**
-        * Perform end-to-end testing covering all implemented features (sign-in/out for both providers, folder/label view, message list view, refresh, error handling) for *both* Microsoft and Google accounts interactively.
-        * Test adding multiple accounts of different types.
-        * Test scenarios like token expiry, network errors, permission denials for both providers.
-        * Verify UI consistency when switching between MS and Google accounts/folders.
-* **Verification:** The app provides a stable, intuitive, and consistent experience for managing and viewing mail from both Microsoft and Google accounts.
+* **Task 4.3: Testing**
+    * **Goal:** Verify all Google integration points.
+    * **Actions:**
+        * Write/update unit tests for the revised `GoogleAuthManager`, `GoogleErrorMapper`, and
+          Google-specific paths in `DefaultAccountRepository`.
+        * Update existing integration tests affected by Hilt map/multibinding changes.
+        * Perform thorough end-to-end manual testing of the Google sign-in flow, scope consent, mail
+          fetching, and basic actions.
+    * **Files to Modify/Create:** Test files in `src/test` directories of affected modules.
 
+## III. Definition of "Done" for Google Integration (MVP)
 
+* User can add and remove a Google account using `androidx.credentials.CredentialManager` for
+  initial sign-in.
+* User is prompted for OAuth consent for required Gmail scopes (e.g., read-only access) using
+  `Identity.getAuthorizationClient()` if not already granted, and the app can retrieve an access
+  token.
+* App can fetch and display Gmail labels (as folders).
+* App can fetch and display a list of messages for a selected Gmail label using the obtained access
+  token.
+* Basic error handling for Google authentication and API calls is in place using
+  `GoogleErrorMapper`.
+* Core mail viewing functionality is on par with existing Microsoft account support.
 
+---
+
+This updated plan focuses on using `androidx.credentials.CredentialManager` for initial
+authentication and `Identity.getAuthorizationClient` for subsequent scope authorization and access
+token retrieval, aligning with modern best practices.
 

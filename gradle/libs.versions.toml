@@ -1,60 +1,70 @@
 # File: gradle/libs.versions.toml
 
 [versions]
-agp = "8.9.2"
+agp = "8.9.2" # Assuming this is your AGP version, adjust if different
 kotlin = "2.0.0"
-kotlinxSerialization = "1.6.3" # Added for Kotlinx Serialization
-ktor = "2.3.12" # Added Ktor version (use latest stable 2.x)
+kotlinxSerialization = "1.6.3"
+ktor = "2.3.12"
 coreKtx = "1.16.0"
 junit = "4.13.2"
 junitVersion = "1.2.1"
 espressoCore = "3.6.1"
 lifecycle = "2.8.7"
 activityCompose = "1.10.1"
-composeBom = "2025.04.01"
-composeCompiler = "2.0.0"
+composeBom = "2025.05.00"
+composeCompiler = "2.0.0" # This is usually tied to Kotlin version, often not needed explicitly here
+# For Kotlin 2.0.0, Compose Compiler is typically 1.5.12 or similar if you were on older Kotlin.
+# With Kotlin 2.0.0, the Compose plugin itself handles the compiler.
+# If you have a specific compose.compiler plugin version, keep it. Otherwise, this line might be redundant.
+
 msal = "6.0.0"
-materialIcons = "1.7.8"
-hilt = "2.56.2"
-coroutines = "1.10.2"
-orgJson = "20250107" # Can likely be removed after GraphApiHelper refactor
-mockk = "1.14.2"
-turbine = "1.2.0"
+materialIcons = "1.7.8" # Check for latest, e.g., androidx.compose.material:material-icons-extended
+hilt = "2.56.2" # Check for latest Hilt version
+coroutines = "1.8.1" # Updated to a more recent version of coroutines, e.g., 1.8.1
+# Ensure your kotlinx-coroutines-play-services matches this major.minor if possible
+# For example, if coroutines = "1.8.1", then kotlinxCoroutinesPlayServices = "1.8.1"
+
+orgJson = "20250107"
+mockk = "1.14.2" # Check for latest
+turbine = "1.2.0" # Check for latest
 appcompat = "1.7.0"
 material = "1.12.0"
-# okhttpVersion = "4.12.0" # Optional: Specify OkHttp version if needed, often handled by Ktor
 
 # Google Play Services
-playServicesAuth = "21.1.0" # Google Sign-In
-activityKtx = "1.9.0" # For ActivityResultLauncher
+playServicesAuth = "21.2.0" # Updated to a more recent version
+activityKtx = "1.10.1" # Check for latest
+
+androidxCredentials = "1.3.0-alpha01" # Example: Using a newer alpha, or stick to stable 1.2.0
+androidxCredentialsPlayServicesAuth = "1.3.0-alpha01" # Match credentials version
+googleIdLibrary = "1.1.0"
+
+kotlinxCoroutinesPlayServices = "1.8.1" # Added for Task.await() - match your main coroutines version
 
 [libraries]
 kotlin-stdlib = { group = "org.jetbrains.kotlin", name = "kotlin-stdlib", version.ref = "kotlin" }
 kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
+kotlinx-coroutines-play-services = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-play-services", version.ref = "kotlinxCoroutinesPlayServices" } # Added
 
-# --- Kotlinx Serialization --- ADDED ---
+# --- Kotlinx Serialization ---
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
-# --- END Kotlinx Serialization ---
 
-# --- Ktor Client --- ADDED ---
+# --- Ktor Client ---
 ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
-ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "ktor" } # OkHttp Engine
-ktor-client-contentnegotiation = { module = "io.ktor:ktor-client-content-negotiation", version.ref = "ktor" } # JSON/XML/... support
-ktor-serialization-kotlinx-json = { module = "io.ktor:ktor-serialization-kotlinx-json", version.ref = "ktor" } # Adapter for Kotlinx Serialization
-ktor-client-logging = { module = "io.ktor:ktor-client-logging", version.ref = "ktor" } # Optional Ktor logging
+ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "ktor" }
+ktor-client-contentnegotiation = { module = "io.ktor:ktor-client-content-negotiation", version.ref = "ktor" }
+ktor-serialization-kotlinx-json = { module = "io.ktor:ktor-serialization-kotlinx-json", version.ref = "ktor" }
+ktor-client-logging = { module = "io.ktor:ktor-client-logging", version.ref = "ktor" }
 ktor-client-mock = { module = "io.ktor:ktor-client-mock", version.ref = "ktor" }
-# --- END Ktor Client ---
 
 # --- Google Play Services ---
 google-play-services-auth = { group = "com.google.android.gms", name = "play-services-auth", version.ref = "playServicesAuth" }
 androidx-activity-ktx = { group = "androidx.activity", name = "activity-ktx", version.ref = "activityKtx" }
-# --- END Google Play Services ---
 
-# --- OkHttp (Optional, often transitive via ktor-client-okhttp) ---
-# okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttpVersion" }
-# okhttp-logging-interceptor = { group = "com.squareup.okhttp3", name = "logging-interceptor", version.ref = "okhttpVersion" }
-# --- END OkHttp ---
+# --- Credential Manager & Google ID Services ---
+androidx-credentials = { group = "androidx.credentials", name = "credentials", version.ref = "androidxCredentials" }
+androidx-credentials-play-services-auth = { group = "androidx.credentials", name = "credentials-play-services-auth", version.ref = "androidxCredentialsPlayServicesAuth" }
+google-id = { group = "com.google.android.libraries.identity.googleid", name = "googleid", version.ref = "googleIdLibrary" }
 
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycle" }
@@ -69,7 +79,7 @@ androidx-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
 androidx-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
 androidx-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
 androidx-material3 = { group = "androidx.compose.material3", name = "material3" }
-androidx-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended", version.ref = "materialIcons" }
+androidx-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" } # Removed version.ref, should come from BOM or define version
 material = { group = "com.google.android.material", name = "material", version.ref = "material" }
 
 microsoft-msal = { group = "com.microsoft.identity.client", name = "msal", version.ref = "msal" }
@@ -97,8 +107,7 @@ turbine = { group = "app.cash.turbine", name = "turbine", version.ref = "turbine
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
-kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" } # Compose compiler plugin is now part of AGP/Kotlin plugin
 android-library = { id = "com.android.library", version.ref = "agp" }
 hilt-gradle = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }
-kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" } # <<< ADDED SERIALIZATION PLUGIN ALIAS
-# google-services = { id = "com.google.gms.google-services", version = "..." } # Add if needed for Google Sign-In setup later
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
