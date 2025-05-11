@@ -95,27 +95,54 @@ fun SettingsScreen(
             )
         },
         floatingActionButton = {
-            Button(
-                // Trigger add account action in ViewModel
-                onClick = { viewModel.addAccount(activity) },
-                // Use isLoadingAccountAction from the updated state
-                enabled = !state.isLoadingAccountAction
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    // Show loading indicator based on isLoadingAccountAction
-                    // Heuristic check needs updating if we distinguish add/remove loading
-                    if (state.isLoadingAccountAction) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(20.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.onPrimary
-                        )
-                        Spacer(Modifier.width(8.dp))
-                    } else {
-                        Icon(Icons.Filled.Add, contentDescription = null)
-                        Spacer(Modifier.width(4.dp))
+            Column {
+                // Microsoft account button
+                Button(
+                    // Trigger add Microsoft account action in ViewModel
+                    onClick = { viewModel.addAccount(activity) },
+                    // Use isLoadingAccountAction from the updated state
+                    enabled = !state.isLoadingAccountAction,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        // Show loading indicator based on isLoadingAccountAction
+                        if (state.isLoadingAccountAction) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
+                            Spacer(Modifier.width(8.dp))
+                        } else {
+                            Icon(Icons.Filled.Add, contentDescription = null)
+                            Spacer(Modifier.width(4.dp))
+                        }
+                        Text("Add Microsoft Account")
                     }
-                    Text(stringResource(R.string.add_account))
+                }
+
+                // Google account button
+                Button(
+                    // Trigger add Google account action in ViewModel
+                    onClick = { viewModel.addGoogleAccount(activity) },
+                    // Use isLoadingAccountAction from the updated state
+                    enabled = !state.isLoadingAccountAction
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        // Show loading indicator based on isLoadingAccountAction
+                        if (state.isLoadingAccountAction) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(20.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onPrimary
+                            )
+                            Spacer(Modifier.width(8.dp))
+                        } else {
+                            Icon(Icons.Filled.Add, contentDescription = null)
+                            Spacer(Modifier.width(4.dp))
+                        }
+                        Text("Add Google Account")
+                    }
                 }
             }
         }

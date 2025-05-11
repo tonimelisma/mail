@@ -4,6 +4,7 @@
 package net.melisma.mail
 
 // Import necessary model/UI components
+// *** ADDED IMPORT for AuthState ***
 import android.app.Activity
 import android.content.Context
 import android.os.Bundle
@@ -42,9 +43,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch
-// *** ADDED IMPORT for AuthState ***
 import net.melisma.core_data.model.AuthState
 import net.melisma.mail.ui.MailDrawerContent
 import net.melisma.mail.ui.MailTopAppBar
@@ -58,8 +59,56 @@ class MainActivity : ComponentActivity() {
     // Use Hilt's delegate for ViewModel injection
     private val viewModel: MainViewModel by viewModels()
 
+    // ActivityResultLauncher for handling Google consent flow
+    private lateinit var googleConsentLauncher: androidx.activity.result.ActivityResultLauncher<androidx.activity.result.IntentSenderRequest>
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // Set up the ActivityResultLauncher for Google OAuth consent flow
+        googleConsentLauncher = registerForActivityResult(
+            androidx.activity.result.contract.ActivityResultContracts.StartIntentSenderForResult()
+        ) { result ->
+            if (result.resultCode == RESULT_OK) {
+                val account =
+                    viewModel.uiState.value.accounts.firstOrNull { it.providerType == "GOOGLE" }
+                if (account != null) {
+                    viewModel.finalizeGoogleScopeConsent(account, result.data, this)
+                } else {
+                    Log.e("MainActivity", "No Google account found to finalize consent")
+                    Toast.makeText(
+                        this,
+                        "Error: No Google account found to complete setup",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            } else {
+                Log.d("MainActivity", "Google consent flow cancelled")
+                Toast.makeText(this, "Google account setup cancelled", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        // Observe the googleConsentIntentSender from ViewModel
+        lifecycleScope.launch {
+            viewModel.googleConsentIntentSender.collect { intentSender ->
+                if (intentSender != null) {
+                    try {
+                        val request =
+                            androidx.activity.result.IntentSenderRequest.Builder(intentSender)
+                                .build()
+                        googleConsentLauncher.launch(request)
+                    } catch (e: Exception) {
+                        Log.e("MainActivity", "Error launching consent intent", e)
+                        Toast.makeText(
+                            this@MainActivity,
+                            "Error launching consent: ${e.message}",
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    }
+                }
+            }
+        }
+
         enableEdgeToEdge() // Enable drawing behind system bars
         setContent {
             MailTheme { // Apply the application theme

@@ -87,6 +87,9 @@ class MainViewModel @Inject constructor(
     // Scopes needed for addAccount action
     private val mailReadScopes = listOf("User.Read", "Mail.Read")
 
+    // Gmail API scopes for Google accounts
+    private val gmailReadScopes = listOf("https://www.googleapis.com/auth/gmail.readonly")
+
     // --- Initialization ---
     init {
         Log.d(TAG, "ViewModel Initializing")
@@ -221,8 +224,15 @@ class MainViewModel @Inject constructor(
     // --- Account Actions ---
     fun addAccount(activity: Activity) {
         viewModelScope.launch {
-            Log.d(TAG, "Add account action triggered.")
-            accountRepository.addAccount(activity, mailReadScopes)
+            Log.d(TAG, "Add account action triggered (Microsoft).")
+            accountRepository.addAccount(activity, mailReadScopes, "MS")
+        }
+    }
+
+    fun addGoogleAccount(activity: Activity) {
+        viewModelScope.launch {
+            Log.d(TAG, "Add Google account action triggered.")
+            accountRepository.addAccount(activity, gmailReadScopes, "GOOGLE")
         }
     }
 
@@ -238,6 +248,39 @@ class MainViewModel @Inject constructor(
         )
         viewModelScope.launch {
             accountRepository.removeAccount(accountToRemove)
+        }
+    }
+
+    // For handling Google OAuth consent result
+    private val _needGoogleConsent = MutableStateFlow(false)
+    val needGoogleConsent: StateFlow<Boolean> = _needGoogleConsent.asStateFlow()
+
+    init {
+        // Observe Google consent intent from the repository
+        accountRepository.googleConsentIntent
+            .onEach { intentSender ->
+                if (intentSender != null) {
+                    Log.d(TAG, "Google consent intent received. Signaling UI to launch consent.")
+                    _googleConsentIntentSender.value = intentSender
+                    _needGoogleConsent.value = true
+                }
+            }.launchIn(viewModelScope)
+    }
+
+    // IntentSender for Google OAuth consent
+    private val _googleConsentIntentSender = MutableStateFlow<android.content.IntentSender?>(null)
+    val googleConsentIntentSender: StateFlow<android.content.IntentSender?> =
+        _googleConsentIntentSender.asStateFlow()
+
+    fun finalizeGoogleScopeConsent(
+        account: Account,
+        intent: android.content.Intent?,
+        activity: Activity
+    ) {
+        viewModelScope.launch {
+            accountRepository.finalizeGoogleScopeConsent(account, intent, activity)
+            _needGoogleConsent.value = false
+            _googleConsentIntentSender.value = null
         }
     }
 
