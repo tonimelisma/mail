@@ -63,45 +63,53 @@ into the data layer and UI.
 
 ### Phase 2: Integrate Google Logic into Data Layer Repositories
 
-* **Task 2.1: Update `DefaultAccountRepository.kt`** - **NOT IMPLEMENTED**
+* **Task 2.1: Update `DefaultAccountRepository.kt`** - **PARTIALLY IMPLEMENTED**
     * **Goal:** Enable adding, authenticating, managing Google accounts, and handling scope
       authorization using the revised `GoogleAuthManager`.
     * **Current Status:**
-        * Placeholder code exists for Google accounts, but no actual implementation
-        * GoogleAuthManager is not injected (commented out with TODO notes)
-        * No implementation for Google authentication flow
-        * No implementation for Google scope consent handling
-    * **Actions Still Needed:**
-        * Inject `googleAuthManager: GoogleAuthManager` and
-          `mapOfErrorMappers: Map<String, ErrorMapperService>`.
-        * In `addAccount(providerType="GOOGLE", activity, ...)`:
-            * Call `googleAuthManager.signIn(activity, filterByAuthorizedAccounts = false)`.
-            * On `GoogleSignInResult.Success(idTokenCredential)`:
-                * Call `googleAuthManager.toGenericAccount(idTokenCredential)` to create an
-                  `Account` object.
-                * Store this new `Account`.
-                * Trigger
-                  `googleAuthManager.requestAccessToken(activity, newAccount.id /* or email if available & preferred */, listOf("https://www.googleapis.com/auth/gmail.readonly", ...other_scopes...))`.
-                * Handle `GoogleScopeAuthResult`:
-                    * `Success(accessToken, _)`: Store token (e.g., in-memory with account session),
-                      mark account as ready.
-                    * `ConsentRequired(pendingIntent)`: Signal ViewModel/UI to launch
-                      `pendingIntent`.
-                    * `Error`: Handle error via mapper, potentially clean up partially added
-                      account.
-          * Handle `GoogleSignInResult.Error`, `Cancelled`, `NoCredentialsAvailable` using the "
-            GOOGLE" error mapper.
-        * Implement
-          `suspend fun finalizeGoogleScopeConsent(account: Account, intent: Intent?, activity: Activity)`:
-            * Call `googleAuthManager.handleScopeConsentResult(intent)`.
-            * Update account state based on `GoogleScopeAuthResult`.
-        * In `removeAccount(account)` for Google:
-            * Call `googleAuthManager.signOut()`.
-          * Update `_accounts` StateFlow.
-        * Ensure `_accounts` StateFlow correctly reflects Google account states (e.g.,
-          needs_consent, authorized).
+        * Core implementation complete:
+            * GoogleAuthManager successfully injected
+            * Basic Google sign-in flow implemented in addGoogleAccount
+            * Google OAuth scope consent flow implemented
+            * Basic account removal implemented with googleAuthManager.signOut()
+            * Error handling via GoogleErrorMapper
+        * Missing feature parity with Microsoft implementation (described below)
+  * **Actions Completed:**
+      * Added required imports for Google auth classes
+      * Injected `googleAuthManager: GoogleAuthManager`
+      * Added `googleConsentIntent` flow to communicate OAuth consent needs
+      * Implemented `addGoogleAccount` method with proper error handling
+      * Implemented `finalizeGoogleScopeConsent` to handle the consent result
+      * Implemented `removeGoogleAccount` using `googleAuthManager.signOut()`
+      * Updated AccountRepository interface to include the googleConsentIntent flow
+  * **Actions Still Needed for Feature Parity with Microsoft Implementation:**
+      * **Account Persistence & StateFlow Management:**
+          * Implement persistent storage for Google accounts (Microsoft uses MSAL's account
+            persistence)
+          * Update `_accounts` StateFlow to include Google accounts
+          * Create a mechanism to maintain Google accounts across app restarts
+          * Modify `mapToGenericAccounts()` to include Google accounts from persistent storage
+      * **Token Storage & Management:**
+          * Implement secure storage for Google access tokens
+          * Handle token expiration and refresh logic
+          * Associate tokens with their respective Google accounts
+      * **Authentication State Management:**
+          * Update `determineAuthState()` to consider Google authentication state
+          * Implement equivalent of AuthStateListener pattern for Google authentication
+          * Ensure `_authState` StateFlow reflects combined Microsoft and Google auth states
+      * **Account Lifecycle Integration:**
+          * Handle Google account changes/removals at the system level
+          * Implement proper cleanup for Google accounts on removal
+          * Handle Google service availability/connectivity issues
     * **Files to Modify:**
-      `data/src/main/java/net/melisma/data/repository/DefaultAccountRepository.kt`.
+      `data/src/main/java/net/melisma/data/repository/DefaultAccountRepository.kt`
+  * **Technical Considerations:**
+      * Unlike MSAL, Google's Credential Manager doesn't provide built-in account persistence,
+        requiring custom implementation
+      * Access tokens for Gmail API need secure storage implementation
+      * Need consistent approach to keeping Microsoft and Google account lists synchronized in the
+        combined `_accounts` StateFlow
+      * Need consistent error handling across both account types
 
 * **Task 2.2: Update `DefaultFolderRepository.kt` and `DefaultMessageRepository.kt`** - **COMPLETED
   **

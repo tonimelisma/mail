@@ -2,6 +2,8 @@
 package net.melisma.data.repository
 
 import android.app.Activity
+import android.content.Intent
+import android.content.IntentSender
 import android.util.Log
 import com.microsoft.identity.client.IAccount
 import com.microsoft.identity.client.exception.MsalException
@@ -17,14 +19,13 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import net.melisma.backend_google.auth.GoogleAuthManager
+import net.melisma.backend_google.auth.GoogleScopeAuthResult
+import net.melisma.backend_google.auth.GoogleSignInResult
 import net.melisma.backend_microsoft.auth.AddAccountResult
 import net.melisma.backend_microsoft.auth.AuthStateListener
 import net.melisma.backend_microsoft.auth.MicrosoftAuthManager
 import net.melisma.backend_microsoft.auth.RemoveAccountResult
-// TODO: Import GoogleAuthManager related classes when fully implementing Google sign-in
-// import net.melisma.backend_google.auth.GoogleAuthManager
-// import net.melisma.backend_google.auth.GoogleSignInResult
-// import net.melisma.backend_google.auth.GoogleScopeAuthResult
 import net.melisma.core_data.di.ApplicationScope
 import net.melisma.core_data.errors.ErrorMapperService
 import net.melisma.core_data.model.Account
@@ -36,7 +37,7 @@ import javax.inject.Singleton
 @Singleton
 class DefaultAccountRepository @Inject constructor(
     private val microsoftAuthManager: MicrosoftAuthManager,
-    // private val googleAuthManager: GoogleAuthManager, // TODO: Uncomment when GoogleAuthManager is ready
+    private val googleAuthManager: GoogleAuthManager,
     @ApplicationScope private val externalScope: CoroutineScope,
     private val errorMappers: Map<String, @JvmSuppressWildcards ErrorMapperService>
 ) : AccountRepository, AuthStateListener {
@@ -91,15 +92,65 @@ class DefaultAccountRepository @Inject constructor(
         Log.d(TAG, "addAccount called. ProviderType: $providerType, Scopes: $scopes")
         when (providerType.uppercase()) {
             "MS" -> addMicrosoftAccount(activity, scopes)
-            "GOOGLE" -> {
-                Log.i(TAG, "Attempting to add Google account. (Not yet implemented)")
-                tryEmitMessage("Google account addition coming soon.")
-            }
+            "GOOGLE" -> addGoogleAccount(activity, scopes)
             else -> {
                 Log.w(TAG, "Unsupported provider type for addAccount: $providerType")
                 tryEmitMessage("Unsupported account provider: $providerType")
             }
         }
+    }
+
+    // IntentSender for Google OAuth scope consent
+    private val _googleConsentIntent = MutableSharedFlow<IntentSender?>(
+        replay = 0, extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    override val googleConsentIntent: Flow<IntentSender?> = _googleConsentIntent.asSharedFlow()
+
+    suspend fun finalizeGoogleScopeConsent(account: Account, intent: Intent?, activity: Activity) {
+        Log.d(TAG, "finalizeGoogleScopeConsent called for account: ${account.username}")
+        val errorMapper = getErrorMapperForProvider("GOOGLE")
+        if (errorMapper == null) {
+            Log.e(TAG, "finalizeGoogleScopeConsent: Google Error handler not found.")
+            tryEmitMessage("Internal error: Google Error handler not found.")
+            return
+        }
+
+        _isLoadingAccountAction.value = true
+        val result = googleAuthManager.handleScopeConsentResult(intent)
+        Log.d(TAG, "finalizeGoogleScopeConsent: Result from GoogleAuthManager: $result")
+
+        when (result) {
+            is GoogleScopeAuthResult.Success -> {
+                Log.i(TAG, "Google scope consent successful. Access token received.")
+                tryEmitMessage("Google account access granted successfully.")
+                // Here you would typically store the access token securely
+                // and mark the account as fully ready in your account store
+            }
+
+            is GoogleScopeAuthResult.Error -> {
+                Log.e(TAG, "Error in Google scope consent: ${result.exception.message}")
+                tryEmitMessage(
+                    "Error completing Google account setup: ${
+                        errorMapper.mapAuthExceptionToUserMessage(
+                            result.exception
+                        )
+                    }"
+                )
+            }
+
+            is GoogleScopeAuthResult.ConsentRequired -> {
+                // This is unusual - we shouldn't get another consent required after processing a consent
+                Log.w(
+                    TAG,
+                    "Additional consent required after finalizeGoogleScopeConsent. Requesting again."
+                )
+                externalScope.launch {
+                    _googleConsentIntent.emit(result.pendingIntent)
+                }
+                tryEmitMessage("Additional permissions needed for Gmail access.")
+            }
+        }
+        _isLoadingAccountAction.value = false
     }
 
     override suspend fun addAccount(activity: Activity, scopes: List<String>) {
@@ -118,14 +169,7 @@ class DefaultAccountRepository @Inject constructor(
         _isLoadingAccountAction.value = true
         when (account.providerType.uppercase()) {
             "MS" -> removeMicrosoftAccount(account)
-            "GOOGLE" -> {
-                Log.i(
-                    TAG,
-                    "Attempting to remove Google account: ${account.username}. (Not yet implemented)"
-                )
-                tryEmitMessage("Google account removal coming soon.")
-                _isLoadingAccountAction.value = false
-            }
+            "GOOGLE" -> removeGoogleAccount(account)
             else -> {
                 Log.w(
                     TAG,
@@ -305,17 +349,147 @@ class DefaultAccountRepository @Inject constructor(
 
     private fun mapToGenericAccounts(msalAccounts: List<IAccount>): List<Account> {
         Log.d(TAG, "mapToGenericAccounts: Mapping ${msalAccounts.size} MSAL accounts.")
-        return msalAccounts.map { msalAccount ->
+        // We'll keep track of both MS and Google accounts in this repository
+        // Start with Microsoft accounts
+        val accounts = msalAccounts.map { msalAccount ->
             Account(
                 id = msalAccount.id ?: "",
                 username = msalAccount.username ?: "Unknown User",
                 providerType = "MS"
             )
-        }.also {
+        }.toMutableList()
+
+        // In a more complete implementation, we would also fetch and add Google accounts here
+        // from a store maintained by this repository
+
+        return accounts.also {
             Log.d(
                 TAG,
                 "mapToGenericAccounts: Resulting generic accounts: ${it.joinToString { acc -> acc.username }}"
             )
+        }
+    }
+
+    private suspend fun addGoogleAccount(activity: Activity, scopes: List<String>) {
+        Log.d(TAG, "addGoogleAccount: Attempting with scopes: $scopes")
+        val errorMapper = getErrorMapperForProvider("GOOGLE")
+        if (errorMapper == null) {
+            Log.e(TAG, "addGoogleAccount: Google Error handler not found.")
+            tryEmitMessage("Internal error: Google Error handler not found.")
+            _isLoadingAccountAction.value = false
+            return
+        }
+
+        _isLoadingAccountAction.value = true
+        Log.d(TAG, "addGoogleAccount: Calling GoogleAuthManager.signIn...")
+
+        when (val signInResult =
+            googleAuthManager.signIn(activity, filterByAuthorizedAccounts = false)) {
+            is GoogleSignInResult.Success -> {
+                Log.i(TAG, "Google sign-in successful.")
+                val idTokenCredential = signInResult.idTokenCredential
+                val newAccount = googleAuthManager.toGenericAccount(idTokenCredential)
+
+                // We would store the new account here in a more complete implementation
+
+                Log.d(
+                    TAG,
+                    "Google account added successfully, now requesting access token for scopes: $scopes"
+                )
+
+                // Gmail API scopes (at minimum read-only)
+                val gmailScopes = listOf("https://www.googleapis.com/auth/gmail.readonly")
+                // Request access to Gmail API
+                when (val scopeResult =
+                    googleAuthManager.requestAccessToken(activity, newAccount.id, gmailScopes)) {
+                    is GoogleScopeAuthResult.Success -> {
+                        Log.i(TAG, "Gmail access token acquired successfully.")
+                        // Store the token for future use (in a secure way)
+                        // Mark account as fully authorized
+                        tryEmitMessage("Google account added: ${newAccount.username}")
+                    }
+
+                    is GoogleScopeAuthResult.ConsentRequired -> {
+                        Log.i(
+                            TAG,
+                            "Gmail access requires user consent. Signaling UI to launch consent intent."
+                        )
+                        // Signal ViewModel/UI to launch the consent intent
+                        externalScope.launch {
+                            _googleConsentIntent.emit(scopeResult.pendingIntent)
+                        }
+                        tryEmitMessage("Additional permissions needed for Gmail access.")
+                    }
+
+                    is GoogleScopeAuthResult.Error -> {
+                        Log.e(
+                            TAG,
+                            "Error requesting Gmail access: ${scopeResult.exception.message}"
+                        )
+                        tryEmitMessage(
+                            "Error setting up Gmail access: ${
+                                errorMapper.mapAuthExceptionToUserMessage(
+                                    scopeResult.exception
+                                )
+                            }"
+                        )
+                    }
+                }
+            }
+
+            is GoogleSignInResult.Error -> {
+                Log.e(TAG, "Google sign-in error: ${signInResult.exception.message}")
+                tryEmitMessage(
+                    "Error adding Google account: ${
+                        errorMapper.mapAuthExceptionToUserMessage(
+                            signInResult.exception
+                        )
+                    }"
+                )
+            }
+
+            is GoogleSignInResult.Cancelled -> {
+                Log.d(TAG, "Google sign-in was cancelled by the user.")
+                tryEmitMessage("Google account addition cancelled.")
+            }
+
+            is GoogleSignInResult.NoCredentialsAvailable -> {
+                Log.d(TAG, "No Google credentials available for sign-in.")
+                tryEmitMessage("No Google accounts available. Please add a Google account to your device.")
+            }
+        }
+
+        _isLoadingAccountAction.value = false
+    }
+
+    private suspend fun removeGoogleAccount(account: Account) {
+        Log.d(TAG, "removeGoogleAccount: Attempting for account: ${account.username}")
+        val errorMapper = getErrorMapperForProvider("GOOGLE")
+        if (errorMapper == null) {
+            Log.e(TAG, "removeGoogleAccount: Google Error handler not found.")
+            tryEmitMessage("Internal error: Google Error handler not found.")
+            _isLoadingAccountAction.value = false
+            return
+        }
+
+        try {
+            Log.d(TAG, "Calling googleAuthManager.signOut() to clear credential state.")
+            googleAuthManager.signOut()
+
+            // In a complete implementation, we would also remove the account from our local store
+
+            tryEmitMessage("Google account removed: ${account.username}")
+        } catch (e: Exception) {
+            Log.e(TAG, "Error removing Google account", e)
+            tryEmitMessage(
+                "Error removing Google account: ${
+                    errorMapper.mapAuthExceptionToUserMessage(
+                        e
+                    )
+                }"
+            )
+        } finally {
+            _isLoadingAccountAction.value = false
         }
     }
 }
