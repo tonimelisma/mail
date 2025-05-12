@@ -4,26 +4,25 @@ import android.util.Log
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.accept
-import io.ktor.client.request.bearerAuth
+import io.ktor.client.request.delete
 import io.ktor.client.request.get
 import io.ktor.client.request.patch
 import io.ktor.client.request.post
-import io.ktor.client.request.delete
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
-import io.ktor.http.isSuccess
 import io.ktor.http.ContentType.Application.Json
+import io.ktor.http.isSuccess
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import net.melisma.backend_microsoft.di.MicrosoftGraphHttpClient
+import net.melisma.backend_microsoft.errors.MicrosoftErrorMapper
 import net.melisma.core_data.datasource.MailApiService
 import net.melisma.core_data.model.MailFolder
 import net.melisma.core_data.model.Message
-import java.io.IOException
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -77,7 +76,8 @@ private data class GraphEmailAddress(
  */
 @Singleton
 class GraphApiHelper @Inject constructor(
-    private val httpClient: HttpClient // Inject the configured Ktor client
+    @MicrosoftGraphHttpClient private val httpClient: HttpClient,
+    private val errorMapper: MicrosoftErrorMapper
 ) : MailApiService {
 
     companion object {
@@ -88,19 +88,17 @@ class GraphApiHelper @Inject constructor(
     /**
      * Fetches the list of mail folders for the authenticated user using Ktor.
      *
-     * @param accessToken The authentication token to use for this request
      * @return Result containing the list of mail folders or an error
      */
-    override suspend fun getMailFolders(accessToken: String): Result<List<MailFolder>> {
+    override suspend fun getMailFolders(): Result<List<MailFolder>> {
         return try {
-            Log.d(TAG, "Fetching mail folders...")
+            Log.d(TAG, "Fetching mail folders (Ktor Auth)...")
             val response: HttpResponse = httpClient.get("$MS_GRAPH_ROOT_ENDPOINT/me/mailFolders") {
-                bearerAuth(accessToken)
                 url {
                     parameters.append("\$top", "100") // Example query parameter
                     // Add other parameters like $select if needed
                 }
-                accept(ContentType.Application.Json)
+                accept(Json)
             }
 
             if (response.status.isSuccess()) {
@@ -118,27 +116,25 @@ class GraphApiHelper @Inject constructor(
             } else {
                 val errorBody = response.bodyAsText()
                 Log.e(TAG, "Error fetching folders: ${response.status} - $errorBody")
-                Result.failure(IOException("Error fetching folders: ${response.status} - $errorBody"))
+                Result.failure(errorMapper.mapHttpError(response.status.value, errorBody))
             }
         } catch (e: Exception) {
             // Catch Ktor exceptions (ClientRequestException, ServerResponseException, etc.)
             // and other potential issues like SerializationException, IOException
             Log.e(TAG, "Exception fetching folders", e)
-            Result.failure(e) // Return the original exception
+            Result.failure(errorMapper.mapExceptionToError(e))
         }
     }
 
     /**
      * Fetches a list of messages for a specific mail folder using Ktor.
      *
-     * @param accessToken The authentication token to use for this request
      * @param folderId The ID of the folder to fetch messages from
      * @param selectFields Optional list of fields to include in the response
      * @param maxResults Maximum number of messages to return (pagination limit)
      * @return Result containing the list of messages or an error
      */
     override suspend fun getMessagesForFolder(
-        accessToken: String,
         folderId: String,
         selectFields: List<String>,
         maxResults: Int
@@ -148,13 +144,12 @@ class GraphApiHelper @Inject constructor(
             // Note: URL encoding for folderId is handled automatically by Ktor's URL builder
             val response: HttpResponse =
                 httpClient.get("$MS_GRAPH_ROOT_ENDPOINT/me/mailFolders/$folderId/messages") {
-                    bearerAuth(accessToken)
                     url {
                         parameters.append("\$select", selectFields.joinToString(","))
                         parameters.append("\$top", maxResults.toString())
                         parameters.append("\$orderby", "receivedDateTime desc")
                     }
-                    accept(ContentType.Application.Json)
+                    accept(Json)
                 }
 
             if (response.status.isSuccess()) {
@@ -176,11 +171,11 @@ class GraphApiHelper @Inject constructor(
             } else {
                 val errorBody = response.bodyAsText()
                 Log.e(TAG, "Error fetching messages for $folderId: ${response.status} - $errorBody")
-                Result.failure(IOException("Error fetching messages for $folderId: ${response.status} - $errorBody"))
+                Result.failure(errorMapper.mapHttpError(response.status.value, errorBody))
             }
         } catch (e: Exception) {
             Log.e(TAG, "Exception fetching messages for folder $folderId", e)
-            Result.failure(e)
+            Result.failure(errorMapper.mapExceptionToError(e))
         }
     }
 
@@ -189,13 +184,11 @@ class GraphApiHelper @Inject constructor(
     /**
      * Marks a message as read or unread.
      *
-     * @param accessToken The authentication token to use for this request
      * @param messageId The ID of the message to update
      * @param isRead Whether the message should be marked as read (true) or unread (false)
      * @return Result indicating success or failure
      */
     override suspend fun markMessageRead(
-        accessToken: String,
         messageId: String,
         isRead: Boolean
     ): Result<Boolean> {
@@ -208,7 +201,6 @@ class GraphApiHelper @Inject constructor(
             }
 
             val response = httpClient.patch(endpoint) {
-                bearerAuth(accessToken)
                 accept(Json)
                 setBody(requestBody)
             }
@@ -219,23 +211,21 @@ class GraphApiHelper @Inject constructor(
             } else {
                 val errorBody = response.bodyAsText()
                 Log.e(TAG, "Error marking message: ${response.status} - $errorBody")
-                Result.failure(IOException("Error marking message: ${response.status}"))
+                Result.failure(errorMapper.mapHttpError(response.status.value, errorBody))
             }
         } catch (e: Exception) {
             Log.e(TAG, "Exception marking message $messageId as ${if (isRead) "read" else "unread"}", e)
-            Result.failure(e)
+            Result.failure(errorMapper.mapExceptionToError(e))
         }
     }
 
     /**
      * Deletes a message (moves it to trash/deleted items folder).
      *
-     * @param accessToken The authentication token to use for this request
      * @param messageId The ID of the message to delete
      * @return Result indicating success or failure
      */
     override suspend fun deleteMessage(
-        accessToken: String,
         messageId: String
     ): Result<Boolean> {
         return try {
@@ -243,7 +233,7 @@ class GraphApiHelper @Inject constructor(
             val endpoint = "$MS_GRAPH_ROOT_ENDPOINT/me/messages/$messageId"
 
             val response = httpClient.delete(endpoint) {
-                bearerAuth(accessToken)
+                // Authentication is handled by the Auth plugin in the HttpClient
             }
 
             if (response.status.isSuccess()) {
@@ -252,24 +242,22 @@ class GraphApiHelper @Inject constructor(
             } else {
                 val errorBody = response.bodyAsText()
                 Log.e(TAG, "Error deleting message: ${response.status} - $errorBody")
-                Result.failure(IOException("Error deleting message: ${response.status}"))
+                Result.failure(errorMapper.mapHttpError(response.status.value, errorBody))
             }
         } catch (e: Exception) {
             Log.e(TAG, "Exception deleting message $messageId", e)
-            Result.failure(e)
+            Result.failure(errorMapper.mapExceptionToError(e))
         }
     }
 
     /**
      * Moves a message to a different folder.
      *
-     * @param accessToken The authentication token to use for this request
      * @param messageId The ID of the message to move
      * @param targetFolderId The ID of the destination folder
      * @return Result indicating success or failure
      */
     override suspend fun moveMessage(
-        accessToken: String,
         messageId: String,
         targetFolderId: String
     ): Result<Boolean> {
@@ -282,7 +270,6 @@ class GraphApiHelper @Inject constructor(
             }
 
             val response = httpClient.post(endpoint) {
-                bearerAuth(accessToken)
                 accept(Json)
                 setBody(requestBody)
             }
@@ -293,11 +280,11 @@ class GraphApiHelper @Inject constructor(
             } else {
                 val errorBody = response.bodyAsText()
                 Log.e(TAG, "Error moving message: ${response.status} - $errorBody")
-                Result.failure(IOException("Error moving message: ${response.status}"))
+                Result.failure(errorMapper.mapHttpError(response.status.value, errorBody))
             }
         } catch (e: Exception) {
             Log.e(TAG, "Exception moving message $messageId to folder $targetFolderId", e)
-            Result.failure(e)
+            Result.failure(errorMapper.mapExceptionToError(e))
         }
     }
 }

@@ -13,7 +13,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import net.melisma.core_data.datasource.MailApiService
-import net.melisma.core_data.datasource.TokenProvider
 import net.melisma.core_data.di.ApplicationScope
 import net.melisma.core_data.di.Dispatcher
 import net.melisma.core_data.di.MailDispatchers
@@ -28,7 +27,6 @@ import kotlin.coroutines.cancellation.CancellationException
 
 @Singleton
 class DefaultMessageRepository @Inject constructor(
-    private val tokenProviders: Map<String, @JvmSuppressWildcards TokenProvider>,
     private val mailApiServices: Map<String, @JvmSuppressWildcards MailApiService>,
     @Dispatcher(MailDispatchers.IO) private val ioDispatcher: CoroutineDispatcher,
     @ApplicationScope private val externalScope: CoroutineScope,
@@ -52,7 +50,6 @@ class DefaultMessageRepository @Inject constructor(
     init {
         Log.d(
             TAG, "Initializing DefaultMessageRepository. Injected maps:" +
-                    " tokenProviders keys: ${tokenProviders.keys}," +
                     " mailApiServices keys: ${mailApiServices.keys}," +
                     " errorMappers keys: ${errorMappers.keys}"
         )
@@ -87,8 +84,7 @@ class DefaultMessageRepository @Inject constructor(
             } else {
                 val providerType = account.providerType.uppercase()
                 Log.d(TAG, "setTargetFolder: Checking support for providerType '$providerType'.")
-                if (tokenProviders.containsKey(providerType) &&
-                    mailApiServices.containsKey(providerType) &&
+                if (mailApiServices.containsKey(providerType) &&
                     errorMappers.containsKey(providerType)
                 ) {
                     Log.d(
@@ -101,11 +97,6 @@ class DefaultMessageRepository @Inject constructor(
                     Log.w(
                         TAG,
                         "setTargetFolder: Provider '$providerType' NOT supported or missing services. " +
-                                "tokenProviders has '$providerType'? ${
-                                    tokenProviders.containsKey(
-                                        providerType
-                                    )
-                                }. " +
                                 "mailApiServices has '$providerType'? ${
                                     mailApiServices.containsKey(
                                         providerType
@@ -140,8 +131,7 @@ class DefaultMessageRepository @Inject constructor(
 
         val providerType = account.providerType.uppercase()
         Log.d(TAG, "refreshMessages: Checking support for providerType '$providerType'.")
-        if (tokenProviders.containsKey(providerType) &&
-            mailApiServices.containsKey(providerType) &&
+        if (mailApiServices.containsKey(providerType) &&
             errorMappers.containsKey(providerType)
         ) {
             Log.d(
@@ -153,11 +143,6 @@ class DefaultMessageRepository @Inject constructor(
             Log.w(
                 TAG,
                 "refreshMessages: Provider '$providerType' NOT supported or missing services for refresh. " +
-                        "tokenProviders has '$providerType'? ${
-                            tokenProviders.containsKey(
-                                providerType
-                            )
-                        }. " +
                         "mailApiServices has '$providerType'? ${
                             mailApiServices.containsKey(
                                 providerType
@@ -205,15 +190,13 @@ class DefaultMessageRepository @Inject constructor(
         cancelAndClearJob("launchMessageFetchJob new fetch")
 
         val providerType = account.providerType.uppercase()
-        val tokenProvider = tokenProviders[providerType]
         val mailApiService = mailApiServices[providerType]
         val errorMapper = errorMappers[providerType]
 
-        if (tokenProvider == null || mailApiService == null || errorMapper == null) {
+        if (mailApiService == null || errorMapper == null) {
             Log.e(
                 TAG,
                 "launchMessageFetchJob: Cannot proceed. Missing service for providerType '$providerType'. " +
-                        "TokenProvider null? ${tokenProvider == null}. " +
                         "MailApiService null? ${mailApiService == null}. " +
                         "ErrorMapper null? ${errorMapper == null}."
             )
@@ -229,84 +212,54 @@ class DefaultMessageRepository @Inject constructor(
         messageFetchJob = externalScope.launch(ioDispatcher) { // Launch in IO dispatcher
             Log.d(TAG, "[Job Coroutine - ${folder.displayName}] Starting fetch.")
             try {
-                Log.d(TAG, "[Job Coroutine - ${folder.displayName}] Getting access token...")
-                val tokenResult =
-                    tokenProvider.getAccessToken(account, listOf("Mail.Read"), activity)
+                // Token acquisition is now handled internally by the Ktor Auth plugin
+                // in both GmailApiHelper and GraphApiHelper
+                account.providerType.uppercase()
+                Log.i(
+                    TAG,
+                    "[Job Coroutine - ${folder.displayName}] Fetching messages for ${account.username}..."
+                )
+
+                // Both Google and Microsoft providers now handle tokens internally via Ktor Auth plugin
+                // We can call the MailApiService methods directly without passing tokens
+                val messagesResult = mailApiService.getMessagesForFolder(
+                    folder.id, messageListSelectFields, messageListPageSize
+                )
                 ensureActive()
                 Log.d(
                     TAG,
-                    "[Job Coroutine - ${folder.displayName}] Token result: isSuccess=${tokenResult.isSuccess}"
+                    "[Job Coroutine - ${folder.displayName}] Messages result: isSuccess=${messagesResult.isSuccess}"
                 )
 
-                if (tokenResult.isSuccess) {
-                    val accessToken = tokenResult.getOrThrow()
+                val newState = if (messagesResult.isSuccess) {
+                    val messages = messagesResult.getOrThrow()
                     Log.i(
                         TAG,
-                        "[Job Coroutine - ${folder.displayName}] Token acquired for ${account.username}. Fetching messages..."
+                        "[Job Coroutine - ${folder.displayName}] Successfully fetched ${messages.size} messages for ${folder.displayName}"
                     )
-
-                    val messagesResult = mailApiService.getMessagesForFolder(
-                        accessToken, folder.id, messageListSelectFields, messageListPageSize
-                    )
-                    ensureActive()
-                    Log.d(
-                        TAG,
-                        "[Job Coroutine - ${folder.displayName}] Messages result: isSuccess=${messagesResult.isSuccess}"
-                    )
-
-
-                    val newState = if (messagesResult.isSuccess) {
-                        val messages = messagesResult.getOrThrow()
-                        Log.i(
-                            TAG,
-                            "[Job Coroutine - ${folder.displayName}] Successfully fetched ${messages.size} messages for ${folder.displayName}"
-                        )
-                        MessageDataState.Success(messages)
-                    } else {
-                        val exception = messagesResult.exceptionOrNull()
-                        val errorMsg = errorMapper.mapNetworkOrApiException(exception)
-                        Log.e(
-                            TAG,
-                            "[Job Coroutine - ${folder.displayName}] Failed to fetch messages: $errorMsg",
-                            exception
-                        )
-                        MessageDataState.Error(errorMsg)
-                    }
-
-                    if (isActive && account.id == currentTargetAccount?.id && folder.id == currentTargetFolder?.id) {
-                        Log.d(
-                            TAG,
-                            "[Job Coroutine - ${folder.displayName}] Target still valid. Updating messageDataState to: $newState"
-                        )
-                        _messageDataState.value = newState
-                    } else {
-                        Log.w(
-                            TAG,
-                            "[Job Coroutine - ${folder.displayName}] Message fetch completed but target changed or coroutine inactive. Discarding result."
-                        )
-                    }
-                } else { // Token acquisition failure
-                    val exception = tokenResult.exceptionOrNull()
-                    val errorMsg = errorMapper.mapAuthExceptionToUserMessage(exception)
+                    MessageDataState.Success(messages)
+                } else {
+                    val exception = messagesResult.exceptionOrNull()
+                    val errorMsg = errorMapper.mapNetworkOrApiException(exception)
                     Log.e(
                         TAG,
-                        "[Job Coroutine - ${folder.displayName}] Failed to acquire token for messages: $errorMsg",
+                        "[Job Coroutine - ${folder.displayName}] Failed to fetch messages: $errorMsg",
                         exception
                     )
-                    ensureActive()
+                    MessageDataState.Error(errorMsg)
+                }
 
-                    if (isActive && account.id == currentTargetAccount?.id && folder.id == currentTargetFolder?.id) {
-                        Log.d(
-                            TAG,
-                            "[Job Coroutine - ${folder.displayName}] Target still valid after token error. Updating messageDataState to Error."
-                        )
-                        _messageDataState.value = MessageDataState.Error(errorMsg)
-                    } else {
-                        Log.w(
-                            TAG,
-                            "[Job Coroutine - ${folder.displayName}] Token error received but target changed or coroutine inactive. Discarding error."
-                        )
-                    }
+                if (isActive && account.id == currentTargetAccount?.id && folder.id == currentTargetFolder?.id) {
+                    Log.d(
+                        TAG,
+                        "[Job Coroutine - ${folder.displayName}] Target still valid. Updating messageDataState to: $newState"
+                    )
+                    _messageDataState.value = newState
+                } else {
+                    Log.w(
+                        TAG,
+                        "[Job Coroutine - ${folder.displayName}] Message fetch completed but target changed or coroutine inactive. Discarding result."
+                    )
                 }
             } catch (e: CancellationException) {
                 Log.w(

@@ -15,6 +15,17 @@ android {
         minSdk = 26 // Or your project's minSdk
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles("consumer-rules.pro")
+
+        // Google Android OAuth Client ID for AppAuth
+        buildConfigField(
+            "String",
+            "GOOGLE_ANDROID_CLIENT_ID",
+            "\"326576675855-6vc6rrjhijjfch6j6106sd5ui2htbh61.apps.googleusercontent.com\""
+        )
+
+        // Add manifest placeholder for AppAuth redirect scheme
+        // This will be available to all variants, including androidTest
+        manifestPlaceholders["appAuthRedirectScheme"] = "net.melisma.mail"
     }
 
     buildTypes {
@@ -32,6 +43,9 @@ android {
     }
     kotlinOptions {
         jvmTarget = "17"
+    }
+    buildFeatures {
+        buildConfig = true
     }
 }
 
@@ -73,6 +87,7 @@ dependencies {
     testImplementation(libs.mockk.agent)   // if needing final class/method mocking
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.turbine)
+    testImplementation(libs.ktor.client.mock)
 
     // --- Instrumented Testing ---
     androidTestImplementation(libs.androidx.junit)

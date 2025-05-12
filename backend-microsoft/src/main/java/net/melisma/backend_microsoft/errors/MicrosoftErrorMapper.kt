@@ -6,6 +6,9 @@ import com.microsoft.identity.client.exception.MsalException
 import com.microsoft.identity.client.exception.MsalServiceException
 import com.microsoft.identity.client.exception.MsalUiRequiredException
 import com.microsoft.identity.client.exception.MsalUserCancelException
+import io.ktor.client.plugins.ClientRequestException
+import io.ktor.client.plugins.ServerResponseException
+import kotlinx.serialization.SerializationException
 import net.melisma.core_data.errors.ErrorMapperService // Import the interface
 import java.io.IOException
 import java.net.UnknownHostException
@@ -21,6 +24,52 @@ import kotlin.coroutines.cancellation.CancellationException
 class MicrosoftErrorMapper @Inject constructor() : ErrorMapperService {
 
     private val TAG = "MicrosoftErrorMapper"
+
+    /**
+     * Maps an HTTP status code and response body to a user-friendly error message.
+     * Used by GraphApiHelper to handle HTTP errors from Microsoft Graph API.
+     *
+     * @param statusCode The HTTP status code
+     * @param errorBody The error response body as text
+     * @return A user-friendly error message
+     */
+    fun mapHttpError(statusCode: Int, errorBody: String): Exception {
+        Log.w(TAG, "Mapping HTTP error: $statusCode - $errorBody")
+        val errorMessage = when (statusCode) {
+            401 -> "Authentication failed. Please sign in again."
+            403 -> "You don't have permission to access this resource."
+            404 -> "The requested item could not be found."
+            429 -> "Too many requests. Please try again later."
+            500, 502, 503, 504 -> "Microsoft service is unavailable. Please try again later."
+            else -> "Error communicating with Microsoft services (HTTP $statusCode)."
+        }
+        return Exception(errorMessage)
+    }
+
+    /**
+     * Maps any exception to a user-friendly error message.
+     * Used by GraphApiHelper to handle exceptions during API calls.
+     *
+     * @param exception The exception to map
+     * @return A user-friendly error message
+     */
+    fun mapExceptionToError(exception: Exception): Exception {
+        Log.w(
+            TAG,
+            "Mapping exception to error: ${exception.javaClass.simpleName} - ${exception.message}",
+            exception
+        )
+        val errorMessage = when (exception) {
+            is ClientRequestException -> "Error connecting to Microsoft services (${exception.response.status.value})."
+            is ServerResponseException -> "Microsoft service error (${exception.response.status.value})."
+            is SerializationException -> "Error processing the response from Microsoft."
+            is IOException -> "Network error. Please check your connection."
+            is CancellationException -> "Operation was cancelled."
+            is MsalException -> mapAuthExceptionToUserMessage(exception)
+            else -> "An unexpected error occurred: ${exception.message}"
+        }
+        return Exception(errorMessage)
+    }
 
     override fun mapNetworkOrApiException(exception: Throwable?): String {
         Log.w(

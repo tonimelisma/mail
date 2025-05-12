@@ -67,6 +67,7 @@ dependencies {
     implementation(libs.ktor.client.contentnegotiation)
     implementation(libs.ktor.serialization.kotlinx.json)
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.ktor.client.auth)
     implementation(libs.ktor.client.logging)
 
     // --- Unit Testing ---

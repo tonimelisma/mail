@@ -14,6 +14,8 @@ import net.melisma.core_data.di.Dispatcher
 import net.melisma.core_data.di.MailDispatchers
 import net.melisma.core_data.security.SecureEncryptionService
 import net.openid.appauth.TokenResponse
+import org.json.JSONObject
+import java.nio.charset.Charset
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -98,8 +100,39 @@ class GoogleTokenPersistenceService @Inject constructor(
                 return@withContext false
             }
 
+            // Attempt to extract email from ID Token if available
+            var extractedEmailFromIdToken: String? = null
+            if (!tokenData.idToken.isNullOrBlank()) {
+                try {
+                    val parts = tokenData.idToken.split(".")
+                    if (parts.size >= 2) { // We only need the payload part
+                        val payloadJson = String(
+                            android.util.Base64.decode(
+                                parts[1],
+                                android.util.Base64.URL_SAFE
+                            ), Charset.forName("UTF-8")
+                        )
+                        val jsonObject = JSONObject(payloadJson)
+                        extractedEmailFromIdToken = jsonObject.optString("email", null)
+                        if (extractedEmailFromIdToken != null) {
+                            Log.d(
+                                TAG,
+                                "Extracted email from AppAuth ID Token: $extractedEmailFromIdToken"
+                            )
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to parse email from AppAuth ID Token JWT", e)
+                }
+            }
+
+            // Use extracted email if available, otherwise use the one passed in (which might be null from CredentialManager)
+            val finalEmail = extractedEmailFromIdToken ?: email
+            val finalDisplayName =
+                displayName // Keep display name as passed in (likely from CredentialManager)
+
             // Create or get the account
-            val account = getOrCreateAccount(accountId, email, displayName)
+            val account = getOrCreateAccount(accountId, finalEmail, finalDisplayName)
 
             // Encrypt and save the tokens
             val encryptedAccessToken = encryptionService.encrypt(tokenData.accessToken)
@@ -142,8 +175,8 @@ class GoogleTokenPersistenceService @Inject constructor(
             )
 
             // Update additional account information if provided
-            email?.let { accountManager.setUserData(account, KEY_EMAIL, it) }
-            displayName?.let { accountManager.setUserData(account, KEY_DISPLAY_NAME, it) }
+            finalEmail?.let { accountManager.setUserData(account, KEY_EMAIL, it) }
+            finalDisplayName?.let { accountManager.setUserData(account, KEY_DISPLAY_NAME, it) }
 
             _tokenState.value = TOKEN_STATE_VALID
             Log.d(TAG, "Tokens saved successfully for account: $accountId")

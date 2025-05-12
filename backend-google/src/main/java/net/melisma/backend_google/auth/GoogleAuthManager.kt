@@ -339,4 +339,16 @@ class GoogleAuthManager @Inject constructor(
             providerType = "GOOGLE"
         )
     }
+
+    /**
+     * Helper method to get email from GoogleIdTokenCredential
+     * Note: GoogleIdTokenCredential doesn't directly expose email, but it might be extractable
+     * from the JWT token or the JWT claims if Google Identity library provides access to them
+     */
+    fun getEmailFromCredential(idTokenCredential: GoogleIdTokenCredential): String? {
+        // For now, just return null as we can't easily access the email claim
+        // In a real implementation, you might be able to parse the JWT or use another
+        // method provided by the Google Identity library
+        return null
+    }
 }

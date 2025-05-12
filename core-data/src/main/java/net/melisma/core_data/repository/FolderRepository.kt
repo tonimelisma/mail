@@ -35,8 +35,8 @@ interface FolderRepository {
      * Triggers a background refresh of the folder list for all currently observed accounts.
      * Updates will be emitted through the [Flow] provided by [observeFoldersState].
      *
-     * @param activity The optional [Activity] context, which might be required by the
-     * underlying [TokenProvider] for interactive authentication if tokens have expired.
+     * @param activity The optional [Activity] context, which might be required
+     * for interactive authentication if tokens have expired.
      */
     suspend fun refreshAllFolders(activity: Activity? = null)
 

@@ -34,8 +34,8 @@ interface MessageRepository {
      * Triggers a background refresh of the message list for the currently targeted folder/account.
      * Updates (loading, success, or error) will be emitted through the [messageDataState] flow.
      *
-     * @param activity The optional [Activity] context, potentially required by the
-     * underlying [TokenProvider] for interactive authentication.
+     * @param activity The optional [Activity] context, potentially required
+     * for interactive authentication if tokens need to be refreshed.
      */
     suspend fun refreshMessages(activity: Activity? = null)
 

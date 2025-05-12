@@ -53,16 +53,11 @@ class GmailApiHelper @Inject constructor(
      * Fetches all available labels from Gmail API and maps them to MailFolder objects.
      * Implements the MailApiService.getMailFolders interface method.
      *
-     * @param accessToken OAuth access token for Gmail API
      * @return Result containing a list of MailFolder objects or an exception
      */
-    override suspend fun getMailFolders(accessToken: String): Result<List<MailFolder>> {
+    override suspend fun getMailFolders(): Result<List<MailFolder>> {
         return try {
-            val response = httpClient.get("$BASE_URL/labels") {
-                headers {
-                    append(HttpHeaders.Authorization, "Bearer $accessToken")
-                }
-            }
+            val response = httpClient.get("$BASE_URL/labels")
 
             val labelList = response.body<GmailLabelList>()
             val mailFolders = labelList.labels
@@ -81,14 +76,12 @@ class GmailApiHelper @Inject constructor(
      * Fetches messages for a specific folder (label in Gmail) from Gmail API.
      * Implements the MailApiService.getMessagesForFolder interface method.
      *
-     * @param accessToken OAuth access token for Gmail API
      * @param folderId The ID of the folder (label) to fetch messages from
      * @param selectFields Optional list of fields to include in the response (not used in Gmail implementation)
      * @param maxResults Maximum number of messages to return
      * @return Result containing a list of Message objects or an exception
      */
     override suspend fun getMessagesForFolder(
-        accessToken: String,
         folderId: String,
         selectFields: List<String>,
         maxResults: Int
@@ -96,9 +89,6 @@ class GmailApiHelper @Inject constructor(
         return try {
             // 1. Get message IDs for the specified label
             val messageIdsResponse = httpClient.get("$BASE_URL/messages") {
-                headers {
-                    append(HttpHeaders.Authorization, "Bearer $accessToken")
-                }
                 parameter("maxResults", maxResults)
                 // Add the folder ID (label ID in Gmail) as a parameter
                 parameter("labelIds", folderId)
@@ -115,7 +105,7 @@ class GmailApiHelper @Inject constructor(
             val messages = supervisorScope {
                 messageList.messages.map { messageIdentifier ->
                     async {
-                        fetchMessageDetails(accessToken, messageIdentifier.id)
+                        fetchMessageDetails(messageIdentifier.id)
                     }
                 }.awaitAll().filterNotNull()
             }
@@ -134,16 +124,12 @@ class GmailApiHelper @Inject constructor(
     /**
      * Fetches details for a specific message ID.
      *
-     * @param accessToken OAuth access token for Gmail API
      * @param messageId Message ID to fetch
      * @return Mapped Message object or null if an error occurred
      */
-    private suspend fun fetchMessageDetails(accessToken: String, messageId: String): Message? {
+    private suspend fun fetchMessageDetails(messageId: String): Message? {
         return try {
             val response = httpClient.get("$BASE_URL/messages/$messageId") {
-                headers {
-                    append(HttpHeaders.Authorization, "Bearer $accessToken")
-                }
                 // Request only metadata to optimize payload size
                 parameter("format", "metadata")
                 // Request specific headers to reduce payload size
@@ -308,13 +294,11 @@ class GmailApiHelper @Inject constructor(
     /**
      * Marks a message as read or unread.
      *
-     * @param accessToken The authentication token to use for this request
      * @param messageId The ID of the message to update
      * @param isRead Whether the message should be marked as read (true) or unread (false)
      * @return Result indicating success or failure
      */
     override suspend fun markMessageRead(
-        accessToken: String,
         messageId: String,
         isRead: Boolean
     ): Result<Boolean> {
@@ -338,7 +322,6 @@ class GmailApiHelper @Inject constructor(
 
             val response: HttpResponse = httpClient.post(endpoint) {
                 headers {
-                    append(HttpHeaders.Authorization, "Bearer $accessToken")
                     append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
                 }
                 setBody(requestBody.toString())
@@ -370,23 +353,17 @@ class GmailApiHelper @Inject constructor(
      * In Gmail, this moves the message to the trash. The user can recover the message from trash
      * within the configured period (usually 30 days).
      *
-     * @param accessToken The authentication token to use for this request
      * @param messageId The ID of the message to delete
      * @return Result indicating success or failure
      */
     override suspend fun deleteMessage(
-        accessToken: String,
         messageId: String
     ): Result<Boolean> {
         return try {
             Log.d(TAG, "Trashing message $messageId")
             val endpoint = "$BASE_URL/messages/$messageId/trash"
 
-            val response: HttpResponse = httpClient.post(endpoint) {
-                headers {
-                    append(HttpHeaders.Authorization, "Bearer $accessToken")
-                }
-            }
+            val response: HttpResponse = httpClient.post(endpoint)
 
             if (response.status.isSuccess()) {
                 Log.d(TAG, "Successfully trashed message $messageId")
@@ -407,13 +384,11 @@ class GmailApiHelper @Inject constructor(
      * In Gmail, folders are represented as labels. This operation removes the old label
      * and adds the new target label.
      *
-     * @param accessToken The authentication token to use for this request
      * @param messageId The ID of the message to move
      * @param targetFolderId The ID of the destination folder (label)
      * @return Result indicating success or failure
      */
     override suspend fun moveMessage(
-        accessToken: String,
         messageId: String,
         targetFolderId: String
     ): Result<Boolean> {
@@ -422,9 +397,6 @@ class GmailApiHelper @Inject constructor(
 
             // First, we need to get the current labels of the message
             val messageResponse = httpClient.get("$BASE_URL/messages/$messageId") {
-                headers {
-                    append(HttpHeaders.Authorization, "Bearer $accessToken")
-                }
                 parameter("format", "minimal") // Only need minimal info to get labels
             }
 
@@ -477,7 +449,6 @@ class GmailApiHelper @Inject constructor(
 
             val response: HttpResponse = httpClient.post(endpoint) {
                 headers {
-                    append(HttpHeaders.Authorization, "Bearer $accessToken")
                     append(HttpHeaders.ContentType, ContentType.Application.Json.toString())
                 }
                 setBody(requestBody.toString())

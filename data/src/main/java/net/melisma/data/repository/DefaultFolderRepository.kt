@@ -14,7 +14,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import net.melisma.core_data.datasource.MailApiService
-import net.melisma.core_data.datasource.TokenProvider
 import net.melisma.core_data.di.ApplicationScope
 import net.melisma.core_data.di.Dispatcher
 import net.melisma.core_data.di.MailDispatchers
@@ -29,7 +28,6 @@ import kotlin.coroutines.cancellation.CancellationException
 
 @Singleton
 class DefaultFolderRepository @Inject constructor(
-    private val tokenProviders: Map<String, @JvmSuppressWildcards TokenProvider>,
     private val mailApiServices: Map<String, @JvmSuppressWildcards MailApiService>,
     @Dispatcher(MailDispatchers.IO) private val ioDispatcher: CoroutineDispatcher,
     @ApplicationScope private val externalScope: CoroutineScope,
@@ -45,7 +43,6 @@ class DefaultFolderRepository @Inject constructor(
     init {
         Log.d(
             TAG, "Initializing DefaultFolderRepository. Injected maps:" +
-                    " tokenProviders keys: ${tokenProviders.keys}," +
                     " mailApiServices keys: ${mailApiServices.keys}," +
                     " errorMappers keys: ${errorMappers.keys}"
         )
@@ -62,26 +59,23 @@ class DefaultFolderRepository @Inject constructor(
             )
             Log.d(
                 TAG,
-                "Current injected map sizes: Tokens=${tokenProviders.size}, APIs=${mailApiServices.size}, Mappers=${errorMappers.size}"
+                "Current injected map sizes: APIs=${mailApiServices.size}, Mappers=${errorMappers.size}"
             )
-            Log.d(TAG, "Current tokenProviders keys: ${tokenProviders.keys}")
             Log.d(TAG, "Current mailApiServices keys: ${mailApiServices.keys}")
             Log.d(TAG, "Current errorMappers keys: ${errorMappers.keys}")
 
             val supportedAccounts = accounts.filter { account ->
                 val providerKey = account.providerType.uppercase()
-                val hasTokenProvider = tokenProviders.containsKey(providerKey)
                 val hasMailApiService = mailApiServices.containsKey(providerKey)
                 val hasErrorMapper = errorMappers.containsKey(providerKey)
 
                 Log.d(
                     TAG,
                     "manageObservedAccounts: Checking support for account '${account.username}' (Provider: '${account.providerType}', Key: '$providerKey') -> " +
-                            "hasTokenProvider=$hasTokenProvider, " +
                             "hasMailApiService=$hasMailApiService, " +
-                            "hasErrorMapper=$hasErrorMapper. Overall supported: ${hasTokenProvider && hasMailApiService && hasErrorMapper}"
+                            "hasErrorMapper=$hasErrorMapper. Overall supported: ${hasMailApiService && hasErrorMapper}"
                 )
-                hasTokenProvider && hasMailApiService && hasErrorMapper
+                hasMailApiService && hasErrorMapper
             }
 
             Log.i(
@@ -177,8 +171,7 @@ class DefaultFolderRepository @Inject constructor(
                 TAG,
                 "refreshAllFolders: Checking support for account '${account.username}' (Provider: '$providerType')"
             )
-            if (tokenProviders.containsKey(providerType) &&
-                mailApiServices.containsKey(providerType) &&
+            if (mailApiServices.containsKey(providerType) &&
                 errorMappers.containsKey(providerType)
             ) {
                 Log.d(
@@ -239,15 +232,13 @@ class DefaultFolderRepository @Inject constructor(
             currentMap + (accountId to FolderFetchState.Loading)
         }
 
-        val tokenProvider = tokenProviders[providerType]
         val mailApiService = mailApiServices[providerType]
         val errorMapper = errorMappers[providerType]
 
-        if (tokenProvider == null || mailApiService == null || errorMapper == null) {
+        if (mailApiService == null || errorMapper == null) {
             Log.e(
                 TAG,
                 "launchFolderFetchJob: Cannot proceed for account '${account.username}'. Missing service for providerType '$providerType'. " +
-                        "TokenProvider null? ${tokenProvider == null}. " +
                         "MailApiService null? ${mailApiService == null}. " +
                         "ErrorMapper null? ${errorMapper == null}."
             )
@@ -264,83 +255,50 @@ class DefaultFolderRepository @Inject constructor(
         val job = externalScope.launch(ioDispatcher) {
             Log.d(TAG, "[Job Coroutine - ${account.username}] Starting fetch.")
             try {
-                Log.d(TAG, "[Job Coroutine - ${account.username}] Getting access token...")
-                val tokenResult = tokenProvider.getAccessToken(
-                    account,
-                    listOf("Mail.Read"),
-                    activity
-                ) // Assuming "Mail.Read" is common, might need provider-specific scopes
+                // Token acquisition is now handled internally by the Ktor Auth plugin
+                // in both GmailApiHelper and GraphApiHelper
+                account.providerType.uppercase()
+                Log.i(
+                    TAG,
+                    "[Job Coroutine - ${account.username}] Fetching folders..."
+                )
+
+                val foldersResult = mailApiService.getMailFolders()
                 ensureActive()
                 Log.d(
                     TAG,
-                    "[Job Coroutine - ${account.username}] Token result: isSuccess=${tokenResult.isSuccess}"
+                    "[Job Coroutine - ${account.username}] Folders result: isSuccess=${foldersResult.isSuccess}"
                 )
 
-
-                if (tokenResult.isSuccess) {
-                    val accessToken = tokenResult.getOrThrow()
+                val newState = if (foldersResult.isSuccess) {
+                    val folders = foldersResult.getOrThrow()
                     Log.i(
                         TAG,
-                        "[Job Coroutine - ${account.username}] Token acquired. Fetching folders..."
+                        "[Job Coroutine - ${account.username}] Successfully fetched ${folders.size} folders."
                     )
-                    val foldersResult = mailApiService.getMailFolders(accessToken)
-                    ensureActive()
-                    Log.d(
-                        TAG,
-                        "[Job Coroutine - ${account.username}] Folders result: isSuccess=${foldersResult.isSuccess}"
-                    )
-
-                    val newState = if (foldersResult.isSuccess) {
-                        val folders = foldersResult.getOrThrow()
-                        Log.i(
-                            TAG,
-                            "[Job Coroutine - ${account.username}] Successfully fetched ${folders.size} folders."
-                        )
-                        FolderFetchState.Success(folders)
-                    } else {
-                        val exception = foldersResult.exceptionOrNull()
-                        val errorMsg = errorMapper.mapNetworkOrApiException(exception)
-                        Log.e(
-                            TAG,
-                            "[Job Coroutine - ${account.username}] Failed to fetch folders: $errorMsg",
-                            exception
-                        )
-                        FolderFetchState.Error(errorMsg)
-                    }
-
-                    if (isActive && observedAccounts.containsKey(accountId)) {
-                        Log.d(
-                            TAG,
-                            "[Job Coroutine - ${account.username}] Target still valid. Updating folderStates to: $newState"
-                        )
-                        _folderStates.update { it + (accountId to newState) }
-                    } else {
-                        Log.w(
-                            TAG,
-                            "[Job Coroutine - ${account.username}] Folder fetch completed but account no longer observed or coroutine inactive. Discarding result."
-                        )
-                    }
-                } else { // Token failure
-                    val exception = tokenResult.exceptionOrNull()
-                    val errorMsg = errorMapper.mapAuthExceptionToUserMessage(exception)
+                    FolderFetchState.Success(folders)
+                } else {
+                    val exception = foldersResult.exceptionOrNull()
+                    val errorMsg = errorMapper.mapNetworkOrApiException(exception)
                     Log.e(
                         TAG,
-                        "[Job Coroutine - ${account.username}] Failed to acquire token: $errorMsg",
+                        "[Job Coroutine - ${account.username}] Failed to fetch folders: $errorMsg",
                         exception
                     )
-                    ensureActive()
-                    if (isActive && observedAccounts.containsKey(accountId)) {
-                        Log.d(
-                            TAG,
-                            "[Job Coroutine - ${account.username}] Target still valid after token error. Updating folderStates to Error."
-                        )
-                        _folderStates.update { it + (accountId to FolderFetchState.Error(errorMsg)) }
-                    } else {
-                        Log.w(
-                            TAG,
-                            "[Job Coroutine - ${account.username}] Token fetch failed but account no longer observed or coroutine inactive. Discarding error."
-                        )
-                    }
+                    FolderFetchState.Error(errorMsg)
+                }
+
+                if (isActive && observedAccounts.containsKey(accountId)) {
+                    Log.d(
+                        TAG,
+                        "[Job Coroutine - ${account.username}] Target still valid. Updating folderStates to: $newState"
+                    )
+                    _folderStates.update { it + (accountId to newState) }
+                } else {
+                    Log.w(
+                        TAG,
+                        "[Job Coroutine - ${account.username}] Folder fetch completed but account no longer observed or coroutine inactive. Discarding result."
+                    )
                 }
             } catch (e: CancellationException) {
                 Log.w(

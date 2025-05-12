@@ -42,7 +42,8 @@ class DefaultAccountRepository @Inject constructor(
     private val appAuthHelperService: AppAuthHelperService,
     private val googleTokenPersistenceService: GoogleTokenPersistenceService,
     @ApplicationScope private val externalScope: CoroutineScope,
-    private val errorMappers: Map<String, @JvmSuppressWildcards ErrorMapperService>
+    private val errorMappers: Map<String, @JvmSuppressWildcards ErrorMapperService>,
+    private val activeGoogleAccountHolder: net.melisma.backend_google.auth.ActiveGoogleAccountHolder
 ) : AccountRepository, AuthStateListener {
 
     private val TAG = "DefaultAccountRepo" // Logging TAG
@@ -357,7 +358,10 @@ class DefaultAccountRepository @Inject constructor(
 
                 // Store details temporarily for the AppAuth flow
                 pendingGoogleAccountId = idTokenCredential.id
-                pendingGoogleEmail = idTokenCredential.email // May be null
+
+                // GoogleIdTokenCredential doesn't expose email directly
+                // Try to extract from JWT or use null as fallback
+                pendingGoogleEmail = googleAuthManager.getEmailFromCredential(idTokenCredential)
                 pendingGoogleDisplayName = idTokenCredential.displayName
 
                 // Step 2: Check if valid tokens already exist for this account
@@ -376,6 +380,14 @@ class DefaultAccountRepository @Inject constructor(
                         providerType = "GOOGLE"
                     )
                     updateAccountsListWithNewAccount(account) // Ensure this adds to _accounts StateFlow
+
+                    // Set the active Google account ID for Ktor Auth plugin to use
+                    activeGoogleAccountHolder.setActiveAccountId(pendingGoogleAccountId)
+                    Log.i(
+                        TAG,
+                        "Set active Google account ID for Ktor Auth plugin: $pendingGoogleAccountId"
+                    )
+
                     tryEmitMessage("Google account '${account.username}' is already configured.")
                     _isLoadingAccountAction.value = false
                     // Reset pending state as we are done for this account
@@ -521,9 +533,11 @@ class DefaultAccountRepository @Inject constructor(
         try {
             Log.d(TAG, "Exchanging authorization code for tokens via AppAuthHelperService...")
             val tokenResponse = appAuthHelperService.performTokenRequest(authResponse)
+            // TokenResponse.accessToken is nullable in AppAuth
+            val hasAccessToken = tokenResponse.accessToken?.isNotEmpty() == true
             Log.i(
                 TAG,
-                "Token exchange successful. Access token received: ${tokenResponse.accessToken != null}"
+                "Token exchange successful. Access token received: $hasAccessToken"
             )
 
             // Step 5: Persist Tokens Securely
@@ -542,6 +556,11 @@ class DefaultAccountRepository @Inject constructor(
                     providerType = "GOOGLE"
                 )
                 updateAccountsListWithNewAccount(newAccount)
+
+                // Set the active Google account ID for Ktor Auth plugin to use
+                activeGoogleAccountHolder.setActiveAccountId(currentAccountId)
+                Log.i(TAG, "Set active Google account ID for Ktor Auth plugin: $currentAccountId")
+
                 tryEmitMessage("Google account '${newAccount.username}' successfully added and configured!")
                 Log.i(
                     TAG,
@@ -614,6 +633,10 @@ class DefaultAccountRepository @Inject constructor(
             // if they add the same account again.
             googleAuthManager.signOut()
             Log.i(TAG, "CredentialManager state cleared for Google Sign-Out.")
+
+            // Clear the active Google account ID for Ktor Auth plugin
+            activeGoogleAccountHolder.setActiveAccountId(null)
+            Log.i(TAG, "Cleared active Google account ID for Ktor Auth plugin")
 
             // Step 4: Update internal accounts list in the repository
             val currentList = _accounts.value.toMutableList()

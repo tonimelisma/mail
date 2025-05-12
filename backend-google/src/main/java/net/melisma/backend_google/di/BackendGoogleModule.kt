@@ -9,14 +9,19 @@ import dagger.multibindings.IntoMap
 import dagger.multibindings.StringKey
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
+import io.ktor.client.plugins.auth.Auth
+import io.ktor.client.plugins.auth.providers.bearer
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.defaultRequest
+import io.ktor.client.plugins.logging.LogLevel
+import io.ktor.client.plugins.logging.Logging
 import io.ktor.client.request.header
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.json.Json
 import net.melisma.backend_google.GmailApiHelper
+import net.melisma.backend_google.auth.GoogleKtorTokenProvider
 import net.melisma.backend_google.errors.GoogleErrorMapper
 import net.melisma.core_data.datasource.MailApiService
 import net.melisma.core_data.errors.ErrorMapperService
@@ -39,13 +44,14 @@ object BackendGoogleModule {
         )
     }
 
-    // Note: For a production implementation, we would include token refresh logic
-    // using the Ktor Auth plugin. This has been documented separately in HISTORY.md.
-
     @Provides
     @Singleton
     @GoogleHttpClient
-    fun provideGoogleHttpClient(json: Json): HttpClient {
+    fun provideGoogleHttpClient(
+        json: Json,
+        googleKtorTokenProvider: GoogleKtorTokenProvider
+    ): HttpClient {
+        Log.d("BackendGoogleModule", "Providing Google HTTPClient with Auth plugin setup.")
         return HttpClient(OkHttp) {
             engine {
                 config {
@@ -58,6 +64,36 @@ object BackendGoogleModule {
             }
             defaultRequest {
                 header(HttpHeaders.Accept, ContentType.Application.Json)
+            }
+
+            // Optional: Logging for Ktor requests/responses
+            install(Logging) {
+                level = LogLevel.HEADERS // Or LogLevel.ALL for more detail
+                logger = object : io.ktor.client.plugins.logging.Logger {
+                    override fun log(message: String) {
+                        Log.d("KtorGoogleClient", message)
+                    }
+                }
+            }
+
+            // Install the Auth plugin
+            install(Auth) {
+                bearer {
+                    loadTokens {
+                        // This lambda IS a suspend context
+                        googleKtorTokenProvider.loadBearerTokens()
+                    }
+
+                    refreshTokens { // oldTokens: BearerTokens? -> // Ktor provides oldTokens as this.oldTokens implicitly
+                        // This lambda IS a suspend context
+                        googleKtorTokenProvider.refreshBearerTokens(this.oldTokens)
+                    }
+
+                    // Optional: Only send tokens for Gmail API calls
+                    sendWithoutRequest { request ->
+                        request.url.host == "gmail.googleapis.com" || request.url.host == "www.googleapis.com"
+                    }
+                }
             }
         }
     }

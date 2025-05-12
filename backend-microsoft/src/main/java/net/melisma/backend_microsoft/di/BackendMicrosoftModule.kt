@@ -9,15 +9,29 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import dagger.multibindings.IntoMap
 import dagger.multibindings.StringKey
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.okhttp.OkHttp
+import io.ktor.client.plugins.auth.Auth
+import io.ktor.client.plugins.auth.providers.bearer
+import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.plugins.logging.LogLevel
+import io.ktor.client.plugins.logging.Logging
+import io.ktor.serialization.kotlinx.json.json
+import kotlinx.serialization.json.Json
 import net.melisma.backend_microsoft.GraphApiHelper
 import net.melisma.backend_microsoft.auth.MicrosoftAuthManager
-import net.melisma.backend_microsoft.datasource.MicrosoftTokenProvider
+import net.melisma.backend_microsoft.auth.MicrosoftKtorTokenProvider
 import net.melisma.backend_microsoft.errors.MicrosoftErrorMapper
 import net.melisma.core_data.datasource.MailApiService
-import net.melisma.core_data.datasource.TokenProvider
 import net.melisma.core_data.di.AuthConfigProvider
 import net.melisma.core_data.errors.ErrorMapperService
+import java.util.concurrent.TimeUnit
+import javax.inject.Qualifier
 import javax.inject.Singleton
+
+@Qualifier
+@Retention(AnnotationRetention.BINARY)
+annotation class MicrosoftGraphHttpClient
 
 // Module for providing concrete instances and map contributions.
 // We've consolidated bindings here using @Provides for map entries.
@@ -42,7 +56,50 @@ object BackendMicrosoftModule { // Changed to object module as it now only conta
         return MicrosoftAuthManager(context, authConfigProvider)
     }
 
-    // MicrosoftErrorMapper, MicrosoftTokenProvider, GraphApiHelper all have @Inject constructors
+    @Provides
+    @Singleton
+    @MicrosoftGraphHttpClient
+    fun provideMicrosoftGraphHttpClient(
+        json: Json,
+        microsoftKtorTokenProvider: MicrosoftKtorTokenProvider
+    ): HttpClient {
+        Log.d("BackendMSModule", "Providing Microsoft Graph HTTPClient with Auth plugin.")
+        return HttpClient(OkHttp) {
+            engine {
+                config {
+                    connectTimeout(30, TimeUnit.SECONDS)
+                    readTimeout(30, TimeUnit.SECONDS)
+                }
+            }
+            install(ContentNegotiation) { json(json) }
+
+            install(Logging) {
+                level = LogLevel.HEADERS
+                logger = object : io.ktor.client.plugins.logging.Logger {
+                    override fun log(message: String) {
+                        Log.d("KtorMSGraphClient", message)
+                    }
+                }
+            }
+
+            install(Auth) {
+                bearer {
+                    loadTokens {
+                        microsoftKtorTokenProvider.loadBearerTokens()
+                    }
+                    refreshTokens {
+                        microsoftKtorTokenProvider.refreshBearerTokens(this.oldTokens)
+                    }
+                    // Only send tokens to Microsoft Graph
+                    sendWithoutRequest { request ->
+                        request.url.host == "graph.microsoft.com"
+                    }
+                }
+            }
+        }
+    }
+
+    // MicrosoftErrorMapper and GraphApiHelper have @Inject constructors
     // So Hilt can provide them as parameters to @Provides methods.
 
     @Provides
@@ -57,16 +114,16 @@ object BackendMicrosoftModule { // Changed to object module as it now only conta
         return microsoftErrorMapper
     }
 
+    // TokenProvider binding removed - no longer needed as token management is handled by MicrosoftKtorTokenProvider
+
     @Provides
     @Singleton
-    // @TokenProviderType("MS") // For direct injection if needed
-    @IntoMap
-    @StringKey("MS")
-    fun provideTokenProvider(
-        microsoftTokenProvider: MicrosoftTokenProvider // Hilt injects this
-    ): TokenProvider {
-        Log.i("BackendMSModule", "Providing TokenProvider for 'MS' key via @Provides")
-        return microsoftTokenProvider
+    fun provideGraphApiHelper(
+        @MicrosoftGraphHttpClient httpClient: HttpClient,
+        microsoftErrorMapper: MicrosoftErrorMapper
+    ): GraphApiHelper {
+        Log.d("BackendMSModule", "Providing GraphApiHelper with MS Graph HTTPClient")
+        return GraphApiHelper(httpClient, microsoftErrorMapper)
     }
 
     @Provides
@@ -77,7 +134,10 @@ object BackendMicrosoftModule { // Changed to object module as it now only conta
     fun provideMailApiService(
         graphApiHelper: GraphApiHelper // Hilt injects this
     ): MailApiService {
-        Log.i("BackendMSModule", "Providing MailApiService for 'MS' key via @Provides")
+        Log.i(
+            "BackendMSModule",
+            "Providing MailApiService for 'MS' key via @Provides (now Ktor Auth enabled)"
+        )
         return graphApiHelper
     }
 }

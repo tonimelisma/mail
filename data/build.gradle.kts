@@ -14,6 +14,10 @@ android {
         minSdk = 26
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles("consumer-rules.pro")
+
+        // Add manifest placeholder for AppAuth redirect scheme
+        // This will be available to all variants, including androidTest
+        manifestPlaceholders["appAuthRedirectScheme"] = "net.melisma.mail"
     }
 
     buildTypes {
@@ -41,9 +45,11 @@ dependencies {
     implementation(project(":backend-google")) // For Google-specific components
 
     // --- Google Identity Library ---
-    // Add this line because DefaultAccountRepository now directly uses
-    // com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
     implementation(libs.google.id)
+
+    // --- AppAuth for OAuth 2.0 ---
+    implementation(libs.appauth) // Needed for DefaultAccountRepository's AppAuth integration
+    implementation(libs.androidx.browser) // For CustomTabs support in AppAuth
 
     // --- Hilt ---
     implementation(libs.hilt.android)
