@@ -78,17 +78,28 @@ class AppAuthHelperService @Inject constructor(
      */
     suspend fun getServiceConfiguration(): AuthorizationServiceConfiguration =
         withContext(ioDispatcher) {
+            Log.d(TAG, "AppAuthHelperService: getServiceConfiguration() called")
             // Return existing config if available
-            serviceConfig.get()?.let { return@withContext it }
+            serviceConfig.get()?.let {
+                Log.d(TAG, "AppAuthHelperService: Returning existing service configuration")
+                return@withContext it
+            }
 
             // Create static configuration
+            Log.d(
+                TAG,
+                "AppAuthHelperService: Creating new static configuration for Google OAuth endpoints"
+            )
             val config = AuthorizationServiceConfiguration(
                 Uri.parse(GOOGLE_AUTH_ENDPOINT),
                 Uri.parse(GOOGLE_TOKEN_ENDPOINT)
             )
             serviceConfig.set(config)
 
-            Log.d(TAG, "Created static service configuration for Google OAuth endpoints")
+            Log.d(
+                TAG,
+                "AppAuthHelperService: Created static service configuration for Google OAuth endpoints"
+            )
             return@withContext config
         }
 
@@ -98,8 +109,13 @@ class AppAuthHelperService @Inject constructor(
      */
     suspend fun fetchServiceConfigurationFromIssuer(): AuthorizationServiceConfiguration? =
         withContext(ioDispatcher) {
+            Log.d(TAG, "AppAuthHelperService: fetchServiceConfigurationFromIssuer() called")
             try {
                 val discoveryUri = Uri.parse(GOOGLE_ISSUER_URL)
+                Log.d(
+                    TAG,
+                    "AppAuthHelperService: Fetching configuration from issuer URL: $GOOGLE_ISSUER_URL"
+                )
                 var fetchedConfig: AuthorizationServiceConfiguration? = null
                 var fetchException: Exception? = null
 
@@ -112,23 +128,42 @@ class AppAuthHelperService @Inject constructor(
                     if (configuration != null) {
                         fetchedConfig = configuration
                         serviceConfig.set(configuration)
-                        Log.d(TAG, "Successfully fetched service configuration from issuer")
+                        Log.d(
+                            TAG,
+                            "AppAuthHelperService: Successfully fetched service configuration from issuer"
+                        )
                     } else {
                         fetchException = ex
-                        Log.e(TAG, "Error fetching service configuration from issuer", ex)
+                        Log.e(
+                            TAG,
+                            "AppAuthHelperService: Error fetching service configuration from issuer",
+                            ex
+                        )
                     }
                     fetchCompleted.set(true)
                 }
 
                 // Wait for fetch to complete (would be better with structured concurrency)
+                Log.d(TAG, "AppAuthHelperService: Waiting for configuration fetch to complete")
                 while (!fetchCompleted.get()) {
                     kotlinx.coroutines.delay(50)
                 }
 
-                fetchException?.let { throw it }
+                fetchException?.let {
+                    Log.e(TAG, "AppAuthHelperService: Rethrowing exception from fetch", it)
+                    throw it
+                }
+                Log.d(
+                    TAG,
+                    "AppAuthHelperService: Returning fetched configuration: ${fetchedConfig != null}"
+                )
                 return@withContext fetchedConfig
             } catch (e: Exception) {
-                Log.e(TAG, "Exception during fetchServiceConfigurationFromIssuer", e)
+                Log.e(
+                    TAG,
+                    "AppAuthHelperService: Exception during fetchServiceConfigurationFromIssuer",
+                    e
+                )
                 return@withContext null
             }
         }
@@ -146,14 +181,27 @@ class AppAuthHelperService @Inject constructor(
         redirectUri: Uri,
         scopes: String
     ): AuthorizationRequest = withContext(ioDispatcher) {
+        Log.d(
+            TAG,
+            "AppAuthHelperService: buildAuthorizationRequest(clientId=$clientId, redirectUri=$redirectUri, scopes=$scopes)"
+        )
+
         // Ensure we have a service configuration
+        Log.d(TAG, "AppAuthHelperService: Getting service configuration")
         val serviceConfiguration = getServiceConfiguration()
 
         // Generate a code verifier and challenge for PKCE
+        Log.d(TAG, "AppAuthHelperService: Generating code verifier for PKCE")
         val codeVerifier = CodeVerifierUtil.generateRandomCodeVerifier()
+        val codeChallenge = CodeVerifierUtil.deriveCodeVerifierChallenge(codeVerifier)
+        val codeChallengeMethod = CodeVerifierUtil.getCodeVerifierChallengeMethod()
 
+        Log.d(
+            TAG,
+            "AppAuthHelperService: Building authorization request with PKCE (code challenge method: $codeChallengeMethod)"
+        )
         // Build and return the authorization request with PKCE
-        AuthorizationRequest.Builder(
+        val request = AuthorizationRequest.Builder(
             serviceConfiguration,
             clientId,
             ResponseTypeValues.CODE,
@@ -162,10 +210,13 @@ class AppAuthHelperService @Inject constructor(
             .setScope(scopes)
             .setCodeVerifier(
                 codeVerifier,
-                CodeVerifierUtil.deriveCodeVerifierChallenge(codeVerifier),
-                CodeVerifierUtil.getCodeVerifierChallengeMethod()
+                codeChallenge,
+                codeChallengeMethod
             )
             .build()
+
+        Log.d(TAG, "AppAuthHelperService: Authorization request built successfully")
+        return@withContext request
     }
 
     /**
@@ -183,28 +234,39 @@ class AppAuthHelperService @Inject constructor(
         redirectUri: Uri,
         scopes: String = GMAIL_SCOPES
     ): Intent = withContext(ioDispatcher) {
+        Log.d(
+            TAG,
+            "AppAuthHelperService: initiateAuthorizationRequest(clientId=$clientId, redirectUri=$redirectUri, scopes=$scopes)"
+        )
         try {
             _authState.value = STATE_AUTHORIZING
             _lastError.value = null
+            Log.d(TAG, "AppAuthHelperService: State changed to AUTHORIZING")
 
             // Build the authorization request
+            Log.d(TAG, "AppAuthHelperService: Building authorization request")
             val authRequest = buildAuthorizationRequest(clientId, redirectUri, scopes)
 
             // Create a custom tabs intent builder for better user experience
+            Log.d(TAG, "AppAuthHelperService: Creating custom tabs intent for authorization")
             val customTabsIntent = CustomTabsIntent.Builder()
                 .setShowTitle(true)
                 .build()
 
             // Get the intent from AppAuth's authorization service
+            Log.d(
+                TAG,
+                "AppAuthHelperService: Getting authorization request intent from auth service"
+            )
             val authIntent = authService.getAuthorizationRequestIntent(
                 authRequest,
                 customTabsIntent
             )
 
-            Log.d(TAG, "Authorization request intent created successfully")
+            Log.d(TAG, "AppAuthHelperService: Authorization request intent created successfully")
             return@withContext authIntent
         } catch (e: Exception) {
-            Log.e(TAG, "Error creating authorization request intent", e)
+            Log.e(TAG, "AppAuthHelperService: Error creating authorization request intent", e)
             _authState.value = STATE_ERROR
             _lastError.value = "Failed to create authorization request: ${e.message}"
             throw e
@@ -218,28 +280,39 @@ class AppAuthHelperService @Inject constructor(
      * @return AuthorizationResponse if successful, null if there was an error
      */
     fun handleAuthorizationResponse(intent: Intent): AuthorizationResponse? {
+        Log.d(TAG, "AppAuthHelperService: handleAuthorizationResponse() called with intent")
         try {
             // Extract the authorization response from the intent
+            Log.d(TAG, "AppAuthHelperService: Extracting authorization response from intent")
             val response = AuthorizationResponse.fromIntent(intent)
             val exception = net.openid.appauth.AuthorizationException.fromIntent(intent)
 
             if (response != null) {
-                Log.d(TAG, "Successfully received authorization response")
+                Log.d(
+                    TAG,
+                    "AppAuthHelperService: Successfully received authorization response, code: ${
+                        response.authorizationCode?.take(8)
+                    }..."
+                )
                 _authState.value = STATE_AUTH_COMPLETED
+                Log.d(TAG, "AppAuthHelperService: State changed to AUTH_COMPLETED")
                 return response
             } else if (exception != null) {
-                Log.e(TAG, "Error in authorization response", exception)
+                Log.e(TAG, "AppAuthHelperService: Error in authorization response", exception)
                 _authState.value = STATE_ERROR
                 _lastError.value = "Authorization failed: ${exception.message}"
+                Log.e(TAG, "AppAuthHelperService: State changed to ERROR: ${exception.message}")
             } else {
-                Log.e(TAG, "No response or exception found in intent")
+                Log.e(TAG, "AppAuthHelperService: No response or exception found in intent")
                 _authState.value = STATE_ERROR
                 _lastError.value = "No authorization response received"
+                Log.e(TAG, "AppAuthHelperService: State changed to ERROR: No response received")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Exception processing authorization response", e)
+            Log.e(TAG, "AppAuthHelperService: Exception processing authorization response", e)
             _authState.value = STATE_ERROR
             _lastError.value = "Failed to process authorization response: ${e.message}"
+            Log.e(TAG, "AppAuthHelperService: State changed to ERROR: ${e.message}")
         }
 
         return null
@@ -254,28 +327,56 @@ class AppAuthHelperService @Inject constructor(
     suspend fun performTokenRequest(
         authResponse: AuthorizationResponse
     ): TokenResponse = withContext(ioDispatcher) {
+        Log.d(TAG, "AppAuthHelperService: performTokenRequest() called")
         try {
-            Log.d(TAG, "Starting token exchange")
+            Log.d(
+                TAG,
+                "AppAuthHelperService: Starting token exchange for authorization code: ${
+                    authResponse.authorizationCode?.take(8)
+                }..."
+            )
 
             // Create a token request from the authorization response
+            Log.d(TAG, "AppAuthHelperService: Creating token exchange request")
             // AppAuth automatically includes the code_verifier that pairs with the challenge
             val tokenRequest = authResponse.createTokenExchangeRequest()
+            Log.d(
+                TAG,
+                "AppAuthHelperService: Token request created with grant type: ${tokenRequest.grantType}"
+            )
 
             // For Google with PKCE, we use NoClientAuthentication since client secret isn't needed
             // Android/native apps should generally use PKCE instead of client secrets
             val clientAuth = NoClientAuthentication.INSTANCE
+            Log.d(TAG, "AppAuthHelperService: Using NoClientAuthentication for token request")
 
             // Perform the token request using coroutines
+            Log.d(TAG, "AppAuthHelperService: Performing token request")
             val tokenResponse = performTokenRequestSuspend(tokenRequest, clientAuth)
 
-            Log.d(TAG, "Token exchange successful")
+            Log.d(
+                TAG,
+                "AppAuthHelperService: Token exchange successful, received access token: ${
+                    tokenResponse.accessToken?.take(8)
+                }..."
+            )
+            Log.d(
+                TAG,
+                "AppAuthHelperService: Refresh token present: ${tokenResponse.refreshToken != null}"
+            )
+            Log.d(
+                TAG,
+                "AppAuthHelperService: Token expires in: ${tokenResponse.accessTokenExpirationTime}"
+            )
             _authState.value = STATE_TOKEN_EXCHANGE_COMPLETED
+            Log.d(TAG, "AppAuthHelperService: State changed to TOKEN_EXCHANGE_COMPLETED")
 
             return@withContext tokenResponse
         } catch (e: Exception) {
-            Log.e(TAG, "Token exchange failed", e)
+            Log.e(TAG, "AppAuthHelperService: Token exchange failed", e)
             _authState.value = STATE_ERROR
             _lastError.value = "Token exchange failed: ${e.message}"
+            Log.e(TAG, "AppAuthHelperService: State changed to ERROR: ${e.message}")
             throw e
         }
     }
@@ -293,13 +394,19 @@ class AppAuthHelperService @Inject constructor(
         clientId: String,
         redirectUri: Uri
     ): TokenResponse = withContext(ioDispatcher) {
+        Log.d(
+            TAG,
+            "AppAuthHelperService: refreshAccessToken(refreshToken=${refreshToken.take(8)}..., clientId=$clientId, redirectUri=$redirectUri)"
+        )
         try {
-            Log.d(TAG, "Starting token refresh")
+            Log.d(TAG, "AppAuthHelperService: Starting token refresh")
 
             // Ensure we have a service configuration
+            Log.d(TAG, "AppAuthHelperService: Getting service configuration for refresh")
             val serviceConfiguration = getServiceConfiguration()
 
             // Build the token request for refresh
+            Log.d(TAG, "AppAuthHelperService: Building token request with grant_type=refresh_token")
             val tokenRequest = TokenRequest.Builder(
                 serviceConfiguration,
                 clientId
@@ -311,14 +418,30 @@ class AppAuthHelperService @Inject constructor(
 
             // For Google with PKCE, we use NoClientAuthentication
             val clientAuth = NoClientAuthentication.INSTANCE
+            Log.d(TAG, "AppAuthHelperService: Using NoClientAuthentication for refresh")
 
             // Perform the token request
+            Log.d(TAG, "AppAuthHelperService: Performing token refresh request")
             val tokenResponse = performTokenRequestSuspend(tokenRequest, clientAuth)
 
-            Log.d(TAG, "Token refresh successful")
+            Log.d(
+                TAG,
+                "AppAuthHelperService: Token refresh successful, received new access token: ${
+                    tokenResponse.accessToken?.take(8)
+                }..."
+            )
+            Log.d(
+                TAG,
+                "AppAuthHelperService: New refresh token present: ${tokenResponse.refreshToken != null}"
+            )
+            Log.d(
+                TAG,
+                "AppAuthHelperService: New token expires in: ${tokenResponse.accessTokenExpirationTime}"
+            )
             return@withContext tokenResponse
         } catch (e: Exception) {
-            Log.e(TAG, "Token refresh failed", e)
+            Log.e(TAG, "AppAuthHelperService: Token refresh failed", e)
+            Log.e(TAG, "AppAuthHelperService: Refresh error: ${e.message}")
             throw e
         }
     }
@@ -331,21 +454,49 @@ class AppAuthHelperService @Inject constructor(
         request: TokenRequest,
         clientAuth: ClientAuthentication
     ): TokenResponse = suspendCancellableCoroutine { continuation ->
+        Log.d(
+            TAG,
+            "AppAuthHelperService: performTokenRequestSuspend() called for grant type: ${request.grantType}"
+        )
+
         authService.performTokenRequest(request, clientAuth) { response, exception ->
+            Log.d(TAG, "AppAuthHelperService: Token request callback received")
             when {
                 response != null -> {
+                    Log.d(TAG, "AppAuthHelperService: Token request successful")
+                    Log.d(
+                        TAG,
+                        "AppAuthHelperService: Received token type: ${response.tokenType}, access token: ${
+                            response.accessToken?.take(8)
+                        }..."
+                    )
+                    Log.d(
+                        TAG,
+                        "AppAuthHelperService: Refresh token present: ${response.refreshToken != null}, id token present: ${response.idToken != null}"
+                    )
+                    Log.d(
+                        TAG,
+                        "AppAuthHelperService: Token expires in: ${response.accessTokenExpirationTime}"
+                    )
                     continuation.resume(response)
                 }
 
                 exception != null -> {
-                    Log.e(TAG, "Token request error", exception)
+                    Log.e(TAG, "AppAuthHelperService: Token request error", exception)
+                    Log.e(
+                        TAG,
+                        "AppAuthHelperService: Token error type: ${exception.type}, description: ${exception.errorDescription}"
+                    )
                     continuation.resumeWithException(
                         exception
                     )
                 }
 
                 else -> {
-                    Log.e(TAG, "Token request returned null response with no exception")
+                    Log.e(
+                        TAG,
+                        "AppAuthHelperService: Token request returned null response with no exception"
+                    )
                     continuation.resumeWithException(
                         RuntimeException("Token request failed with no error information")
                     )
@@ -355,7 +506,7 @@ class AppAuthHelperService @Inject constructor(
 
         // If coroutine is cancelled, we need to clean up
         continuation.invokeOnCancellation {
-            Log.d(TAG, "Token request cancelled")
+            Log.d(TAG, "AppAuthHelperService: Token request cancelled")
         }
     }
 
@@ -367,7 +518,11 @@ class AppAuthHelperService @Inject constructor(
      * @return A GoogleTokenData object containing structured token information
      */
     fun extractTokenData(tokenResponse: TokenResponse): GoogleTokenData {
-        return GoogleTokenData(
+        Log.d(
+            TAG,
+            "AppAuthHelperService: extractTokenData() called to create GoogleTokenData object"
+        )
+        val data = GoogleTokenData(
             accessToken = tokenResponse.accessToken.orEmpty(),
             refreshToken = tokenResponse.refreshToken,
             idToken = tokenResponse.idToken,
@@ -375,6 +530,14 @@ class AppAuthHelperService @Inject constructor(
             scopes = tokenResponse.scope?.split(" ") ?: emptyList(),
             expiresIn = tokenResponse.accessTokenExpirationTime ?: 0
         )
+        Log.d(
+            TAG,
+            "AppAuthHelperService: Created GoogleTokenData with access token: ${
+                data.accessToken.take(8)
+            }..., " +
+                    "refresh token present: ${data.refreshToken != null}, expires in: ${data.expiresIn}"
+        )
+        return data
     }
 
     /**
@@ -382,8 +545,10 @@ class AppAuthHelperService @Inject constructor(
      * Useful when you want to start a new authorization flow.
      */
     fun resetAuthState() {
+        Log.d(TAG, "AppAuthHelperService: resetAuthState() called")
         _authState.value = STATE_IDLE
         _lastError.value = null
+        Log.d(TAG, "AppAuthHelperService: State reset to IDLE")
     }
 
     /**
@@ -392,8 +557,9 @@ class AppAuthHelperService @Inject constructor(
      * or when the app is shutting down.
      */
     fun dispose() {
+        Log.d(TAG, "AppAuthHelperService: dispose() called")
         authService.dispose()
-        Log.d(TAG, "AppAuthHelperService disposed")
+        Log.d(TAG, "AppAuthHelperService: AuthorizationService disposed")
     }
 
     /**
@@ -401,6 +567,7 @@ class AppAuthHelperService @Inject constructor(
      * This allows direct interaction with the AppAuth library when needed.
      */
     fun getAuthorizationService(): AuthorizationService {
+        Log.d(TAG, "AppAuthHelperService: getAuthorizationService() called")
         return authService
     }
 

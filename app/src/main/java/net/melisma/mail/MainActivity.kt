@@ -63,16 +63,27 @@ class MainActivity : ComponentActivity() {
     private lateinit var googleConsentLauncher: androidx.activity.result.ActivityResultLauncher<androidx.activity.result.IntentSenderRequest>
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        Log.d("MainActivity", "onCreate() called")
         super.onCreate(savedInstanceState)
 
         // Set up the ActivityResultLauncher for Google OAuth consent flow
+        Log.d("MainActivity", "Setting up ActivityResultLauncher for Google OAuth consent")
         googleConsentLauncher = registerForActivityResult(
             androidx.activity.result.contract.ActivityResultContracts.StartIntentSenderForResult()
         ) { result ->
+            Log.d(
+                "MainActivity",
+                "Google consent flow result received, resultCode: ${result.resultCode}"
+            )
             if (result.resultCode == RESULT_OK) {
+                Log.d("MainActivity", "Google consent flow succeeded, looking for Google account")
                 val account =
                     viewModel.uiState.value.accounts.firstOrNull { it.providerType == "GOOGLE" }
                 if (account != null) {
+                    Log.d(
+                        "MainActivity",
+                        "Found Google account: ${account.username}, finalizing consent"
+                    )
                     viewModel.finalizeGoogleScopeConsent(account, result.data, this)
                 } else {
                     Log.e("MainActivity", "No Google account found to finalize consent")
@@ -83,22 +94,26 @@ class MainActivity : ComponentActivity() {
                     ).show()
                 }
             } else {
-                Log.d("MainActivity", "Google consent flow cancelled")
+                Log.d("MainActivity", "Google consent flow cancelled by user")
                 Toast.makeText(this, "Google account setup cancelled", Toast.LENGTH_SHORT).show()
             }
         }
 
         // Observe the googleConsentIntentSender from ViewModel
+        Log.d("MainActivity", "Setting up observation of googleConsentIntentSender flow")
         lifecycleScope.launch {
             viewModel.googleConsentIntentSender.collect { intentSender ->
                 if (intentSender != null) {
+                    Log.d("MainActivity", "Received IntentSender for Google consent, launching")
                     try {
                         val request =
                             androidx.activity.result.IntentSenderRequest.Builder(intentSender)
                                 .build()
+                        Log.d("MainActivity", "Launching Google consent activity")
                         googleConsentLauncher.launch(request)
                     } catch (e: Exception) {
                         Log.e("MainActivity", "Error launching consent intent", e)
+                        Log.e("MainActivity", "Error details: ${e.message}")
                         Toast.makeText(
                             this@MainActivity,
                             "Error launching consent: ${e.message}",
@@ -109,43 +124,55 @@ class MainActivity : ComponentActivity() {
             }
         }
 
+        Log.d("MainActivity", "Setting up UI with enableEdgeToEdge and content")
         enableEdgeToEdge() // Enable drawing behind system bars
         setContent {
+            Log.d("MainActivity", "Content composition started")
             MailTheme { // Apply the application theme
                 val context = LocalContext.current
                 // Use remember to manage navigation state between main app and settings
                 var showSettings by remember { mutableStateOf(false) }
+                Log.d("MainActivity", "Initial showSettings state: $showSettings")
 
                 // Conditionally display SettingsScreen or MainApp
                 if (showSettings) {
+                    Log.d("MainActivity", "Showing SettingsScreen")
                     // Ensure activity context is correctly passed if needed by screen/VM actions
                     val activity = context as? Activity
                     if (activity != null) {
+                        Log.d(
+                            "MainActivity",
+                            "Context successfully cast to Activity for SettingsScreen"
+                        )
                         SettingsScreen(
                             viewModel = viewModel,
                             activity = activity, // Pass activity for account actions
                             onNavigateUp = {
+                                Log.d("MainActivity", "Navigation: Settings -> Main App")
                                 showSettings = false
                             } // Callback to return to main app
                         )
                     } else {
                         // Handle error case where context is not an Activity
-                        Log.e("MainActivity", "Error: Context is not an Activity in Settings path.")
+                        Log.e("MainActivity", "Error: Context is not an Activity in Settings path")
                         ErrorDisplay("Critical Error: Cannot get Activity context.") // Show error UI
                     }
                 } else {
+                    Log.d("MainActivity", "Showing MainApp")
                     // Pass activity context to MainApp if needed for actions like refresh triggers
                     val activity = context as? Activity
                     if (activity != null) {
+                        Log.d("MainActivity", "Context successfully cast to Activity for MainApp")
                         MainApp(
                             viewModel = viewModel,
                             activity = activity, // Pass activity for potential refresh triggers
                             onNavigateToSettings = {
+                                Log.d("MainActivity", "Navigation: Main App -> Settings")
                                 showSettings = true
                             } // Callback to navigate to settings
                         )
                     } else {
-                        Log.e("MainActivity", "Error: Context is not an Activity in MainApp path.")
+                        Log.e("MainActivity", "Error: Context is not an Activity in MainApp path")
                         ErrorDisplay("Critical Error: Cannot get Activity context.") // Show error UI
                     }
                 }
@@ -175,7 +202,9 @@ fun MainApp(
     // Effect to show toast messages when the state indicates one is available
     LaunchedEffect(state.toastMessage) {
         state.toastMessage?.let { message ->
+            Log.d("MainActivity", "LaunchedEffect: Showing toast message: $message")
             showToast(context, message) // Show the toast
+            Log.d("MainActivity", "LaunchedEffect: Notifying ViewModel that toast was shown")
             viewModel.toastMessageShown() // Notify ViewModel the message has been shown
         }
     }
@@ -377,6 +406,10 @@ private fun ErrorDisplay(message: String) {
 
 /** Utility function to show an Android Toast message. */
 private fun showToast(context: Context, message: String?) {
-    if (message.isNullOrBlank()) return
+    if (message.isNullOrBlank()) {
+        Log.d("MainActivity", "showToast: Message is null or blank, not showing toast")
+        return
+    }
+    Log.d("MainActivity", "showToast: Displaying toast message: $message")
     Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
 }

@@ -90,78 +90,139 @@ class MicrosoftAuthManager(
         get() = _accounts.toList() // Return a copy for immutability
 
     init {
-        Log.d(TAG, "Initializing MicrosoftAuthManager with config resource ID: $configResId")
+        Log.d(TAG, "MicrosoftAuthManager: Initializing with config resource ID: $configResId")
         initializeMsal()
     }
 
     fun setAuthStateListener(listener: AuthStateListener?) {
+        Log.d(
+            TAG,
+            "MicrosoftAuthManager: setAuthStateListener called, listener is ${listener != null}"
+        )
         this.authStateListener = listener
         if (listener != null) { // Notify immediately if listener is set after initialization
+            Log.d(TAG, "MicrosoftAuthManager: Notifying listener immediately after setting")
             notifyListener()
         }
     }
 
     private fun notifyListener() {
         try {
+            Log.d(TAG, "MicrosoftAuthManager: Notifying auth state listener")
             authStateListener?.onAuthStateChanged(isInitialized, accounts, initializationError)
             Log.d(
                 TAG,
-                "Notified Listener: isInitialized=$isInitialized, accountCount=${accounts.size}, errorPresent=${initializationError != null}"
+                "MicrosoftAuthManager: Notified Listener: isInitialized=$isInitialized, accountCount=${accounts.size}, errorPresent=${initializationError != null}"
             )
         } catch (e: Exception) {
             // Catching all exceptions from listener to prevent crashing the auth manager
-            Log.e(TAG, "Error occurred within authStateListener callback", e)
+            Log.e(TAG, "MicrosoftAuthManager: Error occurred within authStateListener callback", e)
         }
     }
 
     private fun updateAccountList(newAccounts: List<IAccount>) {
+        Log.d(TAG, "MicrosoftAuthManager: Updating account list with ${newAccounts.size} accounts")
         // Ensure thread-safety if accounts can be modified from multiple threads,
         // though MSAL callbacks are typically on main thread.
         // For simplicity, direct assignment is used here.
         _accounts = newAccounts.toList() // Store a copy
-        Log.d(TAG, "Account list updated. Count: ${accounts.size}")
+        Log.d(TAG, "MicrosoftAuthManager: Account list updated. New count: ${accounts.size}")
+
+        if (newAccounts.isNotEmpty()) {
+            Log.d(
+                TAG,
+                "MicrosoftAuthManager: Accounts present: ${newAccounts.joinToString { it.username ?: "Unknown" }}"
+            )
+        }
+
+        Log.d(TAG, "MicrosoftAuthManager: Notifying listeners about account list update")
         notifyListener() // Notify after updating the internal list
     }
 
     private fun initializeMsal() {
+        Log.d(TAG, "MicrosoftAuthManager: Initializing MSAL with config resource ID: $configResId")
         PublicClientApplication.createMultipleAccountPublicClientApplication(
             context.applicationContext,
             configResId,
             object : IPublicClientApplication.IMultipleAccountApplicationCreatedListener {
                 override fun onCreated(application: IMultipleAccountPublicClientApplication) {
+                    Log.i(
+                        TAG,
+                        "MicrosoftAuthManager: MSAL instance (Multi-Account) created successfully."
+                    )
                     msalInstance = application
                     initializationError = null
                     isInitialized = true
-                    Log.i(TAG, "MSAL instance (Multi-Account) created successfully.")
+                    Log.d(
+                        TAG,
+                        "MicrosoftAuthManager: MSAL initialization state set to: isInitialized=true, error=null"
+                    )
+                    Log.d(TAG, "MicrosoftAuthManager: Loading accounts from MSAL cache")
                     loadAccountsAsync()
                 }
 
                 override fun onError(exception: MsalException) {
+                    Log.e(TAG, "MicrosoftAuthManager: MSAL Initialization Error", exception)
+                    Log.e(TAG, "MicrosoftAuthManager: Error details: ${exception.message}")
                     msalInstance = null
                     initializationError = exception
                     isInitialized = false
+                    Log.d(
+                        TAG,
+                        "MicrosoftAuthManager: MSAL initialization state set to: isInitialized=false, error=${exception.errorCode}"
+                    )
+                    Log.d(
+                        TAG,
+                        "MicrosoftAuthManager: Clearing accounts list due to initialization error"
+                    )
                     updateAccountList(emptyList()) // Ensure accounts list is cleared on init error
-                    Log.e(TAG, "MSAL Initialization Error.", exception)
                 }
             })
     }
 
     private fun loadAccountsAsync() {
+        Log.d(TAG, "MicrosoftAuthManager: loadAccountsAsync called")
         val currentMsalInstance = msalInstance
         if (!isInitialized || currentMsalInstance == null) {
-            Log.w(TAG, "loadAccountsAsync called but MSAL not ready or instance is null.")
+            Log.w(
+                TAG,
+                "MicrosoftAuthManager: loadAccountsAsync called but MSAL not ready or instance is null."
+            )
+            Log.d(
+                TAG,
+                "MicrosoftAuthManager: isInitialized=$isInitialized, msalInstance=${msalInstance != null}"
+            )
+            Log.d(
+                TAG,
+                "MicrosoftAuthManager: Updating account list to empty list to ensure consistent state"
+            )
             updateAccountList(emptyList()) // Ensure consistent state
             return
         }
+
+        Log.d(TAG, "MicrosoftAuthManager: Calling MSAL getAccounts to load accounts from cache")
         currentMsalInstance.getAccounts(object : IPublicClientApplication.LoadAccountsCallback {
             override fun onTaskCompleted(result: List<IAccount>?) {
-                Log.d(TAG, "Loaded accounts from MSAL cache. Count = ${result?.size ?: 0}")
+                val accountCount = result?.size ?: 0
+                Log.d(TAG, "MicrosoftAuthManager: Loaded $accountCount accounts from MSAL cache")
+                if (accountCount > 0) {
+                    Log.d(
+                        TAG,
+                        "MicrosoftAuthManager: Account usernames: ${result?.joinToString { it.username ?: "Unknown" }}"
+                    )
+                }
                 updateAccountList(result ?: emptyList())
             }
 
             override fun onError(exception: MsalException) {
-                Log.e(TAG, "Error loading accounts from MSAL cache.", exception)
+                Log.e(
+                    TAG,
+                    "MicrosoftAuthManager: Error loading accounts from MSAL cache",
+                    exception
+                )
+                Log.e(TAG, "MicrosoftAuthManager: Error details: ${exception.message}")
                 // Optionally, set initializationError here too or handle differently
+                Log.d(TAG, "MicrosoftAuthManager: Clearing account list due to load error")
                 updateAccountList(emptyList()) // Clear accounts on error
             }
         })
@@ -171,49 +232,77 @@ class MicrosoftAuthManager(
         activity: Activity,
         scopes: List<String>
     ): Flow<AddAccountResult> = callbackFlow {
+        Log.d(TAG, "MicrosoftAuthManager: addAccount called with scopes: ${scopes.joinToString()}")
         val currentMsalInstance = msalInstance
         if (!isInitialized || currentMsalInstance == null) {
-            Log.e(TAG, "addAccount: MSAL not initialized or instance is null")
+            Log.e(
+                TAG,
+                "MicrosoftAuthManager: addAccount failed - MSAL not initialized or instance is null"
+            )
+            Log.d(
+                TAG,
+                "MicrosoftAuthManager: isInitialized=$isInitialized, msalInstance=${msalInstance != null}"
+            )
             trySend(AddAccountResult.NotInitialized)
             close()
             return@callbackFlow
         }
 
+        Log.d(
+            TAG,
+            "MicrosoftAuthManager: Setting up authentication callback for interactive sign-in"
+        )
         val authCallback = object : AuthenticationCallback {
             override fun onSuccess(authenticationResult: IAuthenticationResult) {
                 Log.i(
                     TAG,
-                    "Interactive addAccount/signIn successful for ${authenticationResult.account.username}"
+                    "MicrosoftAuthManager: Interactive addAccount/signIn successful for ${authenticationResult.account.username}"
                 )
+                Log.d(
+                    TAG,
+                    "MicrosoftAuthManager: Auth result contains account ID: ${authenticationResult.account.id}"
+                )
+                Log.d(TAG, "MicrosoftAuthManager: Refreshing account list after successful sign-in")
                 loadAccountsAsync() // Refresh account list
+                Log.d(
+                    TAG,
+                    "MicrosoftAuthManager: Sending success result with account: ${authenticationResult.account.username}"
+                )
                 trySend(AddAccountResult.Success(authenticationResult.account))
                 close()
             }
 
             override fun onError(exception: MsalException) {
-                Log.e(TAG, "Interactive addAccount/signIn error.", exception)
+                Log.e(TAG, "MicrosoftAuthManager: Interactive addAccount/signIn error", exception)
+                Log.e(
+                    TAG,
+                    "MicrosoftAuthManager: Error details: ${exception.message}, Error code: ${exception.errorCode}"
+                )
                 trySend(AddAccountResult.Error(exception))
                 close()
             }
 
             override fun onCancel() {
-                Log.w(TAG, "Interactive addAccount/signIn cancelled by user.")
+                Log.w(TAG, "MicrosoftAuthManager: Interactive addAccount/signIn cancelled by user")
                 trySend(AddAccountResult.Cancelled)
                 close()
             }
         }
 
+        Log.d(TAG, "MicrosoftAuthManager: Building AcquireTokenParameters for interactive sign-in")
         val interactiveParameters = AcquireTokenParameters.Builder()
             .startAuthorizationFromActivity(activity)
             .withScopes(scopes)
             .withCallback(authCallback)
             .build()
 
+        Log.d(TAG, "MicrosoftAuthManager: Initiating interactive sign-in with MSAL")
         currentMsalInstance.acquireToken(interactiveParameters)
+
         awaitClose {
             Log.d(
                 TAG,
-                "addAccount Flow for scopes [${scopes.joinToString()}] cancelled or completed"
+                "MicrosoftAuthManager: addAccount Flow for scopes [${scopes.joinToString()}] cancelled or completed"
             )
         }
     }
@@ -221,33 +310,61 @@ class MicrosoftAuthManager(
     fun removeAccount(
         accountToRemove: IAccount? // Renamed for clarity
     ): Flow<RemoveAccountResult> = callbackFlow {
+        Log.d(
+            TAG,
+            "MicrosoftAuthManager: removeAccount called with account: ${accountToRemove?.username}"
+        )
         val currentMsalInstance = msalInstance
         if (!isInitialized || currentMsalInstance == null) {
-            Log.e(TAG, "removeAccount: MSAL not initialized or instance is null")
+            Log.e(
+                TAG,
+                "MicrosoftAuthManager: removeAccount failed - MSAL not initialized or instance is null"
+            )
+            Log.d(
+                TAG,
+                "MicrosoftAuthManager: isInitialized=$isInitialized, msalInstance=${msalInstance != null}"
+            )
             trySend(RemoveAccountResult.NotInitialized)
             close()
             return@callbackFlow
         }
 
         if (accountToRemove == null) {
-            Log.e(TAG, "removeAccount: Account to remove is null")
+            Log.e(TAG, "MicrosoftAuthManager: removeAccount failed - Account to remove is null")
             trySend(RemoveAccountResult.AccountNotFound)
             close()
             return@callbackFlow
         }
 
+        Log.d(
+            TAG,
+            "MicrosoftAuthManager: Attempting to remove account ID: ${accountToRemove.id}, username: ${accountToRemove.username}"
+        )
         currentMsalInstance.removeAccount(
             accountToRemove,
             object : IMultipleAccountPublicClientApplication.RemoveAccountCallback {
                 override fun onRemoved() {
-                    Log.i(TAG, "Account removal successful for ${accountToRemove.username}.")
+                    Log.i(
+                        TAG,
+                        "MicrosoftAuthManager: Account removal successful for ${accountToRemove.username}"
+                    )
+                    Log.d(TAG, "MicrosoftAuthManager: Refreshing account list after removal")
                     loadAccountsAsync() // Refresh account list
+                    Log.d(TAG, "MicrosoftAuthManager: Sending success result for account removal")
                     trySend(RemoveAccountResult.Success)
                     close()
                 }
 
                 override fun onError(exception: MsalException) {
-                    Log.e(TAG, "Account removal error for ${accountToRemove.username}.", exception)
+                    Log.e(
+                        TAG,
+                        "MicrosoftAuthManager: Account removal error for ${accountToRemove.username}",
+                        exception
+                    )
+                    Log.e(
+                        TAG,
+                        "MicrosoftAuthManager: Error details: ${exception.message}, Error code: ${exception.errorCode}"
+                    )
                     trySend(RemoveAccountResult.Error(exception))
                     close()
                 }
@@ -255,7 +372,7 @@ class MicrosoftAuthManager(
         awaitClose {
             Log.d(
                 TAG,
-                "removeAccount Flow for ${accountToRemove.username} cancelled or completed"
+                "MicrosoftAuthManager: removeAccount Flow for ${accountToRemove.username} cancelled or completed"
             )
         }
     }

@@ -110,58 +110,115 @@ class MainViewModel @Inject constructor(
 
     /** Observes AccountRepository flows. */
     private fun observeAccountRepository() {
+        Log.d(TAG, "MainViewModel: observeAccountRepository() - Setting up flows")
+
         // Observe Auth State
         accountRepository.authState
             .onEach { newAuthState ->
-                Log.d(TAG, "AccountRepo AuthState Changed: $newAuthState")
+                Log.d(TAG, "MainViewModel: AccountRepo AuthState Changed: $newAuthState")
                 val wasInitialized = _uiState.value.authState is AuthState.Initialized
                 val isInitialized = newAuthState is AuthState.Initialized
+
+                Log.d(
+                    TAG,
+                    "MainViewModel: Auth state transition: wasInitialized=$wasInitialized, isInitialized=$isInitialized"
+                )
+
                 _uiState.update { currentState ->
                     val clearSelection = (!isInitialized && wasInitialized) ||
                             (newAuthState is AuthState.InitializationError) ||
                             (newAuthState is AuthState.Initializing && wasInitialized)
 
-                    // If clearing selection, also tell MessageRepository to clear its target
                     if (clearSelection) {
-                        viewModelScope.launch { messageRepository.setTargetFolder(null, null) }
+                        Log.d(TAG, "MainViewModel: Auth state requires clearing selection")
+                        // If clearing selection, also tell MessageRepository to clear its target
+                        viewModelScope.launch {
+                            Log.d(TAG, "MainViewModel: Clearing target folder in MessageRepository")
+                            messageRepository.setTargetFolder(null, null)
+                        }
                     }
 
-                    currentState.copy(
+                    val updatedState = currentState.copy(
                         authState = newAuthState,
                         selectedFolder = if (clearSelection) null else currentState.selectedFolder,
                         selectedFolderAccountId = if (clearSelection) null else currentState.selectedFolderAccountId
                         // messageDataState comes from MessageRepository observation
                     )
+
+                    Log.d(TAG, "MainViewModel: UI state updated with new auth state: $newAuthState")
+                    if (clearSelection) {
+                        Log.d(TAG, "MainViewModel: Folder selection cleared")
+                    }
+
+                    updatedState
                 }
             }.launchIn(viewModelScope)
 
         // Observe Account list
         accountRepository.accounts
             .onEach { newAccountList ->
-                Log.d(TAG, "AccountRepo Accounts Changed: ${newAccountList.size} accounts")
+                Log.d(
+                    TAG,
+                    "MainViewModel: AccountRepo Accounts Changed: ${newAccountList.size} accounts"
+                )
+                if (newAccountList.isNotEmpty()) {
+                    Log.d(
+                        TAG,
+                        "MainViewModel: Account usernames: ${newAccountList.joinToString { it.username }}"
+                    )
+                }
+
                 val previousAccounts = _uiState.value.accounts
                 val previousSelectedAccountId = _uiState.value.selectedFolderAccountId
+
+                Log.d(TAG, "MainViewModel: Informing FolderRepository about account changes")
                 folderRepository.manageObservedAccounts(newAccountList) // Inform FolderRepo
 
                 _uiState.update { currentState ->
                     val removedAccountIds =
                         previousAccounts.map { it.id } - newAccountList.map { it.id }.toSet()
+
+                    if (removedAccountIds.isNotEmpty()) {
+                        Log.d(TAG, "MainViewModel: Accounts removed: $removedAccountIds")
+                    }
+
                     val selectedAccountRemoved =
                         previousSelectedAccountId != null && previousSelectedAccountId in removedAccountIds
 
                     // If clearing selection, also tell MessageRepository to clear its target
                     if (selectedAccountRemoved) {
-                        viewModelScope.launch { messageRepository.setTargetFolder(null, null) }
+                        Log.d(
+                            TAG,
+                            "MainViewModel: Selected account was removed: $previousSelectedAccountId"
+                        )
+                        viewModelScope.launch {
+                            Log.d(
+                                TAG,
+                                "MainViewModel: Clearing target folder in MessageRepository due to account removal"
+                            )
+                            messageRepository.setTargetFolder(null, null)
+                        }
                     }
 
-                    currentState.copy(
+                    val updatedState = currentState.copy(
                         accounts = newAccountList,
                         selectedFolder = if (selectedAccountRemoved) null else currentState.selectedFolder,
                         selectedFolderAccountId = if (selectedAccountRemoved) null else currentState.selectedFolderAccountId
                         // messageDataState comes from MessageRepository observation
                     )
+
+                    Log.d(
+                        TAG,
+                        "MainViewModel: UI state updated with ${newAccountList.size} accounts"
+                    )
+                    updatedState
                 }
+
                 if (_uiState.value.selectedFolder == null) {
+                    Log.d(
+                        TAG,
+                        "MainViewModel: No folder selected, attempting to select default folder"
+                    )
                     selectDefaultFolderIfNeeded(_uiState.value)
                 }
             }.launchIn(viewModelScope)
@@ -170,7 +227,10 @@ class MainViewModel @Inject constructor(
         accountRepository.isLoadingAccountAction
             .onEach { isLoading ->
                 if (_uiState.value.isLoadingAccountAction != isLoading) {
-                    Log.d(TAG, "AccountRepo isLoadingAccountAction: $isLoading")
+                    Log.d(
+                        TAG,
+                        "MainViewModel: AccountRepo isLoadingAccountAction changed: $isLoading"
+                    )
                     _uiState.update { it.copy(isLoadingAccountAction = isLoading) }
                 }
             }.launchIn(viewModelScope)
@@ -179,75 +239,189 @@ class MainViewModel @Inject constructor(
         accountRepository.accountActionMessage
             .onEach { message ->
                 if (_uiState.value.toastMessage != message) {
-                    Log.d(TAG, "AccountRepo accountActionMessage: $message")
+                    Log.d(TAG, "MainViewModel: AccountRepo accountActionMessage: $message")
                     _uiState.update { it.copy(toastMessage = message) }
                 }
             }.launchIn(viewModelScope)
+
+        Log.d(TAG, "MainViewModel: Finished setting up AccountRepository observation flows")
     }
 
     /** Observes FolderRepository state. */
     private fun observeFolderRepository() {
+        Log.d(TAG, "MainViewModel: observeFolderRepository() - Setting up flow")
+
         folderRepository.observeFoldersState()
             .onEach { folderStatesMap ->
                 val previousFolderMap = _uiState.value.foldersByAccountId
                 if (previousFolderMap != folderStatesMap) {
                     Log.d(
                         TAG,
-                        "FolderRepo State Changed: ${folderStatesMap.entries.joinToString { "${it.key}=${it.value::class.simpleName}" }}"
+                        "MainViewModel: FolderRepo State Changed: ${folderStatesMap.entries.joinToString { "${it.key}=${it.value::class.simpleName}" }}"
                     )
+
+                    // Log detail about each account's folder state
+                    folderStatesMap.forEach { (accountId, state) ->
+                        when (state) {
+                            is FolderFetchState.Success -> {
+                                Log.d(
+                                    TAG,
+                                    "MainViewModel: Account $accountId has ${state.folders.size} folders"
+                                )
+                                if (state.folders.isNotEmpty()) {
+                                    Log.d(
+                                        TAG,
+                                        "MainViewModel: Folder names: ${state.folders.joinToString { it.displayName }}"
+                                    )
+                                }
+                            }
+
+                            is FolderFetchState.Loading -> {
+                                Log.d(TAG, "MainViewModel: Account $accountId folders are loading")
+                            }
+
+                            is FolderFetchState.Error -> {
+                                Log.e(
+                                    TAG,
+                                    "MainViewModel: Account $accountId folders error: ${state.error}"
+                                )
+                            }
+                        }
+                    }
+
                     _uiState.update {
                         it.copy(foldersByAccountId = folderStatesMap)
                     }
+                    Log.d(TAG, "MainViewModel: UI state updated with new folder states")
+
                     val justLoaded = folderStatesMap.any { (id, state) ->
-                        state !is FolderFetchState.Loading && previousFolderMap[id] is FolderFetchState.Loading
+                        val wasLoading = previousFolderMap[id] is FolderFetchState.Loading
+                        val isNotLoadingNow = state !is FolderFetchState.Loading
+                        val justFinishedLoading = wasLoading && isNotLoadingNow
+
+                        if (justFinishedLoading) {
+                            Log.d(
+                                TAG,
+                                "MainViewModel: Folders for account $id just finished loading"
+                            )
+                        }
+
+                        justFinishedLoading
                     }
+
                     if (justLoaded && _uiState.value.selectedFolder == null) {
+                        Log.d(
+                            TAG,
+                            "MainViewModel: Folders just loaded and no folder selected, attempting default selection"
+                        )
                         selectDefaultFolderIfNeeded(_uiState.value)
                     }
                 }
             }.launchIn(viewModelScope)
+
+        Log.d(TAG, "MainViewModel: Finished setting up FolderRepository observation flow")
     }
 
     /** Observes MessageRepository state. */
     private fun observeMessageRepository() {
+        Log.d(TAG, "MainViewModel: observeMessageRepository() - Setting up flow")
+
         messageRepository.messageDataState
             .onEach { newMessageState ->
                 if (_uiState.value.messageDataState != newMessageState) {
-                    Log.d(TAG, "MessageRepo State Changed: ${newMessageState::class.simpleName}")
+                    Log.d(
+                        TAG,
+                        "MainViewModel: MessageRepo State Changed: ${newMessageState::class.simpleName}"
+                    )
+
+                    // Log detailed information about the new message state
+                    when (newMessageState) {
+                        is MessageDataState.Success -> {
+                            val messageCount = newMessageState.messages.size
+                            Log.d(TAG, "MainViewModel: Received ${messageCount} messages")
+                            if (messageCount > 0) {
+                                Log.d(
+                                    TAG,
+                                    "MainViewModel: First message subject: ${newMessageState.messages.first().subject}"
+                                )
+                                Log.d(
+                                    TAG,
+                                    "MainViewModel: Message IDs: ${
+                                        newMessageState.messages.take(3).map { it.id }
+                                    }"
+                                )
+                            }
+                        }
+
+                        is MessageDataState.Loading -> {
+                            Log.d(TAG, "MainViewModel: Messages are loading")
+                        }
+
+                        is MessageDataState.Error -> {
+                            Log.e(
+                                TAG,
+                                "MainViewModel: Message loading error: ${newMessageState.error}"
+                            )
+                        }
+
+                        is MessageDataState.Initial -> {
+                            Log.d(
+                                TAG,
+                                "MainViewModel: Message state is initial (no data loaded yet)"
+                            )
+                        }
+                    }
+
                     _uiState.update {
                         it.copy(messageDataState = newMessageState) // Update message state directly
                     }
+                    Log.d(TAG, "MainViewModel: UI state updated with new message state")
                 }
             }.launchIn(viewModelScope)
+
+        Log.d(TAG, "MainViewModel: Finished setting up MessageRepository observation flow")
     }
 
 
     // --- Account Actions ---
     fun addAccount(activity: Activity) {
+        Log.d(TAG, "MainViewModel: addAccount() called for Microsoft account")
         viewModelScope.launch {
-            Log.d(TAG, "Add account action triggered (Microsoft).")
+            Log.d(
+                TAG,
+                "MainViewModel: Add Microsoft account action triggered with scopes: $mailReadScopes"
+            )
             accountRepository.addAccount(activity, mailReadScopes, "MS")
         }
     }
 
     fun addGoogleAccount(activity: Activity) {
+        Log.d(TAG, "MainViewModel: addGoogleAccount() called")
         viewModelScope.launch {
-            Log.d(TAG, "Add Google account action triggered.")
+            Log.d(
+                TAG,
+                "MainViewModel: Add Google account action triggered with scopes: $gmailReadScopes"
+            )
             accountRepository.addAccount(activity, gmailReadScopes, "GOOGLE")
         }
     }
 
     fun removeAccount(activity: Activity, accountToRemove: Account?) {
+        Log.d(
+            TAG,
+            "MainViewModel: removeAccount() called for account: ${accountToRemove?.username}"
+        )
         if (accountToRemove == null) {
-            Log.e(TAG, "Remove account called with null account object.")
+            Log.e(TAG, "MainViewModel: Remove account called with null account object")
             tryEmitToastMessage("Cannot remove null account.")
             return
         }
         Log.d(
             TAG,
-            "Requesting removal via repository for account: ${accountToRemove.username} (ID: ${accountToRemove.id})"
+            "MainViewModel: Requesting removal via repository for account: ${accountToRemove.username} (ID: ${accountToRemove.id}, Provider: ${accountToRemove.providerType})"
         )
         viewModelScope.launch {
+            Log.d(TAG, "MainViewModel: Calling accountRepository.removeAccount()")
             accountRepository.removeAccount(accountToRemove)
         }
     }

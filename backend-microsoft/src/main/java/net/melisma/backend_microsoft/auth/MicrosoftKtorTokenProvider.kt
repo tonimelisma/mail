@@ -23,46 +23,77 @@ class MicrosoftKtorTokenProvider @Inject constructor(
         listOf("https://graph.microsoft.com/.default") // Or more specific like "User.Read", "Mail.ReadWrite" etc.
 
     suspend fun loadBearerTokens(): BearerTokens? {
+        Log.d(TAG, "MicrosoftKtorTokenProvider: loadBearerTokens() called")
         val accountId = activeAccountHolder.getActiveMicrosoftAccountIdValue()
         if (accountId == null) {
-            Log.w(TAG, "Ktor: No active Microsoft account ID for loading tokens.")
+            Log.w(
+                TAG,
+                "MicrosoftKtorTokenProvider: No active Microsoft account ID for loading tokens"
+            )
             return null
         }
+        Log.d(TAG, "MicrosoftKtorTokenProvider: Active account ID: $accountId")
 
+        Log.d(TAG, "MicrosoftKtorTokenProvider: Finding MSAL account for ID: $accountId")
         val msalAccount = findMsalAccount(accountId)
         if (msalAccount == null) {
-            Log.e(TAG, "Ktor: MSAL IAccount not found for active ID: $accountId")
+            Log.e(
+                TAG,
+                "MicrosoftKtorTokenProvider: MSAL IAccount not found for active ID: $accountId"
+            )
             return null
         }
+        Log.d(TAG, "MicrosoftKtorTokenProvider: Found MSAL account: ${msalAccount.username}")
 
         Log.d(
             TAG,
-            "Ktor: Attempting to load token silently for MS account: ${msalAccount.username}"
+            "MicrosoftKtorTokenProvider: Attempting to acquire token silently for account: ${msalAccount.username}"
         )
         return acquireTokenAndConvertToBearer(msalAccount, isRefreshAttempt = false)
     }
 
     suspend fun refreshBearerTokens(oldTokens: BearerTokens?): BearerTokens? {
+        Log.d(TAG, "MicrosoftKtorTokenProvider: refreshBearerTokens() called by Ktor Auth plugin")
         val accountId = activeAccountHolder.getActiveMicrosoftAccountIdValue()
         if (accountId == null) {
-            Log.e(TAG, "Ktor Refresh: No active Microsoft account ID.")
+            Log.e(
+                TAG,
+                "MicrosoftKtorTokenProvider: Refresh failed - No active Microsoft account ID"
+            )
             return null
         }
+        Log.d(TAG, "MicrosoftKtorTokenProvider: Active account ID for refresh: $accountId")
 
+        Log.d(TAG, "MicrosoftKtorTokenProvider: Finding MSAL account for refresh")
         val msalAccount = findMsalAccount(accountId)
         if (msalAccount == null) {
             Log.e(
                 TAG,
-                "Ktor Refresh: MSAL IAccount not found for active ID: $accountId during refresh."
+                "MicrosoftKtorTokenProvider: MSAL IAccount not found for active ID: $accountId during refresh"
             )
             return null
         }
+        Log.d(
+            TAG,
+            "MicrosoftKtorTokenProvider: Found MSAL account for refresh: ${msalAccount.username}"
+        )
 
-        Log.d(TAG, "Ktor Refresh: Attempting for MS account: ${msalAccount.username}")
+        Log.d(
+            TAG,
+            "MicrosoftKtorTokenProvider: Attempting token refresh for MS account: ${msalAccount.username}"
+        )
         // Use mutex to prevent multiple concurrent silent refresh calls for the same account
         return refreshMutex.withLock {
+            Log.d(
+                TAG,
+                "MicrosoftKtorTokenProvider: Acquired refresh mutex for account: ${msalAccount.username}"
+            )
             // Optional: Double-check if token is still invalid or was refreshed by another call
             // This is complex with MSAL as it manages its own cache. A simple re-fetch is often easiest.
+            Log.d(
+                TAG,
+                "MicrosoftKtorTokenProvider: Calling acquireTokenAndConvertToBearer with isRefreshAttempt=true"
+            )
             acquireTokenAndConvertToBearer(msalAccount, isRefreshAttempt = true)
         }
     }
@@ -71,28 +102,55 @@ class MicrosoftKtorTokenProvider @Inject constructor(
         msalAccount: IAccount,
         isRefreshAttempt: Boolean
     ): BearerTokens? {
+        Log.d(
+            TAG,
+            "MicrosoftKtorTokenProvider: acquireTokenAndConvertToBearer(account=${msalAccount.username}, isRefreshAttempt=$isRefreshAttempt)"
+        )
         return try {
+            Log.d(
+                TAG,
+                "MicrosoftKtorTokenProvider: Calling microsoftAuthManager.acquireTokenSilent with scopes: $defaultGraphApiScopes"
+            )
             val acquireTokenResult =
                 microsoftAuthManager.acquireTokenSilent(msalAccount, defaultGraphApiScopes).first()
+            Log.d(
+                TAG,
+                "MicrosoftKtorTokenProvider: Received result: ${acquireTokenResult::class.java.simpleName}"
+            )
+
             when (acquireTokenResult) {
                 is AcquireTokenResult.Success -> {
+                    val expiresOn = acquireTokenResult.result.expiresOn
                     Log.i(
                         TAG,
-                        "Ktor: MSAL Token acquired successfully for ${msalAccount.username}. Expires: ${acquireTokenResult.result.expiresOn}"
+                        "MicrosoftKtorTokenProvider: MSAL Token acquired successfully for ${msalAccount.username}. " +
+                                "Expires: $expiresOn"
                     )
+                    Log.d(
+                        TAG,
+                        "MicrosoftKtorTokenProvider: Token length: ${acquireTokenResult.result.accessToken.length} chars"
+                    )
+
                     // The 'refreshToken' field in BearerTokens is not directly used by MSAL for its own refresh.
                     // MSAL uses its internal refresh token when acquireTokenSilent is called.
                     // We can put the account ID or a placeholder if needed by Ktor, or an empty string.
+                    val accountIdOrPlaceholder = msalAccount.id ?: "ms_account_id_placeholder"
+                    Log.d(
+                        TAG,
+                        "MicrosoftKtorTokenProvider: Creating BearerTokens with account ID: $accountIdOrPlaceholder"
+                    )
+
                     BearerTokens(
                         acquireTokenResult.result.accessToken,
-                        msalAccount.id ?: "ms_account_id_placeholder"
+                        accountIdOrPlaceholder
                     )
                 }
 
                 is AcquireTokenResult.UiRequired -> {
                     Log.w(
                         TAG,
-                        "Ktor: MSAL UI required for ${msalAccount.username}. Cannot silently acquire/refresh token."
+                        "MicrosoftKtorTokenProvider: MSAL UI required for ${msalAccount.username}. " +
+                                "Cannot silently acquire/refresh token."
                     )
                     // Signal Ktor that refresh failed and interaction is needed.
                     // App should have a mechanism to catch this and trigger interactive sign-in.
@@ -102,8 +160,12 @@ class MicrosoftKtorTokenProvider @Inject constructor(
                 is AcquireTokenResult.Error -> {
                     Log.e(
                         TAG,
-                        "Ktor: MSAL Error acquiring token for ${msalAccount.username}",
+                        "MicrosoftKtorTokenProvider: MSAL Error acquiring token for ${msalAccount.username}",
                         acquireTokenResult.exception
+                    )
+                    Log.e(
+                        TAG,
+                        "MicrosoftKtorTokenProvider: Error details: ${acquireTokenResult.exception.message}"
                     )
                     null
                 }
@@ -111,7 +173,7 @@ class MicrosoftKtorTokenProvider @Inject constructor(
                 else -> { // Cancelled, NotInitialized, NoAccountProvided (shouldn't happen if msalAccount is valid)
                     Log.w(
                         TAG,
-                        "Ktor: Unexpected MSAL result during token acquisition for ${msalAccount.username}: $acquireTokenResult"
+                        "MicrosoftKtorTokenProvider: Unexpected MSAL result during token acquisition for ${msalAccount.username}: $acquireTokenResult"
                     )
                     null
                 }
@@ -119,21 +181,41 @@ class MicrosoftKtorTokenProvider @Inject constructor(
         } catch (e: MsalUiRequiredException) { // Catch specifically if flow.first() rethrows it
             Log.w(
                 TAG,
-                "Ktor: MSAL UI required (caught MsalUiRequiredException) for ${msalAccount.username}. Cannot silently acquire/refresh token.",
+                "MicrosoftKtorTokenProvider: MSAL UI required (caught MsalUiRequiredException) for ${msalAccount.username}. " +
+                        "Cannot silently acquire/refresh token.",
                 e
             )
+            Log.w(TAG, "MicrosoftKtorTokenProvider: Error details: ${e.message}")
             null
         } catch (e: Exception) {
             Log.e(
                 TAG,
-                "Ktor: Generic exception during MSAL token acquisition for ${msalAccount.username}",
+                "MicrosoftKtorTokenProvider: Generic exception during MSAL token acquisition for ${msalAccount.username}",
                 e
+            )
+            Log.e(
+                TAG,
+                "MicrosoftKtorTokenProvider: Error type: ${e.javaClass.simpleName}, Message: ${e.message}"
             )
             null
         }
     }
 
     private fun findMsalAccount(accountId: String): IAccount? {
-        return microsoftAuthManager.accounts.find { it.id == accountId }
+        Log.d(TAG, "MicrosoftKtorTokenProvider: findMsalAccount called for accountId: $accountId")
+        val account = microsoftAuthManager.accounts.find { it.id == accountId }
+        if (account != null) {
+            Log.d(
+                TAG,
+                "MicrosoftKtorTokenProvider: Found MSAL account with username: ${account.username}"
+            )
+        } else {
+            Log.w(TAG, "MicrosoftKtorTokenProvider: No MSAL account found with ID: $accountId")
+            Log.d(
+                TAG,
+                "MicrosoftKtorTokenProvider: Available accounts: ${microsoftAuthManager.accounts.map { it.username }}"
+            )
+        }
+        return account
     }
 }
