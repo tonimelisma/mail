@@ -16,15 +16,20 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles("consumer-rules.pro")
 
-        // Google Android OAuth Client ID for AppAuth
+        // *********************************************************************
+        // This is the CRITICAL CHANGE.
+        // Use your actual Android OAuth 2.0 Client ID from your android.json
+        // or Google Cloud Console.
+        // This ID is specifically for the AppAuth flow.
+        // *********************************************************************
         buildConfigField(
             "String",
             "GOOGLE_ANDROID_CLIENT_ID",
-            "\"326576675855-6vc6rrjhijjfch6j6106sd5ui2htbh61.apps.googleusercontent.com\""
+            "\"326576675855-r404vqtrr8ohbpl7g6tianaekkt70igd.apps.googleusercontent.com\"" // <<< YOUR ANDROID CLIENT ID
         )
 
-        // Add manifest placeholder for AppAuth redirect scheme
-        // This will be available to all variants, including androidTest
+        // This manifest placeholder is used by AppAuth for the redirect URI.
+        // The scheme 'net.melisma.mail' should be unique to your app.
         manifestPlaceholders["appAuthRedirectScheme"] = "net.melisma.mail"
     }
 
@@ -45,7 +50,7 @@ android {
         jvmTarget = "17"
     }
     buildFeatures {
-        buildConfig = true
+        buildConfig = true // Ensure buildConfig is enabled to access GOOGLE_ANDROID_CLIENT_ID
     }
 }
 
@@ -83,8 +88,8 @@ dependencies {
     // --- Unit Testing ---
     testImplementation(libs.junit)
     testImplementation(libs.mockk.core)
-    testImplementation(libs.mockk.android) // if using Android specific parts in unit tests
-    testImplementation(libs.mockk.agent)   // if needing final class/method mocking
+    testImplementation(libs.mockk.android)
+    testImplementation(libs.mockk.agent)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.turbine)
     testImplementation(libs.ktor.client.mock)

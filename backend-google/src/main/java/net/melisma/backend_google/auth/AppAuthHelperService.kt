@@ -215,6 +215,18 @@ class AppAuthHelperService @Inject constructor(
             )
             .build()
 
+        // Add detailed logging of the full authorization request URI and components
+        Log.i(TAG, "Constructed AuthorizationRequest URI: ${request.toUri()}")
+        // Log individual components for clarity as well
+        Log.d(TAG, "AuthRequest ClientID: ${request.clientId}")
+        Log.d(TAG, "AuthRequest Redirect URI: ${request.redirectUri}")
+        Log.d(TAG, "AuthRequest Scope: ${request.scope}")
+        Log.d(TAG, "AuthRequest ResponseType: ${request.responseType}")
+        Log.d(TAG, "AuthRequest State: ${request.state}")
+        Log.d(TAG, "AuthRequest CodeVerifier: ${request.codeVerifier} (Don't log in production)")
+        Log.d(TAG, "AuthRequest CodeChallenge: ${request.codeVerifierChallenge}")
+        Log.d(TAG, "AuthRequest CodeChallengeMethod: ${request.codeVerifierChallengeMethod}")
+
         Log.d(TAG, "AppAuthHelperService: Authorization request built successfully")
         return@withContext request
     }

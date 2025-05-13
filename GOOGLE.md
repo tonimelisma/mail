@@ -11,7 +11,6 @@ Android** strategy for API authorization and token management, and
 ## Implementation Status Summary
 
 **Completed Tasks:**
-
 - **Phase 1:** ✅ Reworked Data Layer for True AppAuth Flow
     - Removed GoogleAccountCapability and implemented proper token handling
     - Documented all workarounds in HISTORY.md
@@ -26,7 +25,6 @@ Android** strategy for API authorization and token management, and
     - Updated DefaultAccountRepository to set the active Google account ID
 
 **Pending Tasks:**
-
 - **Phase 3:** Correct UI Layer for AppAuth Flow (MainActivity.kt, MainViewModel.kt)
 - **Phase 4:** Verification, Testing, and Full Functionality Implementation
 
@@ -137,8 +135,7 @@ that has now been fixed.
     - Created ActiveGoogleAccountHolder to track the currently active Google account
     - Implemented GoogleKtorTokenProvider to handle token loading and refreshing
     - Added BuildConfig field for GOOGLE_ANDROID_CLIENT_ID in backend-google/build.gradle.kts
-    - Updated BackendGoogleModule to use the Ktor Auth plugin with proper bearer token
-      authentication
+  - Updated BackendGoogleModule to use the Ktor Auth plugin with proper bearer token authentication
 
 **Task 2.2: Enhance `GoogleTokenPersistenceService.saveTokens` for Email Extraction** ✅ COMPLETED
 
@@ -156,7 +153,7 @@ that has now been fixed.
 * **Goal:** Since Ktor now handles tokens, remove the `accessToken: String` parameter from
   `GmailApiHelper` methods.
 * **Files Modified:**
-    * `backend-google/src/main/java/net/melisma/backend_google/GmailApiHelper.kt`
+      * `backend-google/src/main/java/net/melisma/backend_google/GmailApiHelper.kt`
     * `core-data/src/main/java/net/melisma/core_data/datasource/MailApiService.kt`
     * `data/src/main/java/net/melisma/data/repository/DefaultMessageRepository.kt`
     * `data/src/main/java/net/melisma/data/repository/DefaultFolderRepository.kt`

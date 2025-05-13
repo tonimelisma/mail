@@ -1,18 +1,18 @@
 // File: app/src/main/java/net/melisma/mail/MainActivity.kt
-// Adds missing import for AuthState
-
 package net.melisma.mail
 
-// Import necessary model/UI components
-// *** ADDED IMPORT for AuthState ***
 import android.app.Activity
 import android.content.Context
+import android.content.Intent // Required for Intent
 import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -52,242 +52,292 @@ import net.melisma.mail.ui.MailTopAppBar
 import net.melisma.mail.ui.MessageListContent
 import net.melisma.mail.ui.settings.SettingsScreen
 import net.melisma.mail.ui.theme.MailTheme
+import net.openid.appauth.AuthorizationException
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
-    // Use Hilt's delegate for ViewModel injection
     private val viewModel: MainViewModel by viewModels()
+    private val TAG = "MainActivity_AppAuth"
 
-    // ActivityResultLauncher for handling Google consent flow
-    private lateinit var googleConsentLauncher: androidx.activity.result.ActivityResultLauncher<androidx.activity.result.IntentSenderRequest>
+    private lateinit var appAuthLauncher: ActivityResultLauncher<Intent>
+    private lateinit var legacyGoogleConsentLauncher: ActivityResultLauncher<IntentSenderRequest>
+
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        Log.d("MainActivity", "onCreate() called")
+        Log.d(TAG, "onCreate() called")
         super.onCreate(savedInstanceState)
 
-        // Set up the ActivityResultLauncher for Google OAuth consent flow
-        Log.d("MainActivity", "Setting up ActivityResultLauncher for Google OAuth consent")
-        googleConsentLauncher = registerForActivityResult(
-            androidx.activity.result.contract.ActivityResultContracts.StartIntentSenderForResult()
+        Log.d(TAG, "Setting up appAuthLauncher for AppAuth Intent results")
+        appAuthLauncher = registerForActivityResult(
+            ActivityResultContracts.StartActivityForResult()
+        ) { result ->
+            Log.i(TAG, "appAuthLauncher: Result received. ResultCode: ${result.resultCode}")
+            if (result.resultCode == RESULT_OK) {
+                result.data?.let { intent ->
+                    Log.d(
+                        TAG,
+                        "appAuthLauncher: RESULT_OK, intent data is present. Finalizing AppAuth."
+                    )
+                    viewModel.finalizeGoogleAppAuth(intent)
+                } ?: run {
+                    Log.e(
+                        TAG,
+                        "appAuthLauncher: RESULT_OK, but intent data is NULL. This is unexpected for AppAuth success."
+                    )
+                    viewModel.handleGoogleAppAuthError("Authorization successful, but data missing.")
+                }
+            } else {
+                val exception = AuthorizationException.fromIntent(result.data)
+                Log.w(
+                    TAG,
+                    "appAuthLauncher: AppAuth flow did not return RESULT_OK. ResultCode: ${result.resultCode}, Error: ${exception?.toJsonString() ?: "No exception data"}"
+                )
+                viewModel.handleGoogleAppAuthError(
+                    exception?.errorDescription ?: exception?.error
+                    ?: "Authorization cancelled or failed by user."
+                )
+            }
+        }
+
+        Log.d(TAG, "Setting up legacyGoogleConsentLauncher for IntentSender results")
+        legacyGoogleConsentLauncher = registerForActivityResult(
+            ActivityResultContracts.StartIntentSenderForResult()
         ) { result ->
             Log.d(
-                "MainActivity",
-                "Google consent flow result received, resultCode: ${result.resultCode}"
+                TAG,
+                "legacyGoogleConsentLauncher: Result received, resultCode: ${result.resultCode}"
             )
             if (result.resultCode == RESULT_OK) {
-                Log.d("MainActivity", "Google consent flow succeeded, looking for Google account")
-                val account =
-                    viewModel.uiState.value.accounts.firstOrNull { it.providerType == "GOOGLE" }
+                Log.d(
+                    TAG,
+                    "legacyGoogleConsentLauncher: RESULT_OK. Current UI State Accounts: ${viewModel.uiState.value.accounts.joinToString { it.username }}"
+                )
+                val account = viewModel.uiState.value.accounts.firstOrNull {
+                    it.providerType == "GOOGLE" && viewModel.isAccountPendingGoogleConsent(it.id)
+                }
                 if (account != null) {
                     Log.d(
-                        "MainActivity",
-                        "Found Google account: ${account.username}, finalizing consent"
+                        TAG,
+                        "legacyGoogleConsentLauncher: Found Google account: ${account.username} marked as pending consent, finalizing scope consent (legacy path)."
                     )
                     viewModel.finalizeGoogleScopeConsent(account, result.data, this)
                 } else {
-                    Log.e("MainActivity", "No Google account found to finalize consent")
-                    Toast.makeText(
-                        this,
-                        "Error: No Google account found to complete setup",
-                        Toast.LENGTH_SHORT
-                    ).show()
+                    Log.w(
+                        TAG,
+                        "legacyGoogleConsentLauncher: RESULT_OK but no Google account found pending consent for legacy finalizeGoogleScopeConsent."
+                    )
                 }
             } else {
-                Log.d("MainActivity", "Google consent flow cancelled by user")
-                Toast.makeText(this, "Google account setup cancelled", Toast.LENGTH_SHORT).show()
+                Log.w(
+                    TAG,
+                    "legacyGoogleConsentLauncher: Flow cancelled or failed. ResultCode: ${result.resultCode}"
+                )
             }
         }
 
-        // Observe the googleConsentIntentSender from ViewModel
-        Log.d("MainActivity", "Setting up observation of googleConsentIntentSender flow")
+        Log.d(TAG, "Setting up observation of appAuthIntentToLaunch flow from ViewModel")
+        lifecycleScope.launch {
+            viewModel.appAuthIntentToLaunch.collect { intent ->
+                intent?.let {
+                    Log.i(
+                        TAG,
+                        "Received AppAuth Intent from ViewModel. Action: ${it.action}, Data: ${it.dataString}"
+                    )
+                    try {
+                        Log.d(TAG, "Launching AppAuth Intent with appAuthLauncher.")
+                        appAuthLauncher.launch(it)
+                        viewModel.clearAppAuthIntentToLaunch()
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error launching AppAuth Intent via appAuthLauncher", e)
+                        viewModel.handleGoogleAppAuthError("Failed to launch Google authorization: ${e.message}")
+                    }
+                }
+            }
+        }
+
+        Log.d(TAG, "Setting up observation of legacy googleConsentIntentSender flow")
         lifecycleScope.launch {
             viewModel.googleConsentIntentSender.collect { intentSender ->
                 if (intentSender != null) {
-                    Log.d("MainActivity", "Received IntentSender for Google consent, launching")
+                    Log.i(
+                        TAG,
+                        "Received IntentSender for legacy Google consent, launching with legacyGoogleConsentLauncher."
+                    )
                     try {
-                        val request =
-                            androidx.activity.result.IntentSenderRequest.Builder(intentSender)
-                                .build()
-                        Log.d("MainActivity", "Launching Google consent activity")
-                        googleConsentLauncher.launch(request)
+                        val request = IntentSenderRequest.Builder(intentSender).build()
+                        Log.d(TAG, "Launching legacy Google consent activity (IntentSender).")
+                        legacyGoogleConsentLauncher.launch(request)
+                        viewModel.clearGoogleConsentIntentSender()
                     } catch (e: Exception) {
-                        Log.e("MainActivity", "Error launching consent intent", e)
-                        Log.e("MainActivity", "Error details: ${e.message}")
+                        Log.e(TAG, "Error launching legacy Google consent IntentSender", e)
                         Toast.makeText(
                             this@MainActivity,
-                            "Error launching consent: ${e.message}",
-                            Toast.LENGTH_SHORT
+                            "Error launching Google consent: ${e.message}",
+                            Toast.LENGTH_LONG
                         ).show()
+                        viewModel.clearGoogleConsentIntentSender()
                     }
                 }
             }
         }
 
-        Log.d("MainActivity", "Setting up UI with enableEdgeToEdge and content")
-        enableEdgeToEdge() // Enable drawing behind system bars
+        Log.d(TAG, "Setting up UI with enableEdgeToEdge and content")
+        enableEdgeToEdge()
         setContent {
-            Log.d("MainActivity", "Content composition started")
-            MailTheme { // Apply the application theme
+            Log.d(TAG, "Content composition started")
+            MailTheme {
                 val context = LocalContext.current
-                // Use remember to manage navigation state between main app and settings
                 var showSettings by remember { mutableStateOf(false) }
-                Log.d("MainActivity", "Initial showSettings state: $showSettings")
+                Log.d(TAG, "Initial showSettings state: $showSettings")
 
-                // Conditionally display SettingsScreen or MainApp
                 if (showSettings) {
-                    Log.d("MainActivity", "Showing SettingsScreen")
-                    // Ensure activity context is correctly passed if needed by screen/VM actions
+                    Log.d(TAG, "Showing SettingsScreen")
                     val activity = context as? Activity
                     if (activity != null) {
-                        Log.d(
-                            "MainActivity",
-                            "Context successfully cast to Activity for SettingsScreen"
-                        )
+                        Log.d(TAG, "Context successfully cast to Activity for SettingsScreen")
                         SettingsScreen(
                             viewModel = viewModel,
-                            activity = activity, // Pass activity for account actions
+                            activity = activity,
                             onNavigateUp = {
-                                Log.d("MainActivity", "Navigation: Settings -> Main App")
+                                Log.d(TAG, "Navigation: Settings -> Main App")
                                 showSettings = false
-                            } // Callback to return to main app
+                            }
                         )
                     } else {
-                        // Handle error case where context is not an Activity
-                        Log.e("MainActivity", "Error: Context is not an Activity in Settings path")
-                        ErrorDisplay("Critical Error: Cannot get Activity context.") // Show error UI
+                        Log.e(TAG, "Error: Context is not an Activity in Settings path")
+                        ErrorDisplay("Critical Error: Cannot get Activity context.")
                     }
                 } else {
-                    Log.d("MainActivity", "Showing MainApp")
-                    // Pass activity context to MainApp if needed for actions like refresh triggers
+                    Log.d(TAG, "Showing MainApp")
                     val activity = context as? Activity
                     if (activity != null) {
-                        Log.d("MainActivity", "Context successfully cast to Activity for MainApp")
+                        Log.d(TAG, "Context successfully cast to Activity for MainApp")
                         MainApp(
                             viewModel = viewModel,
-                            activity = activity, // Pass activity for potential refresh triggers
+                            activity = activity,
                             onNavigateToSettings = {
-                                Log.d("MainActivity", "Navigation: Main App -> Settings")
+                                Log.d(TAG, "Navigation: Main App -> Settings")
                                 showSettings = true
-                            } // Callback to navigate to settings
+                            }
                         )
                     } else {
-                        Log.e("MainActivity", "Error: Context is not an Activity in MainApp path")
-                        ErrorDisplay("Critical Error: Cannot get Activity context.") // Show error UI
+                        Log.e(TAG, "Error: Context is not an Activity in MainApp path")
+                        ErrorDisplay("Critical Error: Cannot get Activity context.")
                     }
                 }
             }
         }
     }
+
+    // Corrected onNewIntent signature to match ComponentActivity
+    override fun onNewIntent(intent: Intent) { // <<<< CORRECTED to non-nullable Intent
+        super.onNewIntent(intent)
+        // intent is non-nullable here, so no need for ?.let if directly accessing
+        Log.i(
+            TAG,
+            "onNewIntent: Intent received. Action: ${intent.action}, Data: ${intent.dataString}, Flags: ${intent.flags}"
+        )
+
+        // If AppAuth redirects here directly (e.g., due to launchMode="singleTop" for MainActivity
+        // AND RedirectUriReceiverActivity is configured to forward or not used),
+        // you might need to handle it.
+        // Example:
+        // if (intent.action == Intent.ACTION_VIEW && intent.dataString?.startsWith(YOUR_APP_SCHEME) == true) {
+        //     viewModel.handleAppAuthRedirect(intent) // This would require a new method in ViewModel
+        // }
+        // For now, the primary redirect handling is assumed to be via the ActivityResultLauncher
+        // for the AppAuth intent launched from onCreate's collectors.
+    }
 }
 
-/**
- * The main application composable, including navigation drawer, scaffold, and content switching.
- */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainApp(
     viewModel: MainViewModel,
-    activity: Activity, // Receive activity for potential actions
+    activity: Activity,
     onNavigateToSettings: () -> Unit
 ) {
-    // Collect the latest UI state from the ViewModel lifecycle-awarely
     val state by viewModel.uiState.collectAsStateWithLifecycle()
-    // State for managing the navigation drawer (open/closed)
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
-    // Coroutine scope bound to the Composable's lifecycle
     val scope = rememberCoroutineScope()
-    val context = LocalContext.current // Get current context for showing toasts
+    val context = LocalContext.current
+    val TAG_COMPOSABLE = "MainAppComposable"
 
-    // Effect to show toast messages when the state indicates one is available
     LaunchedEffect(state.toastMessage) {
         state.toastMessage?.let { message ->
-            Log.d("MainActivity", "LaunchedEffect: Showing toast message: $message")
-            showToast(context, message) // Show the toast
-            Log.d("MainActivity", "LaunchedEffect: Notifying ViewModel that toast was shown")
-            viewModel.toastMessageShown() // Notify ViewModel the message has been shown
+            Log.d(TAG_COMPOSABLE, "LaunchedEffect: Showing toast message: $message")
+            showToast(context, message)
+            Log.d(TAG_COMPOSABLE, "LaunchedEffect: Notifying ViewModel that toast was shown")
+            viewModel.toastMessageShown()
         }
     }
 
-    // Root composable for the navigation drawer pattern
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
-            // Content of the navigation drawer, defined in MailDrawerContent.kt
             MailDrawerContent(
-                state = state, // Pass the full UI state
-                onFolderSelected = { folder, account -> // Lambda called when a folder is clicked
-                    scope.launch { drawerState.close() } // Close drawer smoothly
-                    // Call ViewModel's selectFolder with the generic Account object
+                state = state,
+                onFolderSelected = { folder, account ->
+                    scope.launch { drawerState.close() }
                     viewModel.selectFolder(folder, account)
                 },
-                onSettingsClicked = { // Lambda called when Settings item is clicked
-                    scope.launch { drawerState.close() } // Close drawer
-                    onNavigateToSettings() // Trigger navigation to SettingsScreen
+                onSettingsClicked = {
+                    scope.launch { drawerState.close() }
+                    onNavigateToSettings()
                 }
             )
         }
     ) {
-        // Main screen structure using Scaffold
         Scaffold(
             topBar = {
-                // Determine title based on selected folder or app name
                 val title = state.selectedFolder?.displayName ?: stringResource(R.string.app_name)
-                // Reusable top app bar component
                 MailTopAppBar(
                     title = title,
-                    onNavigationClick = { scope.launch { drawerState.open() } } // Open drawer on click
+                    onNavigationClick = { scope.launch { drawerState.open() } }
                 )
             },
-            floatingActionButton = { /* Placeholder for future FAB (e.g., Compose) */ }
-        ) { innerPadding -> // Content area padding provided by Scaffold
+            floatingActionButton = { /* Placeholder */ }
+        ) { innerPadding ->
             Box(modifier = Modifier.padding(innerPadding)) {
-                // Main content switching based on the authentication state
-                val currentAuthState = state.authState // Read state for clarity
+                val currentAuthState = state.authState
+                Log.d(
+                    TAG_COMPOSABLE,
+                    "MainApp content recomposing. AuthState: ${currentAuthState::class.simpleName}, isLoadingAccountAction: ${state.isLoadingAccountAction}, Accounts: ${state.accounts.size}, SelectedFolder: ${state.selectedFolder?.displayName}"
+                )
 
-                // 'when' is now exhaustive because AuthState is correctly resolved
                 when (currentAuthState) {
                     is AuthState.Initializing -> {
-                        // Show loading indicator during auth initialization
                         LoadingIndicator(statusText = stringResource(R.string.status_initializing_auth))
                     }
 
                     is AuthState.InitializationError -> {
-                        // Show error message if auth initialization failed
                         AuthInitErrorContent(errorState = currentAuthState)
                     }
 
                     is AuthState.Initialized -> {
-                        // Auth is ready, decide content based on account actions or selected folder
                         when {
                             state.isLoadingAccountAction -> {
-                                // Show loading indicator during account add/remove operations
                                 LoadingIndicator(statusText = stringResource(R.string.status_authenticating))
                             }
-
                             state.accounts.isEmpty() -> {
-                                // Show prompt to add account if none exist
                                 SignedOutContent(
-                                    onAddAccountClick = onNavigateToSettings, // Navigate to settings to add account
+                                    onAddAccountClick = onNavigateToSettings,
                                     modifier = Modifier.fillMaxSize()
                                 )
                             }
-
                             state.selectedFolder != null -> {
-                                // If a folder is selected, show the message list
                                 val accountForMessages =
                                     state.accounts.find { it.id == state.selectedFolderAccountId }
-
-                                // *** CORRECTED CALL to MessageListContent ***
                                 MessageListContent(
-                                    messageDataState = state.messageDataState, // Pass the state object
-                                    // messages = state.messages, // REMOVED - Data is in messageDataState
-                                    // messageError = state.messageError, // REMOVED - Data is in messageDataState
+                                    messageDataState = state.messageDataState,
                                     accountContext = accountForMessages,
-                                    isRefreshing = state.isMessageLoading, // ADDED - Pass refreshing status
-                                    onRefresh = { viewModel.refreshMessages(activity) },
+                                    isRefreshing = state.isMessageLoading,
+                                    onRefresh = {
+                                        Log.d(TAG_COMPOSABLE, "Refresh triggered for messages.")
+                                        viewModel.refreshMessages(activity)
+                                    },
                                     onMessageClick = { messageId ->
-                                        // TODO: Implement navigation to single message view
                                         showToast(
                                             context,
                                             "Clicked Message ID: $messageId (View not implemented)"
@@ -295,9 +345,7 @@ fun MainApp(
                                     }
                                 )
                             }
-
                             else -> {
-                                // If initialized but no folder selected (e.g., after initial load)
                                 Box(
                                     modifier = Modifier.fillMaxSize(),
                                     contentAlignment = Alignment.Center
@@ -312,17 +360,13 @@ fun MainApp(
                             }
                         }
                     }
-                    // No 'else' needed as AuthState is a sealed class and all cases are handled
-                } // End when (currentAuthState)
-            } // End Box (main content area)
-        } // End Scaffold
-    } // End ModalNavigationDrawer
+                }
+            }
+        }
+    }
 }
 
 
-// --- Helper Composables ---
-
-/** Displays a centered CircularProgressIndicator with optional status text. */
 @Composable
 private fun LoadingIndicator(statusText: String?) {
     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -336,7 +380,6 @@ private fun LoadingIndicator(statusText: String?) {
     }
 }
 
-/** Displays a centered error message for authentication initialization failures. */
 @Composable
 private fun AuthInitErrorContent(errorState: AuthState.InitializationError) {
     Box(modifier = Modifier
@@ -350,7 +393,6 @@ private fun AuthInitErrorContent(errorState: AuthState.InitializationError) {
                 textAlign = TextAlign.Center
             )
             Spacer(Modifier.height(8.dp))
-            // Accessing 'errorState.error' is now valid as AuthState is resolved
             val errorText =
                 errorState.error?.message ?: stringResource(id = R.string.error_unknown_occurred)
             Text(
@@ -363,7 +405,6 @@ private fun AuthInitErrorContent(errorState: AuthState.InitializationError) {
     }
 }
 
-/** Displays content shown when the user is authenticated but has no accounts added. */
 @Composable
 private fun SignedOutContent(onAddAccountClick: () -> Unit, modifier: Modifier = Modifier) {
     Box(modifier = modifier, contentAlignment = Alignment.Center) {
@@ -389,7 +430,6 @@ private fun SignedOutContent(onAddAccountClick: () -> Unit, modifier: Modifier =
     }
 }
 
-/** Displays a generic error message centered on the screen. */
 @Composable
 private fun ErrorDisplay(message: String) {
     Box(modifier = Modifier
@@ -403,13 +443,11 @@ private fun ErrorDisplay(message: String) {
     }
 }
 
-
-/** Utility function to show an Android Toast message. */
 private fun showToast(context: Context, message: String?) {
     if (message.isNullOrBlank()) {
-        Log.d("MainActivity", "showToast: Message is null or blank, not showing toast")
+        Log.d("MainActivityToast", "showToast: Message is null or blank, not showing toast")
         return
     }
-    Log.d("MainActivity", "showToast: Displaying toast message: $message")
+    Log.d("MainActivityToast", "showToast: Displaying toast message: $message")
     Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
 }

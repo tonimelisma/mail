@@ -6,17 +6,16 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     id("org.jetbrains.kotlin.kapt") // Apply kapt using its standard ID
     alias(libs.plugins.hilt.gradle)
-    // id("com.google.gms.google-services") // Removed - Not needed for Credential Manager
 }
 
 android {
     namespace = "net.melisma.mail"
-    compileSdk = 35 // Ensure this matches your project's compileSdk
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "net.melisma.mail"
-        minSdk = 26 // Ensure this matches your project's minSdk
-        targetSdk = 35 // Ensure this matches your project's targetSdk
+        minSdk = 26
+        targetSdk = 35
         versionCode = 1
         versionName = "1.0"
 
@@ -72,11 +71,16 @@ dependencies {
     // --- Project Modules ---
     implementation(project(":core-data"))
     implementation(project(":data"))
-    implementation(project(":backend-microsoft")) // Explicitly include the Microsoft backend
-    implementation(project(":backend-google"))   // ADDED: Explicitly include the Google backend
+    implementation(project(":backend-microsoft"))
+    implementation(project(":backend-google"))
 
     // MSAL dependency for BrowserTabActivity
     implementation(libs.microsoft.msal)
+
+    // --- AppAuth ---
+    // Explicitly add AppAuth to the app module to ensure direct access to its classes like AuthorizationException
+    implementation(libs.appauth) // <<<< ADDED/ENSURED THIS LINE
+    implementation(libs.androidx.browser) // For CustomTabs with AppAuth, often used together
 
     // --- AndroidX Core & Lifecycle ---
     implementation(libs.androidx.core.ktx)
@@ -98,34 +102,26 @@ dependencies {
     // --- Hilt ---
     implementation(libs.hilt.android)
     kapt(libs.hilt.compiler)
-    // implementation(libs.androidx.hilt.navigation.compose) // Optional Hilt Compose Navigation
 
-    // --- Coroutines (for main source set if directly used, often transitive) ---
-    implementation(libs.kotlinx.coroutines.core) // Explicitly add for clarity if needed
-    //implementation(libs.kotlinx.coroutines.*) // For Dispatchers.Main
+    // --- Coroutines ---
+    implementation(libs.kotlinx.coroutines.core)
 
     // --- Unit Testing (test source set) ---
     testImplementation(libs.junit)
     testImplementation(libs.mockk.core)
-    testImplementation(libs.mockk.android) // For mocking Android framework classes in unit tests
-    testImplementation(libs.mockk.agent)   // For mocking final classes/methods
+    testImplementation(libs.mockk.android)
+    testImplementation(libs.mockk.agent)
 
-    // Make core modules available to the test source set
     testImplementation(project(":core-data"))
     testImplementation(project(":data"))
     testImplementation(project(":backend-microsoft"))
-    testImplementation(project(":backend-google")) // ADDED: for tests too, if needed
+    testImplementation(project(":backend-google"))
 
-    // MSAL dependency for tests
     testImplementation(libs.microsoft.msal)
-
-    // Add test implementation of Robolectric to support Android resource loading in tests
     testImplementation("org.robolectric:robolectric:4.10.3")
-
-    // ADDED explicit dependency for kotlinx-coroutines-core for tests
     testImplementation(libs.kotlinx.coroutines.core)
-    testImplementation(libs.kotlinx.coroutines.test) // For runTest, TestDispatchers etc.
-    testImplementation(libs.turbine) // For testing Flows
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.turbine)
 
     // --- Instrumented Testing (androidTest source set) ---
     androidTestImplementation(libs.androidx.junit)
@@ -134,10 +130,6 @@ dependencies {
     androidTestImplementation(libs.androidx.ui.test.junit4)
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
-
-    // Robolectric (If you decide to re-add it for specific tests needing Android runtime)
-    // testImplementation(libs.robolectric)
-    // testImplementation(libs.androidx.test.core) // For Robolectric
 }
 
 kapt {
