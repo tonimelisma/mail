@@ -1,10 +1,5 @@
 package net.melisma.backend_microsoft
 
-// REMOVED: import io.ktor.client.engine.mock.HttpResponseData // This was the problematic import
-// Assuming HttpRequestData is needed for the handler signature
-
-// TRY IMPORTING THE TYPEALIAS
-
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.MockRequestHandler
@@ -20,8 +15,10 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import net.melisma.backend_microsoft.errors.MicrosoftErrorMapper
+import net.melisma.core_data.model.WellKnownFolderType // Added import
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull // Added import
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
@@ -36,15 +33,25 @@ class GraphApiHelperTest {
     private val testSelectFields =
         listOf("id", "subject", "receivedDateTime", "sender", "isRead", "bodyPreview")
     private val testTop = 25
-    private val defaultFoldersTop = 100 // As defined in GraphApiHelper
+
+    // Updated to include wellKnownName in the select parameter for fetching folders
+    private val defaultFoldersParams =
+        "\$select=id,displayName,totalItemCount,unreadItemCount,wellKnownName&\$top=100"
+
 
     // --- JSON Test Data ---
     private val validFoldersJsonResponse = """
         {
           "value": [
-            { "id": "id_sent", "displayName": "Sent Items", "totalItemCount": 50, "unreadItemCount": 0 },
-            { "id": "id_inbox", "displayName": "Inbox", "totalItemCount": 100, "unreadItemCount": 10 },
-            { "id": "id_archive", "displayName": "Archive", "totalItemCount": 20, "unreadItemCount": 1 }
+            { "id": "id_sent", "displayName": "Sent Items", "totalItemCount": 50, "unreadItemCount": 0, "wellKnownName": "sentitems" },
+            { "id": "id_inbox", "displayName": "Inbox", "totalItemCount": 100, "unreadItemCount": 10, "wellKnownName": "inbox" },
+            { "id": "id_archive", "displayName": "Archive", "totalItemCount": 20, "unreadItemCount": 1, "wellKnownName": "archive" },
+            { "id": "id_deleted", "displayName": "Deleted Items", "totalItemCount": 30, "unreadItemCount": 0, "wellKnownName": "deleteditems" },
+            { "id": "id_drafts", "displayName": "Drafts", "totalItemCount": 5, "unreadItemCount": 5, "wellKnownName": "drafts" },
+            { "id": "id_junk", "displayName": "Junk E-mail", "totalItemCount": 40, "unreadItemCount": 40, "wellKnownName": "junkemail" },
+            { "id": "id_notes", "displayName": "Notes", "totalItemCount": 3, "unreadItemCount": 0, "wellKnownName": "notes" },
+            { "id": "id_sync_issues", "displayName": "Sync Issues", "totalItemCount": 0, "unreadItemCount": 0, "wellKnownName": "syncissues" },
+            { "id": "id_user_folder", "displayName": "My Custom Folder", "totalItemCount": 10, "unreadItemCount": 2, "wellKnownName": null }
           ]
         }
     """.trimIndent()
@@ -104,13 +111,8 @@ class GraphApiHelperTest {
         mockErrorMapper = MicrosoftErrorMapper()
     }
 
-    // Use Ktor's MockRequestHandler typealias for the handler
-    // If MockRequestHandler is also unresolved, use:
-    // private fun createMockClient(handler: suspend MockRequestHandleScope.(request: HttpRequestData) -> Any): HttpClient {
     private fun createMockClient(handler: MockRequestHandler): HttpClient {
-        val mockEngine = MockEngine { request -> // 'request' here is HttpRequestData
-            // 'this' inside this lambda is MockRequestHandleScope
-            // The handler is an extension function on MockRequestHandleScope
+        val mockEngine = MockEngine { request ->
             this.handler(request)
         }
         return HttpClient(mockEngine) {
@@ -123,38 +125,83 @@ class GraphApiHelperTest {
     // --- getMailFolders Tests ---
 
     @Test
-    fun `getMailFolders success returns mapped and sorted folders`() = runTest {
-        val mockClient =
-            createMockClient { request -> // 'this' in this lambda is MockRequestHandleScope
-            assertEquals(
-                "https://graph.microsoft.com/v1.0/me/mailFolders?%24top=${defaultFoldersTop}",
-                request.url.toString().replace("%24", "\$")
-            )
-            assertEquals(
-                ContentType.Application.Json.toString(),
-                request.headers[HttpHeaders.Accept]
-            )
-                // Use 'this.respond' or just 'respond' as it's an extension on MockRequestHandleScope
+    fun `getMailFolders success returns mapped, typed and sorted folders, filtering hidden ones`() =
+        runTest {
+            val mockClient = createMockClient { request ->
+                // Check if the URL includes the $select and $top parameters correctly
+                val expectedUrl =
+                    "https://graph.microsoft.com/v1.0/me/mailFolders?$defaultFoldersParams".replace(
+                        "%24",
+                        "$"
+                    )
+                assertEquals(expectedUrl, request.url.toString())
+                assertEquals(
+                    ContentType.Application.Json.toString(),
+                    request.headers[HttpHeaders.Accept]
+                )
                 this.respond(
                 content = validFoldersJsonResponse,
                 status = HttpStatusCode.OK,
-                headers = headersOf(
-                    HttpHeaders.ContentType,
-                    ContentType.Application.Json.toString()
-                )
+                    headers = headersOf(
+                        HttpHeaders.ContentType,
+                        ContentType.Application.Json.toString()
+                    )
             )
         }
         graphApiHelper = GraphApiHelper(mockClient, mockErrorMapper)
-
         val result = graphApiHelper.getMailFolders()
 
-        assertTrue(result.isSuccess)
+            assertTrue("API call should be successful", result.isSuccess)
         val folders = result.getOrNull()
-        assertNotNull(folders)
-        assertEquals(3, folders?.size)
+            assertNotNull("Folders list should not be null", folders)
+
+            // Expected visible: Archive, Deleted Items, Drafts, Inbox, Junk E-mail, My Custom Folder, Sent Items
+            // Hidden: Notes, Sync Issues
+            assertEquals("Incorrect number of visible folders", 7, folders?.size)
+
+            // Check sorting and mapping for a few key folders
+            folders?.find { it.id == "id_inbox" }?.let {
+                assertEquals("Inbox", it.displayName)
+                assertEquals(WellKnownFolderType.INBOX, it.type)
+            } ?: fail("Inbox not found or incorrect")
+
+            folders?.find { it.id == "id_sent" }?.let {
+                assertEquals("Sent Items", it.displayName)
+                assertEquals(WellKnownFolderType.SENT_ITEMS, it.type)
+            } ?: fail("Sent Items not found or incorrect")
+
+            folders?.find { it.id == "id_archive" }?.let {
+                assertEquals("Archive", it.displayName)
+                assertEquals(WellKnownFolderType.ARCHIVE, it.type)
+            } ?: fail("Archive not found or incorrect")
+
+            folders?.find { it.id == "id_deleted" }?.let {
+                assertEquals("Trash", it.displayName) // Standardized name
+                assertEquals(WellKnownFolderType.TRASH, it.type)
+            } ?: fail("Trash (Deleted Items) not found or incorrect")
+
+            folders?.find { it.id == "id_junk" }?.let {
+                assertEquals("Spam", it.displayName) // Standardized name
+                assertEquals(WellKnownFolderType.SPAM, it.type)
+            } ?: fail("Spam (Junk E-mail) not found or incorrect")
+
+            folders?.find { it.id == "id_user_folder" }?.let {
+                assertEquals("My Custom Folder", it.displayName)
+                assertEquals(WellKnownFolderType.USER_CREATED, it.type)
+            } ?: fail("Custom folder not found or incorrect")
+
+            // Verify alphabetical sorting by displayName
         assertEquals("Archive", folders?.get(0)?.displayName)
-        assertEquals("Inbox", folders?.get(1)?.displayName)
-        assertEquals("Sent Items", folders?.get(2)?.displayName)
+            assertEquals("Drafts", folders?.get(1)?.displayName)
+            // ... (can add more checks for full sort order if critical)
+            assertEquals("Sent Items", folders?.get(6)?.displayName)
+
+
+            // Assert that hidden folders are not present
+            assertNull("Notes folder should be hidden", folders?.find { it.id == "id_notes" })
+            assertNull(
+                "Sync Issues folder should be hidden",
+                folders?.find { it.id == "id_sync_issues" })
     }
 
     @Test
@@ -170,9 +217,7 @@ class GraphApiHelperTest {
             )
         }
         graphApiHelper = GraphApiHelper(mockClient, mockErrorMapper)
-
         val result = graphApiHelper.getMailFolders()
-
         assertTrue(result.isSuccess)
         val folders = result.getOrNull()
         assertNotNull(folders)
@@ -196,9 +241,7 @@ class GraphApiHelperTest {
             )
         }
         graphApiHelper = GraphApiHelper(mockClient, mockErrorMapper)
-
         val result = graphApiHelper.getMailFolders()
-
         assertTrue(result.isFailure)
         val exception = result.exceptionOrNull()
         assertNotNull(exception)
@@ -210,17 +253,14 @@ class GraphApiHelperTest {
 
     @Test
     fun `getMailFolders handles API error 401 Unauthorized`() =
-        testGetMailFoldersApiError(
-            HttpStatusCode.Unauthorized,
-            "Access token has expired."
-        )
+        testGetMailFoldersApiError(HttpStatusCode.Unauthorized, "Access token has expired.")
 
     @Test
     fun `getMailFolders handles API error 403 Forbidden`() =
         testGetMailFoldersApiError(
             HttpStatusCode.Forbidden,
-            "User not allowed.", // Ensure your error mapper or response produces this
-            apiErrorMessage = "User not allowed." // Example for graphApiErrorJsonResponse
+            "User not allowed.",
+            apiErrorMessage = "User not allowed."
         )
 
     @Test
@@ -244,9 +284,7 @@ class GraphApiHelperTest {
         val networkErrorMessage = "Network connection failed"
         val mockClient = createMockClient { throw IOException(networkErrorMessage) }
         graphApiHelper = GraphApiHelper(mockClient, mockErrorMapper)
-
         val result = graphApiHelper.getMailFolders()
-
         assertTrue(result.isFailure)
         val exception = result.exceptionOrNull()
         assertNotNull(exception)
@@ -266,19 +304,16 @@ class GraphApiHelperTest {
             )
         }
         graphApiHelper = GraphApiHelper(mockClient, mockErrorMapper)
-
         val result = graphApiHelper.getMailFolders()
-
         assertTrue(result.isFailure)
         val exception = result.exceptionOrNull()
         assertNotNull(exception)
-        assertTrue(
-            "Exception type was ${exception?.javaClass?.simpleName}",
-            exception is IOException || exception is SerializationException
-        )
+        assertTrue(exception is SerializationException) // Ktor throws SerializationException for malformed JSON
     }
 
     // --- getMessagesForFolder Tests ---
+    // (These tests remain largely the same as they don't depend on folder type mapping,
+    // but ensure they still pass with any refactoring in GraphApiHelper if it occurred)
 
     @Test
     fun `getMessagesForFolder success returns mapped messages`() = runTest {
@@ -308,13 +343,11 @@ class GraphApiHelperTest {
             )
         }
         graphApiHelper = GraphApiHelper(mockClient, mockErrorMapper)
-
         val result = graphApiHelper.getMessagesForFolder(
             folderId = testFolderId,
             selectFields = testSelectFields,
             maxResults = testTop
         )
-
         assertTrue(result.isSuccess)
         val messages = result.getOrNull()
         assertNotNull(messages)
@@ -339,7 +372,6 @@ class GraphApiHelperTest {
         }
         graphApiHelper = GraphApiHelper(mockClient, mockErrorMapper)
         val result = graphApiHelper.getMessagesForFolder(testFolderId, testSelectFields, testTop)
-
         assertTrue(result.isSuccess)
         val messages = result.getOrNull()
         assertNotNull(messages)
@@ -363,9 +395,7 @@ class GraphApiHelperTest {
             )
         }
         graphApiHelper = GraphApiHelper(mockClient, mockErrorMapper)
-
         val result = graphApiHelper.getMessagesForFolder(testFolderId, testSelectFields, testTop)
-
         assertTrue(result.isFailure)
         val exception = result.exceptionOrNull()
         assertNotNull(exception)
@@ -375,22 +405,16 @@ class GraphApiHelperTest {
         )
     }
 
-
     @Test
     fun `getMessagesForFolder handles API error 401 Unauthorized`() =
-        testGetMessagesApiError(
-            HttpStatusCode.Unauthorized,
-            "Access token has expired."
-        )
+        testGetMessagesApiError(HttpStatusCode.Unauthorized, "Access token has expired.")
 
     @Test
     fun `getMessagesForFolder handles network exception`() = runTest {
         val networkErrorMessage = "Timeout reading messages"
         val mockClient = createMockClient { throw IOException(networkErrorMessage) }
         graphApiHelper = GraphApiHelper(mockClient, mockErrorMapper)
-
         val result = graphApiHelper.getMessagesForFolder(testFolderId, testSelectFields, testTop)
-
         assertTrue(result.isFailure)
         val exception = result.exceptionOrNull()
         assertNotNull(exception)
@@ -410,12 +434,10 @@ class GraphApiHelperTest {
             )
         }
         graphApiHelper = GraphApiHelper(mockClient, mockErrorMapper)
-
         val result = graphApiHelper.getMessagesForFolder(testFolderId, testSelectFields, testTop)
-
         assertTrue(result.isFailure)
         val exception = result.exceptionOrNull()
         assertNotNull(exception)
-        assertTrue(exception is SerializationException || exception is IOException)
+        assertTrue(exception is SerializationException)
     }
 }

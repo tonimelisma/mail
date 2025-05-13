@@ -11,7 +11,6 @@ import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
-import io.ktor.http.ContentType
 import io.ktor.http.ContentType.Application.Json
 import io.ktor.http.isSuccess
 import kotlinx.serialization.SerialName
@@ -23,11 +22,9 @@ import net.melisma.backend_microsoft.errors.MicrosoftErrorMapper
 import net.melisma.core_data.datasource.MailApiService
 import net.melisma.core_data.model.MailFolder
 import net.melisma.core_data.model.Message
+import net.melisma.core_data.model.WellKnownFolderType
 import javax.inject.Inject
 import javax.inject.Singleton
-
-// --- Data Classes for Graph API Responses ---
-// Define these based on the actual JSON structure from Microsoft Graph
 
 @Serializable
 private data class GraphCollection<T>(
@@ -41,8 +38,8 @@ private data class GraphMailFolder(
     val id: String,
     val displayName: String,
     val totalItemCount: Int = 0,
-    val unreadItemCount: Int = 0
-    // Add other fields if needed
+    val unreadItemCount: Int = 0,
+    val wellKnownName: String? = null // Keep for parsing if API returns it by default
 )
 
 @Serializable
@@ -51,9 +48,8 @@ private data class GraphMessage(
     val receivedDateTime: String? = null,
     val subject: String? = null,
     val sender: GraphRecipient? = null,
-    val isRead: Boolean = true, // Default to true if missing? Check Graph API default
+    val isRead: Boolean = true,
     val bodyPreview: String? = null
-    // Add other fields if needed
 )
 
 @Serializable
@@ -67,13 +63,6 @@ private data class GraphEmailAddress(
     val address: String? = null
 )
 
-
-/**
- * Helper class for making calls to the Microsoft Graph API (v1.0) using Ktor.
- * Encapsulates network request logic and JSON parsing for mail-related data.
- * Implements the MailApiService interface to provide a standardized API for mail operations.
- * Provided as a Singleton by Hilt.
- */
 @Singleton
 class GraphApiHelper @Inject constructor(
     @MicrosoftGraphHttpClient private val httpClient: HttpClient,
@@ -83,35 +72,50 @@ class GraphApiHelper @Inject constructor(
     companion object {
         private const val TAG = "GraphApiHelper"
         private const val MS_GRAPH_ROOT_ENDPOINT = "https://graph.microsoft.com/v1.0"
+
+        // Actual wellKnownName values from Microsoft Graph (lowercase for matching)
+        private const val WKNAME_INBOX = "inbox"
+        private const val WKNAME_SENTITEMS = "sentitems"
+        private const val WKNAME_DRAFTS = "drafts"
+        private const val WKNAME_ARCHIVE = "archive"
+        private const val WKNAME_DELETEDITEMS = "deleteditems"
+        private const val WKNAME_JUNKEMAIL = "junkemail"
+        private const val WKNAME_NOTES = "notes"
+        private const val WKNAME_SYNCISSUES = "syncissues" // Example, if you want to handle it
+        // You might find more at: https://learn.microsoft.com/en-us/graph/api/resources/mailfolder?view=graph-rest-1.0 (look for wellKnownName property)
+
+        // Standardized display names for the app
+        private const val APP_DISPLAY_NAME_INBOX = "Inbox"
+        private const val APP_DISPLAY_NAME_SENT_ITEMS = "Sent Items"
+        private const val APP_DISPLAY_NAME_DRAFTS = "Drafts"
+        private const val APP_DISPLAY_NAME_ARCHIVE = "Archive"
+        private const val APP_DISPLAY_NAME_TRASH = "Trash"
+        private const val APP_DISPLAY_NAME_SPAM = "Spam"
     }
 
-    /**
-     * Fetches the list of mail folders for the authenticated user using Ktor.
-     *
-     * @return Result containing the list of mail folders or an error
-     */
     override suspend fun getMailFolders(): Result<List<MailFolder>> {
         return try {
-            Log.d(TAG, "Fetching mail folders (Ktor Auth)...")
+            Log.d(TAG, "Fetching mail folders...")
             val response: HttpResponse = httpClient.get("$MS_GRAPH_ROOT_ENDPOINT/me/mailFolders") {
                 url {
-                    parameters.append("\$top", "100") // Example query parameter
-                    // Add other parameters like $select if needed
+                    parameters.append("\$top", "100")
+                    // Do not explicitly select wellKnownName to avoid the BadRequest
+                    // The API might return it by default for some folders.
+                    parameters.append("\$select", "id,displayName,totalItemCount,unreadItemCount")
                 }
                 accept(Json)
             }
 
             if (response.status.isSuccess()) {
                 val graphFolders = response.body<GraphCollection<GraphMailFolder>>().value
-                val mailFolders = graphFolders.map { graphFolder ->
-                    MailFolder(
-                        id = graphFolder.id,
-                        displayName = graphFolder.displayName,
-                        totalItemCount = graphFolder.totalItemCount,
-                        unreadItemCount = graphFolder.unreadItemCount
-                    )
-                }.sortedBy { it.displayName } // Sort alphabetically
-                Log.d(TAG, "Successfully fetched ${mailFolders.size} folders.")
+                val mailFolders = graphFolders
+                    .mapNotNull { mapGraphFolderToMailFolder(it) }
+                    .sortedBy { it.displayName }
+
+                Log.d(
+                    TAG,
+                    "Successfully fetched and processed ${mailFolders.size} visible folders."
+                )
                 Result.success(mailFolders)
             } else {
                 val errorBody = response.bodyAsText()
@@ -119,21 +123,115 @@ class GraphApiHelper @Inject constructor(
                 Result.failure(errorMapper.mapHttpError(response.status.value, errorBody))
             }
         } catch (e: Exception) {
-            // Catch Ktor exceptions (ClientRequestException, ServerResponseException, etc.)
-            // and other potential issues like SerializationException, IOException
             Log.e(TAG, "Exception fetching folders", e)
             Result.failure(errorMapper.mapExceptionToError(e))
         }
     }
 
-    /**
-     * Fetches a list of messages for a specific mail folder using Ktor.
-     *
-     * @param folderId The ID of the folder to fetch messages from
-     * @param selectFields Optional list of fields to include in the response
-     * @param maxResults Maximum number of messages to return (pagination limit)
-     * @return Result containing the list of messages or an error
-     */
+    private fun mapGraphFolderToMailFolder(graphFolder: GraphMailFolder): MailFolder? {
+        val type: WellKnownFolderType
+        var finalDisplayName = graphFolder.displayName // Default to original
+
+        val wellKnownNameLower = graphFolder.wellKnownName?.lowercase()
+        val displayNameLower = graphFolder.displayName.lowercase()
+
+        // Prioritize wellKnownName if available and matched
+        when (wellKnownNameLower) {
+            WKNAME_INBOX -> {
+                type = WellKnownFolderType.INBOX
+                finalDisplayName = APP_DISPLAY_NAME_INBOX
+            }
+
+            WKNAME_SENTITEMS -> {
+                type = WellKnownFolderType.SENT_ITEMS
+                finalDisplayName = APP_DISPLAY_NAME_SENT_ITEMS
+            }
+
+            WKNAME_DRAFTS -> {
+                type = WellKnownFolderType.DRAFTS
+                finalDisplayName = APP_DISPLAY_NAME_DRAFTS
+            }
+
+            WKNAME_ARCHIVE -> {
+                type = WellKnownFolderType.ARCHIVE
+                finalDisplayName = APP_DISPLAY_NAME_ARCHIVE
+            }
+
+            WKNAME_DELETEDITEMS -> {
+                type = WellKnownFolderType.TRASH
+                finalDisplayName = APP_DISPLAY_NAME_TRASH
+            }
+
+            WKNAME_JUNKEMAIL -> {
+                type = WellKnownFolderType.SPAM
+                finalDisplayName = APP_DISPLAY_NAME_SPAM
+            }
+
+            WKNAME_NOTES, WKNAME_SYNCISSUES -> { // Explicitly hide these if identified by wellKnownName
+                Log.d(
+                    TAG,
+                    "Hiding Microsoft system folder (by wellKnownName): ${graphFolder.displayName} (wellKnownName: ${graphFolder.wellKnownName})"
+                )
+                return null
+            }
+
+            else -> {
+                // If wellKnownName didn't match or wasn't present, try mapping by displayName
+                when (displayNameLower) {
+                    "inbox" -> {
+                        type = WellKnownFolderType.INBOX; finalDisplayName = APP_DISPLAY_NAME_INBOX
+                    }
+
+                    "sent items" -> {
+                        type = WellKnownFolderType.SENT_ITEMS; finalDisplayName =
+                            APP_DISPLAY_NAME_SENT_ITEMS
+                    }
+
+                    "drafts" -> {
+                        type = WellKnownFolderType.DRAFTS; finalDisplayName =
+                            APP_DISPLAY_NAME_DRAFTS
+                    }
+
+                    "archive" -> {
+                        type = WellKnownFolderType.ARCHIVE; finalDisplayName =
+                            APP_DISPLAY_NAME_ARCHIVE
+                    }
+
+                    "deleted items" -> {
+                        type = WellKnownFolderType.TRASH; finalDisplayName = APP_DISPLAY_NAME_TRASH
+                    }
+
+                    "junk email", "junk e-mail" -> {
+                        type = WellKnownFolderType.SPAM; finalDisplayName = APP_DISPLAY_NAME_SPAM
+                    }
+
+                    "notes", "conversation history", "quick step settings", "rss feeds" -> {
+                        Log.d(
+                            TAG,
+                            "Hiding Microsoft folder (by displayName): ${graphFolder.displayName}"
+                        )
+                        return null
+                    }
+
+                    else -> type = WellKnownFolderType.USER_CREATED
+                }
+            }
+        }
+
+        Log.v(
+            TAG,
+            "Mapping MS folder: ID='${graphFolder.id}', OrigName='${graphFolder.displayName}', WKN='${graphFolder.wellKnownName}' -> AppName='$finalDisplayName', AppType='$type'"
+        )
+
+        return MailFolder(
+            id = graphFolder.id,
+            displayName = finalDisplayName,
+            totalItemCount = graphFolder.totalItemCount,
+            unreadItemCount = graphFolder.unreadItemCount,
+            type = type
+        )
+    }
+
     override suspend fun getMessagesForFolder(
         folderId: String,
         selectFields: List<String>,
@@ -141,7 +239,6 @@ class GraphApiHelper @Inject constructor(
     ): Result<List<Message>> {
         return try {
             Log.d(TAG, "Fetching messages for folder: $folderId")
-            // Note: URL encoding for folderId is handled automatically by Ktor's URL builder
             val response: HttpResponse =
                 httpClient.get("$MS_GRAPH_ROOT_ENDPOINT/me/mailFolders/$folderId/messages") {
                     url {
@@ -155,9 +252,8 @@ class GraphApiHelper @Inject constructor(
             if (response.status.isSuccess()) {
                 val graphMessages = response.body<GraphCollection<GraphMessage>>().value
                 val messages = graphMessages.mapNotNull { graphMsg ->
-                    // Basic mapping, adjust as needed based on GraphMessage structure
                     Message(
-                        id = graphMsg.id, // ID is mandatory
+                        id = graphMsg.id,
                         receivedDateTime = graphMsg.receivedDateTime ?: "",
                         subject = graphMsg.subject,
                         senderName = graphMsg.sender?.emailAddress?.name,
@@ -179,15 +275,6 @@ class GraphApiHelper @Inject constructor(
         }
     }
 
-    // Removed makeGraphApiCall and parsing methods as Ktor handles this now.
-
-    /**
-     * Marks a message as read or unread.
-     *
-     * @param messageId The ID of the message to update
-     * @param isRead Whether the message should be marked as read (true) or unread (false)
-     * @return Result indicating success or failure
-     */
     override suspend fun markMessageRead(
         messageId: String,
         isRead: Boolean
@@ -195,16 +282,11 @@ class GraphApiHelper @Inject constructor(
         return try {
             Log.d(TAG, "Marking message $messageId as ${if (isRead) "read" else "unread"}")
             val endpoint = "$MS_GRAPH_ROOT_ENDPOINT/me/messages/$messageId"
-
-            val requestBody = buildJsonObject {
-                put("isRead", isRead)
-            }
-
+            val requestBody = buildJsonObject { put("isRead", isRead) }
             val response = httpClient.patch(endpoint) {
                 accept(Json)
                 setBody(requestBody)
             }
-
             if (response.status.isSuccess()) {
                 Log.d(TAG, "Successfully marked message $messageId as ${if (isRead) "read" else "unread"}")
                 Result.success(true)
@@ -219,23 +301,13 @@ class GraphApiHelper @Inject constructor(
         }
     }
 
-    /**
-     * Deletes a message (moves it to trash/deleted items folder).
-     *
-     * @param messageId The ID of the message to delete
-     * @return Result indicating success or failure
-     */
     override suspend fun deleteMessage(
         messageId: String
     ): Result<Boolean> {
         return try {
             Log.d(TAG, "Deleting message $messageId")
             val endpoint = "$MS_GRAPH_ROOT_ENDPOINT/me/messages/$messageId"
-
-            val response = httpClient.delete(endpoint) {
-                // Authentication is handled by the Auth plugin in the HttpClient
-            }
-
+            val response = httpClient.delete(endpoint)
             if (response.status.isSuccess()) {
                 Log.d(TAG, "Successfully deleted message $messageId")
                 Result.success(true)
@@ -250,13 +322,6 @@ class GraphApiHelper @Inject constructor(
         }
     }
 
-    /**
-     * Moves a message to a different folder.
-     *
-     * @param messageId The ID of the message to move
-     * @param targetFolderId The ID of the destination folder
-     * @return Result indicating success or failure
-     */
     override suspend fun moveMessage(
         messageId: String,
         targetFolderId: String
@@ -264,16 +329,11 @@ class GraphApiHelper @Inject constructor(
         return try {
             Log.d(TAG, "Moving message $messageId to folder $targetFolderId")
             val endpoint = "$MS_GRAPH_ROOT_ENDPOINT/me/messages/$messageId/move"
-
-            val requestBody = buildJsonObject {
-                put("destinationId", targetFolderId)
-            }
-
+            val requestBody = buildJsonObject { put("destinationId", targetFolderId) }
             val response = httpClient.post(endpoint) {
                 accept(Json)
                 setBody(requestBody)
             }
-
             if (response.status.isSuccess()) {
                 Log.d(TAG, "Successfully moved message $messageId to folder $targetFolderId")
                 Result.success(true)
