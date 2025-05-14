@@ -4,14 +4,14 @@ import android.util.Log
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.get
-import io.ktor.client.request.headers
+import io.ktor.client.request.headers // Ktor request headers
 import io.ktor.client.request.parameter
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
-import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpHeaders // Ktor HTTP headers
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -25,6 +25,7 @@ import net.melisma.backend_google.model.GmailLabel
 import net.melisma.backend_google.model.GmailLabelList
 import net.melisma.backend_google.model.GmailMessage
 import net.melisma.backend_google.model.GmailMessageList
+import net.melisma.backend_google.model.MessagePart // Added for clarity in recursive search
 import net.melisma.backend_google.model.MessagePartHeader
 import net.melisma.core_data.datasource.MailApiService
 import net.melisma.core_data.errors.ErrorMapperService
@@ -43,10 +44,11 @@ class GmailApiHelper @Inject constructor(
     @GoogleHttpClient private val httpClient: HttpClient,
     private val errorMapper: ErrorMapperService
 ) : MailApiService {
-    private val TAG = "GmailApiHelper"
+    private val TAG = "GmailApiHelper" // Consistent TAG
     private val BASE_URL = "https://gmail.googleapis.com/gmail/v1/users/me"
 
     companion object {
+        // ... (companion object content as before)
         private const val GMAIL_LABEL_ID_INBOX = "INBOX"
         private const val GMAIL_LABEL_ID_SENT = "SENT"
         private const val GMAIL_LABEL_ID_DRAFT = "DRAFT"
@@ -60,9 +62,6 @@ class GmailApiHelper @Inject constructor(
         private val HIDE_BY_NAME_LIST_UPPERCASE = listOf(
             "NOTES",
             "CONVERSATION HISTORY",
-            // "UNREAD" is tricky as a folder name. Gmail uses UNREAD as a label on messages.
-            // If a label named "UNREAD" truly exists and needs hiding, it's here.
-            // Otherwise, this entry might not be needed or could cause issues if a legitimate folder is named "Unread".
             "UNREAD"
         )
 
@@ -76,9 +75,11 @@ class GmailApiHelper @Inject constructor(
         private const val DISPLAY_NAME_STARRED = "Starred"
     }
 
+    // Ensure Json parser is configured to ignore unknown keys
     private val jsonParser = Json { ignoreUnknownKeys = true }
 
     override suspend fun getMailFolders(): Result<List<MailFolder>> {
+        // ... (getMailFolders implementation as before, ensure TAG is used for logs)
         return try {
             Log.d(TAG, "Fetching Gmail labels from API...")
             val response: HttpResponse = httpClient.get("$BASE_URL/labels")
@@ -113,6 +114,7 @@ class GmailApiHelper @Inject constructor(
     }
 
     private fun mapLabelToMailFolder(label: GmailLabel): MailFolder? {
+        // ... (mapLabelToMailFolder implementation as before, ensure TAG is used for logs)
         val labelIdUpper = label.id.uppercase()
         val labelNameUpper = label.name.uppercase()
 
@@ -121,59 +123,48 @@ class GmailApiHelper @Inject constructor(
             "Processing Label: ID='${label.id}', Name='${label.name}', RawType='${label.type}', LabelListVis='${label.labelListVisibility}', MessageListVis='${label.messageListVisibility}'"
         )
 
-        // Initialize with a default that will be overridden or lead to filtering
         var type: WellKnownFolderType = WellKnownFolderType.USER_CREATED
         var displayName: String = label.name
         var determinedByTypeOrName = false
 
-        // 1. Prioritize mapping essential system folders by their standard IDs
         when (labelIdUpper) {
             GMAIL_LABEL_ID_INBOX -> {
                 type = WellKnownFolderType.INBOX; displayName =
                     DISPLAY_NAME_INBOX; determinedByTypeOrName = true
             }
-
             GMAIL_LABEL_ID_SENT -> {
                 type = WellKnownFolderType.SENT_ITEMS; displayName =
                     DISPLAY_NAME_SENT_ITEMS; determinedByTypeOrName = true
             }
-
             GMAIL_LABEL_ID_DRAFT -> {
                 type = WellKnownFolderType.DRAFTS; displayName =
                     DISPLAY_NAME_DRAFTS; determinedByTypeOrName = true
             }
-
             GMAIL_LABEL_ID_TRASH -> {
                 type = WellKnownFolderType.TRASH; displayName =
                     DISPLAY_NAME_TRASH; determinedByTypeOrName = true
             }
-
             GMAIL_LABEL_ID_SPAM -> {
                 type = WellKnownFolderType.SPAM; displayName =
                     DISPLAY_NAME_SPAM; determinedByTypeOrName = true
             }
-
             GMAIL_LABEL_ID_IMPORTANT -> {
                 type = WellKnownFolderType.IMPORTANT; displayName =
                     DISPLAY_NAME_IMPORTANT; determinedByTypeOrName = true
             }
-
             GMAIL_LABEL_ID_STARRED -> {
                 type = WellKnownFolderType.STARRED; displayName =
                     DISPLAY_NAME_STARRED; determinedByTypeOrName = true
             }
-
             GMAIL_ID_CHAT -> {
                 type = WellKnownFolderType.HIDDEN; determinedByTypeOrName = true
             }
-
-            "UNREAD" -> { // If "UNREAD" is an ID (less common)
+            "UNREAD" -> {
                 type = WellKnownFolderType.HIDDEN; determinedByTypeOrName = true
                 Log.w(TAG, "Label ID is 'UNREAD'. Setting HIDDEN. Original Name: '${label.name}'")
             }
         }
 
-        // 2. If not mapped by ID, try mapping by common names or our explicit hide list
         if (!determinedByTypeOrName) {
             when (labelNameUpper) {
                 GMAIL_NAME_ALL_MAIL -> {
@@ -181,7 +172,6 @@ class GmailApiHelper @Inject constructor(
                     displayName = DISPLAY_NAME_ARCHIVE
                     determinedByTypeOrName = true
                 }
-
                 in HIDE_BY_NAME_LIST_UPPERCASE -> {
                     type = WellKnownFolderType.HIDDEN
                     determinedByTypeOrName = true
@@ -193,8 +183,6 @@ class GmailApiHelper @Inject constructor(
             }
         }
 
-        // 3. If it's one of our essential types, we *do not* respect Gmail's visibility hints for hiding.
-        //    They must be shown.
         val isEssentialSystemFolder = type in listOf(
             WellKnownFolderType.INBOX, WellKnownFolderType.SENT_ITEMS, WellKnownFolderType.DRAFTS,
             WellKnownFolderType.TRASH, WellKnownFolderType.SPAM, WellKnownFolderType.ARCHIVE,
@@ -202,7 +190,6 @@ class GmailApiHelper @Inject constructor(
         )
 
         if (!isEssentialSystemFolder && !determinedByTypeOrName) {
-            // For non-essential labels not yet classified, NOW check Gmail's visibility hints
             if (label.labelListVisibility == "labelHide" || label.messageListVisibility == "hide") {
                 Log.i(
                     TAG,
@@ -210,18 +197,10 @@ class GmailApiHelper @Inject constructor(
                 )
                 return null
             }
-            // Classify remaining visible labels
             type =
                 if (label.type == "system") WellKnownFolderType.OTHER else WellKnownFolderType.USER_CREATED
         } else if (!isEssentialSystemFolder && type != WellKnownFolderType.HIDDEN) {
-            // This case is for labels that might have been matched by name (e.g. GMAIL_NAME_ALL_MAIL) but aren't "essential system by ID"
-            // and weren't already set to HIDDEN. We still apply general visibility rules if they weren't critical.
-            // However, GMAIL_NAME_ALL_MAIL (Archive) is pretty critical.
-            // This logic block might need refinement if specific named labels also need to bypass Gmail's hide flags.
-            // For now, only ID-matched essential labels bypass the visibility hint.
-            // If GMAIL_NAME_ALL_MAIL was identified by name and Gmail suggests hiding it, it would be hidden by the below.
             if (label.labelListVisibility == "labelHide" || label.messageListVisibility == "hide") {
-                // Exception: if it's ARCHIVE (identified by name), we might still want to show it.
                 if (type == WellKnownFolderType.ARCHIVE) {
                     Log.w(
                         TAG,
@@ -237,8 +216,6 @@ class GmailApiHelper @Inject constructor(
             }
         }
 
-
-        // Final check: if type ended up as HIDDEN from any rule, return null.
         if (type == WellKnownFolderType.HIDDEN) {
             Log.i(
                 TAG,
@@ -260,15 +237,19 @@ class GmailApiHelper @Inject constructor(
         )
     }
 
+
     override suspend fun getMessagesForFolder(
         folderId: String,
-        selectFields: List<String>,
+        selectFields: List<String>, // This 'selectFields' is not used by Gmail API in this way for messages.
+        // The equivalent is metadataHeaders in fetchMessageDetails.
         maxResults: Int
     ): Result<List<Message>> {
         return try {
+            Log.d(TAG, "getMessagesForFolder: Fetching message IDs for folderId: $folderId")
             val messageIdsResponse = httpClient.get("$BASE_URL/messages") {
                 parameter("maxResults", maxResults)
                 parameter("labelIds", folderId)
+                // Consider adding `q` parameter for filtering if needed in future, e.g., unread messages
             }
             if (!messageIdsResponse.status.isSuccess()) {
                 val errorBody = messageIdsResponse.bodyAsText()
@@ -287,6 +268,7 @@ class GmailApiHelper @Inject constructor(
                 Log.d(TAG, "No messages found for folder (label): $folderId")
                 return Result.success(emptyList())
             }
+            Log.d(TAG, "Fetched ${messageList.messages.size} message IDs. Now fetching details.")
 
             val messages = supervisorScope {
                 messageList.messages.map { messageIdentifier ->
@@ -295,7 +277,7 @@ class GmailApiHelper @Inject constructor(
             }
             Log.d(
                 TAG,
-                "Successfully fetched ${messages.size} messages for folder (label): $folderId"
+                "Successfully processed details for ${messages.size} messages for folder (label): $folderId"
             )
             Result.success(messages)
         } catch (e: Exception) {
@@ -306,11 +288,13 @@ class GmailApiHelper @Inject constructor(
     }
 
     private suspend fun fetchMessageDetails(messageId: String): Message? {
+        Log.d(TAG, "fetchMessageDetails: Fetching details for messageId: $messageId")
         return try {
-            val response = httpClient.get("$BASE_URL/messages/$messageId") {
-                parameter("format", "metadata")
-                parameter("metadataHeaders", "Subject,From,Date")
+            val response: HttpResponse = httpClient.get("$BASE_URL/messages/$messageId") {
+                parameter("format", "FULL")
+                // parameter("metadataHeaders", "Subject,From,Date,To,Cc,Bcc") // Added To,Cc,Bcc for completeness
             }
+
             if (!response.status.isSuccess()) {
                 Log.w(
                     TAG,
@@ -318,24 +302,153 @@ class GmailApiHelper @Inject constructor(
                 )
                 return null
             }
-            val gmailMessage = response.body<GmailMessage>()
+
+            val rawJsonResponse = response.bodyAsText()
+            Log.d(TAG, "Message ID: $messageId --- RAW JSON RESPONSE: $rawJsonResponse")
+
+            val gmailMessage = jsonParser.decodeFromString<GmailMessage>(rawJsonResponse)
+
+            Log.d(
+                TAG,
+                "Fetched (parsed) GmailMessage ID: ${gmailMessage.id}, Payload null? = ${gmailMessage.payload == null}, Top-level Headers count: ${gmailMessage.payload?.headers?.size}"
+            )
+            gmailMessage.payload?.headers?.let { hs ->
+                Log.d(
+                    TAG,
+                    "Actual Top-Level Headers: ${hs.joinToString { h -> "${h.name}:${h.value}" }}"
+                )
+            }
+            if (gmailMessage.payload?.parts?.isNotEmpty() == true) {
+                Log.d(
+                    TAG,
+                    "Message ID: ${gmailMessage.id} has ${gmailMessage.payload.parts?.size} parts. First part headers count: ${gmailMessage.payload.parts?.firstOrNull()?.headers?.size}"
+                )
+            }
+
+
             mapGmailMessageToMessage(gmailMessage)
         } catch (e: Exception) {
-            Log.e(TAG, "Exception fetching message details for ID: $messageId", e)
+            Log.e(
+                TAG,
+                "Exception in fetchMessageDetails for ID: $messageId (Could be network or deserialization)",
+                e
+            )
             null
         }
     }
 
     private fun mapGmailMessageToMessage(gmailMessage: GmailMessage): Message {
-        val headers = gmailMessage.payload?.headers ?: emptyList()
-        val subject = headers.findHeaderValue("Subject") ?: "(No Subject)"
-        val from = headers.findHeaderValue("From") ?: ""
-        val dateStr = headers.findHeaderValue("Date")
-        val date = dateStr?.let { parseEmailDate(it) } ?: Date()
+        Log.d(TAG, "mapGmailMessageToMessage: Mapping GmailMessage ID: ${gmailMessage.id}")
+
+        var effectiveHeaders = gmailMessage.payload?.headers ?: emptyList()
+
+        // Check if top-level headers are sufficient, otherwise search in parts
+        val needsSearchInParts =
+            effectiveHeaders.none { it.name.equals("Subject", ignoreCase = true) } ||
+                    effectiveHeaders.none { it.name.equals("From", ignoreCase = true) } ||
+                    effectiveHeaders.none { it.name.equals("Date", ignoreCase = true) }
+
+        if (needsSearchInParts && gmailMessage.payload?.parts?.isNotEmpty() == true) {
+            Log.d(
+                TAG,
+                "Message ID ${gmailMessage.id}: Top-level headers missing key info or empty (Count: ${effectiveHeaders.size}). Attempting to find headers in parts."
+            )
+
+            fun findHeadersRecursively(parts: List<MessagePart>?): List<MessagePartHeader> {
+                parts?.forEach { part ->
+                    Log.d(
+                        TAG,
+                        "Message ID ${gmailMessage.id}: Checking partId: ${part.partId}, mimeType: ${part.mimeType}, headersCount: ${part.headers?.size}"
+                    )
+                    part.headers?.let { currentPartHeaders ->
+                        // If this part has Subject and From, consider it good enough.
+                        // More specific logic could be added to prefer text/html over text/plain, or vice-versa.
+                        if (currentPartHeaders.any {
+                                it.name.equals(
+                                    "Subject",
+                                    ignoreCase = true
+                                )
+                            } &&
+                            currentPartHeaders.any { it.name.equals("From", ignoreCase = true) }) {
+                            Log.d(
+                                TAG,
+                                "Message ID ${gmailMessage.id}: Found suitable headers in partId: ${part.partId} (mimeType: ${part.mimeType})"
+                            )
+                            return currentPartHeaders
+                        }
+                    }
+                    // If this part is also a multipart and has sub-parts, recurse
+                    if (part.parts?.isNotEmpty() == true) {
+                        val headersFromSubPart = findHeadersRecursively(part.parts)
+                        if (headersFromSubPart.isNotEmpty() &&
+                            headersFromSubPart.any {
+                                it.name.equals(
+                                    "Subject",
+                                    ignoreCase = true
+                                )
+                            } &&
+                            headersFromSubPart.any { it.name.equals("From", ignoreCase = true) }
+                        ) { // Check if useful headers found
+                            Log.d(
+                                TAG,
+                                "Message ID ${gmailMessage.id}: Found suitable headers in sub-part of partId: ${part.partId}"
+                            )
+                            return headersFromSubPart
+                        }
+                    }
+                }
+                Log.d(
+                    TAG,
+                    "Message ID ${gmailMessage.id}: No suitable headers found after checking all sub-parts of this branch."
+                )
+                return emptyList()
+            }
+
+            val headersFromParts = findHeadersRecursively(gmailMessage.payload.parts)
+            if (headersFromParts.isNotEmpty()) {
+                Log.d(
+                    TAG,
+                    "Message ID ${gmailMessage.id}: Using headers found in parts (Count: ${headersFromParts.size})."
+                )
+                effectiveHeaders = headersFromParts
+            } else {
+                Log.d(
+                    TAG,
+                    "Message ID ${gmailMessage.id}: No suitable headers found in parts either. Using top-level (Count: ${effectiveHeaders.size})."
+                )
+            }
+        } else if (needsSearchInParts) {
+            Log.d(
+                TAG,
+                "Message ID ${gmailMessage.id}: Top-level headers missing key info (Count: ${effectiveHeaders.size}), but no parts to search."
+            )
+        } else {
+            Log.d(
+                TAG,
+                "Message ID ${gmailMessage.id}: Using top-level headers (Count: ${effectiveHeaders.size})."
+            )
+        }
+
+
+        val subject = effectiveHeaders.findHeaderValue("Subject") ?: "(No Subject)"
+        val from = effectiveHeaders.findHeaderValue("From") ?: ""
+        val dateStr = effectiveHeaders.findHeaderValue("Date")
+
+        // Fallback for date if not found, using internalDate as a last resort
+        val date = dateStr?.let { parseEmailDate(it) }
+            ?: gmailMessage.internalDate?.toLongOrNull()?.let { Date(it) }
+            ?: Date() // Absolute fallback to now
+
         val senderName = extractSenderName(from)
         val senderAddress = extractSenderAddress(from)
-        val dateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
-        val formattedDate = dateFormat.format(date)
+
+        val outputDateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
+        val formattedDate = outputDateFormat.format(date)
+
+        Log.d(
+            TAG,
+            "To App Message ID: ${gmailMessage.id}, Subject: '$subject', SenderName: '$senderName', SenderAddress: '$senderAddress', Date: '$formattedDate', Preview: '${gmailMessage.snippet ?: ""}'"
+        )
 
         return Message(
             id = gmailMessage.id,
@@ -344,23 +457,27 @@ class GmailApiHelper @Inject constructor(
             senderName = senderName,
             senderAddress = senderAddress,
             bodyPreview = gmailMessage.snippet ?: "",
-            isRead = !gmailMessage.labelIds.contains("UNREAD")
+            isRead = !gmailMessage.labelIds.contains("UNREAD") // Assuming UNREAD is the standard label
         )
     }
 
-    private fun extractSenderAddress(from: String): String {
-        return if (from.contains("<") && from.contains(">")) {
-            from.substringAfter("<").substringBefore(">").trim()
+    private fun extractSenderAddress(fromHeader: String): String {
+        // ... (implementation as before)
+        return if (fromHeader.contains("<") && fromHeader.contains(">")) {
+            fromHeader.substringAfter("<").substringBefore(">").trim()
         } else {
-            from.trim()
+            fromHeader.trim()
         }
     }
 
-    private fun extractSenderName(from: String): String {
-        return if (from.contains("<") && from.contains(">")) {
-            from.substringBefore("<").trim().removeSurrounding("\"")
+    private fun extractSenderName(fromHeader: String): String {
+        // ... (implementation as before)
+        return if (fromHeader.contains("<") && fromHeader.contains(">")) {
+            fromHeader.substringBefore("<").trim().removeSurrounding("\"")
         } else {
-            from.trim()
+            // If no <>, assume the whole string is the name or address, prioritize address if it looks like one
+            val trimmed = fromHeader.trim()
+            if (trimmed.contains("@")) "" else trimmed // Crude: if it has @, assume it's address only, no separate name
         }
     }
 
@@ -369,12 +486,17 @@ class GmailApiHelper @Inject constructor(
     }
 
     private fun parseEmailDate(dateStr: String): Date? {
+        // ... (implementation as before, ensure TAG is used for logs if errors)
         val formatters = listOf(
-            SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss Z", Locale.US),
+            SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss Z", Locale.US), // Common format
             SimpleDateFormat("dd MMM yyyy HH:mm:ss Z", Locale.US),
-            SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss", Locale.US),
-            SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US),
-            SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US)
+            SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss", Locale.US),   // Without explicit timezone
+            SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US),    // ISO_8601
+            SimpleDateFormat(
+                "yyyy-MM-dd'T'HH:mm:ssXXX",
+                Locale.US
+            )     // ISO_8601 with explicit offset
+            // Potentially add more formats if you encounter them
         )
         for (formatter in formatters) {
             try {
@@ -382,11 +504,15 @@ class GmailApiHelper @Inject constructor(
             } catch (e: Exception) { /* Try next */
             }
         }
-        Log.w(TAG, "Could not parse date string: '$dateStr'")
-        return Date()
+        Log.w(TAG, "Could not parse date string: '$dateStr' with known formats.")
+        return null // Return null if all parsing attempts fail
     }
 
+
+    // --- Other MailApiService methods (markMessageRead, deleteMessage, moveMessage) ---
+    // Ensure they use the TAG for logging as well if you add logs there.
     override suspend fun markMessageRead(messageId: String, isRead: Boolean): Result<Boolean> {
+        Log.d(TAG, "markMessageRead: messageId='$messageId', isRead=$isRead")
         return try {
             val endpoint = "$BASE_URL/messages/$messageId/modify"
             val requestBody = buildJsonObject {
@@ -403,104 +529,157 @@ class GmailApiHelper @Inject constructor(
             if (response.status.isSuccess()) Result.success(true)
             else {
                 val errorBody = response.bodyAsText()
+                Log.e(
+                    TAG,
+                    "Error marking message read/unread for $messageId: ${response.status} - $errorBody"
+                )
                 val httpException =
                     IOException("HTTP Error ${response.status.value} marking message read/unread: $errorBody")
                 Result.failure(Exception(errorMapper.mapNetworkOrApiException(httpException)))
             }
         } catch (e: Exception) {
+            Log.e(TAG, "Exception in markMessageRead for $messageId", e)
             Result.failure(Exception(errorMapper.mapNetworkOrApiException(e)))
         }
     }
 
     override suspend fun deleteMessage(messageId: String): Result<Boolean> {
+        Log.d(TAG, "deleteMessage: messageId='$messageId'")
         return try {
-            val endpoint = "$BASE_URL/messages/$messageId/trash"
-            val response: HttpResponse = httpClient.post(endpoint)
+            val endpoint = "$BASE_URL/messages/$messageId/trash" // Correct endpoint for trashing
+            val response: HttpResponse = httpClient.post(endpoint) // No body needed for trash
             if (response.status.isSuccess()) Result.success(true)
             else {
                 val errorBody = response.bodyAsText()
+                Log.e(
+                    TAG,
+                    "Error deleting (trashing) message $messageId: ${response.status} - $errorBody"
+                )
                 val httpException =
                     IOException("HTTP Error ${response.status.value} deleting message: $errorBody")
                 Result.failure(Exception(errorMapper.mapNetworkOrApiException(httpException)))
             }
         } catch (e: Exception) {
+            Log.e(TAG, "Exception in deleteMessage for $messageId", e)
             Result.failure(Exception(errorMapper.mapNetworkOrApiException(e)))
         }
     }
 
     override suspend fun moveMessage(messageId: String, targetFolderId: String): Result<Boolean> {
+        Log.d(TAG, "moveMessage: messageId='$messageId', targetFolderId='$targetFolderId'")
         return try {
-            val messageResponse =
-                httpClient.get("$BASE_URL/messages/$messageId") { parameter("format", "minimal") }
-            if (!messageResponse.status.isSuccess()) {
-                val errorBody = messageResponse.bodyAsText()
-                val httpException =
-                    IOException("HTTP Error ${messageResponse.status.value} (fetching message for move): $errorBody")
-                return Result.failure(Exception(errorMapper.mapNetworkOrApiException(httpException)))
+            // First, get the current labels of the message
+            val messageDetailsResponse = httpClient.get("$BASE_URL/messages/$messageId") {
+                parameter("format", "metadata")
+                parameter(
+                    "metadataHeaders",
+                    " "
+                ) // We only need labelIds, but metadataHeaders is required by API for metadata format.
+                // Sending a space or a common header like 'Subject' should be fine.
             }
-            val message = messageResponse.body<GmailMessage>()
-            val addLabelIds =
-                if (targetFolderId.isNotEmpty() && targetFolderId != "ARCHIVE") listOf(
-                    targetFolderId
-                ) else emptyList()
 
-            val removeLabelIds = message.labelIds.filter { currentLabelId ->
-                val isUserLabelOrInbox = !currentLabelId.startsWith("CATEGORY_") &&
-                        currentLabelId !in listOf(
-                    GMAIL_LABEL_ID_SENT,
-                    GMAIL_LABEL_ID_DRAFT,
-                    GMAIL_LABEL_ID_SPAM,
-                    GMAIL_LABEL_ID_TRASH,
-                    GMAIL_LABEL_ID_IMPORTANT,
-                    GMAIL_LABEL_ID_STARRED
+            if (!messageDetailsResponse.status.isSuccess()) {
+                val errorBody = messageDetailsResponse.bodyAsText()
+                Log.e(
+                    TAG,
+                    "Error fetching message details for move operation ($messageId): ${messageDetailsResponse.status} - $errorBody"
                 )
-                (isUserLabelOrInbox && currentLabelId != targetFolderId) ||
-                        (currentLabelId == GMAIL_LABEL_ID_INBOX && (targetFolderId == "ARCHIVE" || (targetFolderId.isNotEmpty() && targetFolderId != GMAIL_LABEL_ID_INBOX)))
-            }.distinct()
+                return Result.failure(Exception("Failed to get message details before move: ${errorBody}"))
+            }
+            val gmailMessage = messageDetailsResponse.body<GmailMessage>()
+            val currentLabelIds = gmailMessage.labelIds.toMutableList()
+            Log.d(TAG, "Current labels for message $messageId: $currentLabelIds")
 
-            if (addLabelIds.isEmpty() && removeLabelIds.isEmpty()) {
+
+            val addLabelIds = mutableListOf<String>()
+            val removeLabelIds = mutableListOf<String>()
+
+            if (targetFolderId.equals("ARCHIVE", ignoreCase = true)) {
+                // Archiving means removing INBOX (if present) and not adding any specific folder label unless it's already there
+                if (currentLabelIds.contains("INBOX")) {
+                    removeLabelIds.add("INBOX")
+                }
+                Log.d(TAG, "Archiving message $messageId. Will remove INBOX if present.")
+            } else {
+                // Moving to a specific folder/label
+                addLabelIds.add(targetFolderId)
+                // If it was in INBOX and not being moved to INBOX, remove INBOX.
+                // Also, remove other 'folder-like' labels if it's a true move, not just adding a label.
+                // This logic might need refinement based on how Gmail handles multiple labels vs folders.
+                // For simplicity, if moving to a new folder, we often want to remove it from the old one (e.g. INBOX).
+                if (currentLabelIds.contains("INBOX") && !targetFolderId.equals(
+                        "INBOX",
+                        ignoreCase = true
+                    )
+                ) {
+                    removeLabelIds.add("INBOX")
+                }
+                // Potentially remove other user labels if this is an exclusive move. For now, just INBOX.
+            }
+
+
+            // Ensure no redundant operations
+            val finalAddLabels = addLabelIds.filter { it !in currentLabelIds }.distinct()
+            val finalRemoveLabels = removeLabelIds.filter { it in currentLabelIds }.distinct()
+
+            if (finalAddLabels.isEmpty() && finalRemoveLabels.isEmpty()) {
                 Log.d(
                     TAG,
-                    "No label changes needed for message $messageId moving to $targetFolderId"
+                    "No actual label changes required for message $messageId to $targetFolderId. Already in desired state."
                 )
-                return Result.success(true)
+                return Result.success(true) // No change needed
             }
 
+            Log.d(
+                TAG,
+                "Message $messageId: Adding labels: $finalAddLabels, Removing labels: $finalRemoveLabels"
+            )
+
+
             val endpoint = "$BASE_URL/messages/$messageId/modify"
-            val requestBody = buildJsonObject {
-                if (addLabelIds.isNotEmpty()) {
+            val requestBodyJson = buildJsonObject {
+                if (finalAddLabels.isNotEmpty()) {
                     putJsonObject("addLabelIds") {
-                        addLabelIds.forEachIndexed { i, id ->
+                        finalAddLabels.forEachIndexed { i, id ->
                             put(
                                 i.toString(),
                                 id
                             )
-                        }
+                        } // Using index as key for JSON array elements
                     }
                 }
-                if (removeLabelIds.isNotEmpty()) {
+                if (finalRemoveLabels.isNotEmpty()) {
                     putJsonObject("removeLabelIds") {
-                        removeLabelIds.forEachIndexed { i, id ->
-                            put(
-                                i.toString(),
-                                id
-                            )
-                        }
+                        finalRemoveLabels.forEachIndexed { i, id -> put(i.toString(), id) }
                     }
                 }
             }
+            Log.d(TAG, "Modify request body for $messageId: $requestBodyJson")
+
+
             val response: HttpResponse = httpClient.post(endpoint) {
                 headers { append(HttpHeaders.ContentType, ContentType.Application.Json.toString()) }
-                setBody(requestBody.toString())
+                setBody(requestBodyJson.toString())
             }
-            if (response.status.isSuccess()) Result.success(true)
-            else {
+
+            if (response.status.isSuccess()) {
+                Log.i(
+                    TAG,
+                    "Successfully moved/modified labels for message $messageId to $targetFolderId"
+                )
+                Result.success(true)
+            } else {
                 val errorBody = response.bodyAsText()
+                Log.e(
+                    TAG,
+                    "Error moving message $messageId (modifying labels): ${response.status} - $errorBody"
+                )
                 val httpException =
                     IOException("HTTP Error ${response.status.value} (modifying labels for move): $errorBody")
                 Result.failure(Exception(errorMapper.mapNetworkOrApiException(httpException)))
             }
         } catch (e: Exception) {
+            Log.e(TAG, "Exception in moveMessage for $messageId to $targetFolderId", e)
             Result.failure(Exception(errorMapper.mapNetworkOrApiException(e)))
         }
     }

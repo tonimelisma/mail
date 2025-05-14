@@ -1,3 +1,4 @@
+// File: backend-google/src/main/java/net/melisma/backend_google/auth/GoogleAuthManager.kt
 package net.melisma.backend_google.auth
 
 import android.app.Activity
@@ -18,7 +19,7 @@ import com.google.android.gms.auth.api.identity.AuthorizationRequest
 import com.google.android.gms.auth.api.identity.AuthorizationResult
 import com.google.android.gms.auth.api.identity.Identity
 import com.google.android.gms.common.api.ApiException
-import com.google.android.gms.common.api.Scope
+import com.google.android.gms.common.api.Scope // Keep this import
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenParsingException
@@ -43,7 +44,10 @@ sealed class GoogleSignInResult {
 }
 
 sealed class GoogleScopeAuthResult {
-    data class Success(val accessToken: String, val grantedScopes: List<String>?) :
+    data class Success(
+        val accessToken: String,
+        val grantedScopes: List<String>?
+    ) : // Changed to List<String>
         GoogleScopeAuthResult()
 
     data class ConsentRequired(val pendingIntent: IntentSender) : GoogleScopeAuthResult()
@@ -62,7 +66,7 @@ class GoogleAuthManager @Inject constructor(
     private val oneTapClient by lazy { Identity.getSignInClient(context) }
 
     private val SERVER_CLIENT_ID =
-        "326576675855-6vc6rrjhijjfch6j6106sd5ui2htbh61.apps.googleusercontent.com"
+        "326576675855-r404vqtrr8ohbpl7g6tianaekkt70igd.apps.googleusercontent.com" // Your ANDROID Client ID
     private var currentNonce: String? = null
 
     private fun generateNonce(): String {
@@ -78,19 +82,12 @@ class GoogleAuthManager @Inject constructor(
         return currentNonce!!
     }
 
-    /**
-     * Signs in with Google using CredentialManager to obtain an ID Token.
-     * Implements enhanced account discovery by first trying with authorized accounts,
-     * then falling back to all accounts if that fails.
-     */
     suspend fun signInWithGoogle(activity: Activity): GoogleSignInResult {
         Log.d(TAG, "GoogleAuthManager: signInWithGoogle() called")
         return try {
-            // First attempt with authorized accounts only
             Log.d(TAG, "GoogleAuthManager: Attempting sign-in with authorized accounts only")
             val result = attemptSignIn(activity, true)
 
-            // If no credentials available, retry with all accounts
             if (result is GoogleSignInResult.NoCredentialsAvailable) {
                 Log.d(
                     TAG,
@@ -108,9 +105,6 @@ class GoogleAuthManager @Inject constructor(
         }
     }
 
-    /**
-     * Internal helper method that attempts sign-in with specified filtering option
-     */
     private suspend fun attemptSignIn(
         activity: Activity,
         filterByAuthorizedAccounts: Boolean
@@ -131,14 +125,14 @@ class GoogleAuthManager @Inject constructor(
             .addCredentialOption(googleIdOption)
             .build()
 
-        val usedNonce = currentNonce // Capture for potential verification if needed
+        val usedNonce = currentNonce
 
         return try {
             Log.d(TAG, "GoogleAuthManager: Requesting Google credential with nonce: $usedNonce")
             val result: GetCredentialResponse = credentialManager.getCredential(activity, request)
             val credential = result.credential
             Log.d(TAG, "GoogleAuthManager: Received credential type: ${credential.type}")
-            currentNonce = null // Nonce is consumed for this attempt
+            currentNonce = null
 
             if (credential is CustomCredential &&
                 credential.type == GoogleIdTokenCredential.TYPE_GOOGLE_ID_TOKEN_CREDENTIAL
@@ -160,12 +154,9 @@ class GoogleAuthManager @Inject constructor(
                             TAG,
                             "GoogleAuthManager: ID token is blank, which is a parsing issue."
                         )
-                        // Create a generic exception to hold our specific message
                         val causeDetail =
                             IllegalArgumentException("ID token string was blank or null.")
-                        // Pass this as the cause to GoogleIdTokenParsingException
                         val ex = GoogleIdTokenParsingException(causeDetail)
-                        // The user-facing message can be more general or include specifics
                         val msg: String? = "Failed to parse Google ID token: ID token was missing."
                         GoogleSignInResult.Error(ex, msg)
                     } else {
@@ -176,7 +167,6 @@ class GoogleAuthManager @Inject constructor(
                         GoogleSignInResult.Success(googleIdTokenCredential)
                     }
                 } catch (e: GoogleIdTokenParsingException) {
-                    // This catch block is for when GoogleIdTokenCredential.createFrom() itself throws this exception
                     Log.e(
                         TAG,
                         "GoogleAuthManager: GoogleIdTokenParsingException during createFrom: ${e.message}",
@@ -187,7 +177,6 @@ class GoogleAuthManager @Inject constructor(
                         "Failed to parse Google ID token data: ${e.message}"
                     )
                 } catch (e: Exception) {
-                    // Catch other potential errors during parsing or handling of GoogleIdTokenCredential
                     Log.e(
                         TAG,
                         "GoogleAuthManager: Exception after CustomCredential check: ${e.message}",
@@ -232,10 +221,6 @@ class GoogleAuthManager @Inject constructor(
         }
     }
 
-    /**
-     * Legacy method for backward compatibility
-     * @deprecated Use signInWithGoogle() instead
-     */
     @Deprecated("Use signInWithGoogle() instead", ReplaceWith("signInWithGoogle(activity)"))
     suspend fun signIn(
         activity: Activity,
@@ -255,13 +240,12 @@ class GoogleAuthManager @Inject constructor(
                 "GoogleAuthManager: Error clearing CredentialManager state during sign-out",
                 e
             )
-            // Optionally, rethrow or handle more specifically if needed
         }
     }
 
     suspend fun requestAccessToken(
         activity: Activity,
-        @Suppress("UNUSED_PARAMETER") accountEmail: String?, // Kept for potential future use with account hinting
+        @Suppress("UNUSED_PARAMETER") accountEmail: String?,
         scopes: List<String>
     ): GoogleScopeAuthResult = withContext(ioDispatcher) {
         Log.d(
@@ -310,7 +294,7 @@ class GoogleAuthManager @Inject constructor(
                     Log.i(TAG, "GoogleAuthManager: Access token acquired successfully.")
                     return@withContext GoogleScopeAuthResult.Success(
                         accessToken,
-                        authResult.grantedScopes
+                        authResult.grantedScopes?.map { it.toString() } // Corrected: scope.toString()
                     )
                 } else {
                     Log.e(
@@ -323,7 +307,7 @@ class GoogleAuthManager @Inject constructor(
                     )
                 }
             }
-        } catch (e: Exception) { // Catches ApiException from .await() among others
+        } catch (e: Exception) {
             Log.e(TAG, "GoogleAuthManager: Failed to authorize scopes or get access token", e)
             return@withContext GoogleScopeAuthResult.Error(
                 e,
@@ -342,78 +326,78 @@ class GoogleAuthManager @Inject constructor(
                     "Authorization intent data missing."
                 )
             }
-        try {
-            Log.d(TAG, "GoogleAuthManager: Processing consent result intent")
-            val authorizationResult = authorizationClient.getAuthorizationResultFromIntent(intent)
-            if (authorizationResult.hasResolution()) {
-                Log.w(
-                    TAG,
-                    "GoogleAuthManager: AuthorizationResult still has resolution after consent intent. PendingIntent: ${authorizationResult.pendingIntent}"
-                )
-                return@withContext GoogleScopeAuthResult.Error(
-                    IllegalStateException("Consent still required after intent completion."),
-                    "Authorization not fully completed by the user."
-                )
-            }
-            val accessToken = authorizationResult.accessToken
-            if (accessToken != null) {
-                Log.i(TAG, "GoogleAuthManager: Access token acquired successfully after consent.")
-                return@withContext GoogleScopeAuthResult.Success(
-                    accessToken,
-                    authorizationResult.grantedScopes
-                )
-            } else {
+            try {
+                Log.d(TAG, "GoogleAuthManager: Processing consent result intent")
+                val authorizationResult =
+                    authorizationClient.getAuthorizationResultFromIntent(intent)
+                if (authorizationResult.hasResolution()) {
+                    Log.w(
+                        TAG,
+                        "GoogleAuthManager: AuthorizationResult still has resolution after consent intent. PendingIntent: ${authorizationResult.pendingIntent}"
+                    )
+                    return@withContext GoogleScopeAuthResult.Error(
+                        IllegalStateException("Consent still required after intent completion."),
+                        "Authorization not fully completed by the user."
+                    )
+                }
+                val accessToken = authorizationResult.accessToken
+                if (accessToken != null) {
+                    Log.i(
+                        TAG,
+                        "GoogleAuthManager: Access token acquired successfully after consent."
+                    )
+                    return@withContext GoogleScopeAuthResult.Success(
+                        accessToken,
+                        authorizationResult.grantedScopes?.map { it.toString() } // Corrected: scope.toString()
+                    )
+                } else {
+                    Log.e(
+                        TAG,
+                        "GoogleAuthManager: Access token is null after consent intent. Granted scopes: ${authorizationResult.grantedScopes}"
+                    )
+                    return@withContext GoogleScopeAuthResult.Error(
+                        IllegalStateException("Access token is null after consent."),
+                        "Failed to retrieve access token post-consent."
+                    )
+                }
+            } catch (e: ApiException) {
                 Log.e(
                     TAG,
-                    "GoogleAuthManager: Access token is null after consent intent. Granted scopes: ${authorizationResult.grantedScopes}"
+                    "GoogleAuthManager: ApiException while handling scope consent result: ${e.statusCode}",
+                    e
                 )
                 return@withContext GoogleScopeAuthResult.Error(
-                    IllegalStateException("Access token is null after consent."),
-                    "Failed to retrieve access token post-consent."
+                    e,
+                    "Failed to process consent: ${e.message}"
+                )
+            } catch (e: Exception) {
+                Log.e(
+                    TAG,
+                    "GoogleAuthManager: Unexpected error while handling scope consent result",
+                    e
+                )
+                return@withContext GoogleScopeAuthResult.Error(
+                    e,
+                    "Unexpected error processing consent: ${e.message}"
                 )
             }
-        } catch (e: ApiException) {
-            Log.e(
-                TAG,
-                "GoogleAuthManager: ApiException while handling scope consent result: ${e.statusCode}",
-                e
-            )
-            return@withContext GoogleScopeAuthResult.Error(
-                e,
-                "Failed to process consent: ${e.message}"
-            )
-        } catch (e: Exception) {
-            Log.e(TAG, "GoogleAuthManager: Unexpected error while handling scope consent result", e)
-            return@withContext GoogleScopeAuthResult.Error(
-                e,
-                "Unexpected error processing consent: ${e.message}"
-            )
         }
-    }
 
     fun toGenericAccount(idTokenCredential: GoogleIdTokenCredential): Account {
         Log.d(TAG, "GoogleAuthManager: toGenericAccount() called for ID: ${idTokenCredential.id}")
         return Account(
-            id = idTokenCredential.id, // Google User ID (sub claim)
+            id = idTokenCredential.id,
             username = idTokenCredential.displayName
                 ?: "Google User (${idTokenCredential.id.take(6)}...)",
             providerType = "GOOGLE"
         )
     }
 
-    /**
-     * Helper method to get email from GoogleIdTokenCredential
-     * Note: GoogleIdTokenCredential doesn't directly expose email, but it might be extractable
-     * from the JWT token or the JWT claims if Google Identity library provides access to them
-     */
     fun getEmailFromCredential(idTokenCredential: GoogleIdTokenCredential): String? {
         Log.d(
             TAG,
             "GoogleAuthManager: getEmailFromCredential() attempting to extract email from ID token"
         )
-        // For now, just return null as we can't easily access the email claim
-        // In a real implementation, you might be able to parse the JWT or use another
-        // method provided by the Google Identity library
-        return null
+        return null // Cannot directly get email from GoogleIdTokenCredential easily without parsing the JWT raw string.
     }
 }

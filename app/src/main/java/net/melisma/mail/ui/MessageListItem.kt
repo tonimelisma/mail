@@ -1,5 +1,6 @@
 package net.melisma.mail.ui
 
+import android.util.Log
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -25,6 +26,10 @@ fun MessageListItem(
     message: Message,
     onClick: () -> Unit
 ) {
+    Log.d(
+        "MessageListItemUI",
+        "Displaying Message ID: ${message.id}, Subject: '${message.subject}', Sender: '${message.senderName ?: message.senderAddress}'"
+    )
     Column(
         modifier = Modifier
             .fillMaxWidth()

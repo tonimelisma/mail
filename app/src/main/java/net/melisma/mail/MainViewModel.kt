@@ -289,6 +289,12 @@ class MainViewModel @Inject constructor(
                     when (newMessageState) {
                         is MessageDataState.Success -> {
                             val messageCount = newMessageState.messages.size
+                            Log.d(
+                                TAG,
+                                "ViewModel received Success with ${newMessageState.messages.size} messages. First 3 subjects: ${
+                                    newMessageState.messages.take(3).map { it.subject }
+                                }"
+                            )
                             Log.d(TAG, "MainViewModel: Received ${messageCount} messages")
                             if (messageCount > 0) {
                                 Log.d(

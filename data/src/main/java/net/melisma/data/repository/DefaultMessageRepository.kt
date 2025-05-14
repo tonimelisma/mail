@@ -228,11 +228,21 @@ class DefaultMessageRepository @Inject constructor(
                 ensureActive()
                 Log.d(
                     TAG,
+                    "[Job Coroutine - ${folder.displayName}] Raw messagesResult from API service: isSuccess=${messagesResult.isSuccess}, count=${messagesResult.getOrNull()?.size}"
+                )
+                Log.d(
+                    TAG,
                     "[Job Coroutine - ${folder.displayName}] Messages result: isSuccess=${messagesResult.isSuccess}"
                 )
 
                 val newState = if (messagesResult.isSuccess) {
                     val messages = messagesResult.getOrThrow()
+                    messages.take(3).forEach { msg ->
+                        Log.d(
+                            TAG,
+                            "[Job Coroutine - ${folder.displayName}] Mapped App Message: ID=${msg.id}, Subject='${msg.subject}', Sender='${msg.senderName}'"
+                        )
+                    }
                     Log.i(
                         TAG,
                         "[Job Coroutine - ${folder.displayName}] Successfully fetched ${messages.size} messages for ${folder.displayName}"
