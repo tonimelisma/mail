@@ -3,7 +3,7 @@
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
-    id("org.jetbrains.kotlin.kapt")
+    alias(libs.plugins.kotlin.ksp)
     alias(libs.plugins.hilt.gradle)
     alias(libs.plugins.kotlin.serialization)
 }
@@ -55,7 +55,7 @@ dependencies {
 
     // --- Hilt ---
     implementation(libs.hilt.android)
-    kapt(libs.hilt.compiler)
+    ksp(libs.hilt.compiler)
 
     // --- AndroidX & Kotlin ---
     implementation(libs.androidx.core.ktx)
@@ -85,8 +85,4 @@ dependencies {
     // --- Instrumented Testing ---
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
-}
-
-kapt {
-    correctErrorTypes = true
 }

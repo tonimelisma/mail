@@ -74,9 +74,11 @@ interface MailApiService {
      * Fetches all messages belonging to a specific thread/conversation.
      *
      * @param threadId The ID of the thread (for Gmail) or conversation (for Outlook).
+     * @param folderId The ID of the folder in which the thread is primarily located or being viewed.
+     *                 This can help scope the search for providers like MS Graph.
      * @return Result containing the list of [Message] objects in the thread/conversation or an error.
      */
-    suspend fun getMessagesForThread(threadId: String): Result<List<Message>>
+    suspend fun getMessagesForThread(threadId: String, folderId: String): Result<List<Message>>
 
     // Future methods to consider:
     // - getMessageContent(messageId) - For fetching full message content

@@ -12,10 +12,8 @@ espressoCore = "3.6.1"
 lifecycle = "2.8.7"
 activityCompose = "1.10.1"
 composeBom = "2025.05.00"
-composeCompiler = "2.0.0" # This is usually tied to Kotlin version, often not needed explicitly here
-# For Kotlin 2.0.0, Compose Compiler is typically 1.5.12 or similar if you were on older Kotlin.
-# With Kotlin 2.0.0, the Compose plugin itself handles the compiler.
-# If you have a specific compose.compiler plugin version, keep it. Otherwise, this line might be redundant.
+# composeCompiler version is managed by the org.jetbrains.kotlin.plugin.compose plugin with Kotlin 2.0.0
+# composeCompiler = "2.0.0" # This can likely be removed
 
 msal = "6.0.0"
 materialIcons = "1.7.8" # Check for latest, e.g., androidx.compose.material:material-icons-extended
@@ -45,7 +43,7 @@ appAuth = "0.11.1" # Latest stable version as of May 2025
 # Browser for CustomTabs support
 browserCustomTabs = "1.8.0" # Latest stable version as of May 2025
 
-ksp = "2.0.0-1.0.22" # Added KSP version
+ksp = "2.0.0-1.0.22" # Ensured KSP version for Kotlin 2.0.0
 datastorePreferences = "1.1.1" # <-- ADDED DATASTORE VERSION
 
 [libraries]
@@ -120,8 +118,8 @@ androidx-datastore-preferences = { group = "androidx.datastore", name = "datasto
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
-kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" } # Compose compiler plugin is now part of AGP/Kotlin plugin
-kotlin-ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" } # Added KSP plugin
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" } # This is the new Compose Compiler plugin
+kotlin-ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 android-library = { id = "com.android.library", version.ref = "agp" }
 hilt-gradle = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }

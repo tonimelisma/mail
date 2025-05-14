@@ -241,6 +241,10 @@ class GraphApiHelper @Inject constructor(
         selectFields: List<String>,
         maxResults: Int
     ): Result<List<Message>> {
+        Log.d(
+            TAG,
+            "GraphApiHelper: getMessagesForFolder called for folderId: $folderId with selectFields: $selectFields, maxResults: $maxResults"
+        )
         return try {
             Log.d(TAG, "Fetching messages for folder: $folderId")
             val response: HttpResponse =
@@ -255,6 +259,17 @@ class GraphApiHelper @Inject constructor(
 
             if (response.status.isSuccess()) {
                 val graphMessages = response.body<GraphCollection<GraphMessage>>().value
+                Log.d(
+                    TAG,
+                    "GraphApiHelper: Fetched ${graphMessages.size} GraphMessages for folder $folderId."
+                )
+                if (graphMessages.isNotEmpty()) {
+                    Log.d(
+                        TAG,
+                        "GraphApiHelper: First 3 GraphMessages (or fewer) for folder $folderId: " +
+                                graphMessages.take(3)
+                                    .joinToString { "MsgID: ${it.id}, ConvID: ${it.conversationId}" })
+                }
                 val messages = graphMessages.mapNotNull { mapGraphMessageToMessage(it) }
                 Log.d(TAG, "Successfully fetched ${messages.size} messages for folder $folderId.")
                 Result.success(messages)
@@ -270,6 +285,10 @@ class GraphApiHelper @Inject constructor(
     }
 
     private fun mapGraphMessageToMessage(graphMessage: GraphMessage): Message {
+        Log.v(
+            TAG,
+            "GraphApiHelper: mapGraphMessageToMessage - MsgID: ${graphMessage.id}, ConvID: ${graphMessage.conversationId}"
+        ) // Using Verbose for potentially frequent log
         val sender = graphMessage.sender // GraphMessage.sender is already GraphRecipient?
         val from = graphMessage.from // Also GraphRecipient?
         val effectiveSender = from ?: sender // Prefer 'from' if available
@@ -400,31 +419,25 @@ class GraphApiHelper @Inject constructor(
         }
     }
 
-    override suspend fun getMessagesForThread(threadId: String): Result<List<Message>> {
+    override suspend fun getMessagesForThread(
+        threadId: String,
+        folderId: String
+    ): Result<List<Message>> {
         Log.d(
             TAG,
-            "getMessagesForThread (Outlook): Fetching messages for conversationId: $threadId"
+            "GraphApiHelper: getMessagesForThread (Outlook) called for conversationId: $threadId in folder: $folderId"
         )
         return try {
-            val response: HttpResponse = httpClient.get("$MS_GRAPH_ROOT_ENDPOINT/me/messages") {
+            val response: HttpResponse =
+                httpClient.get("$MS_GRAPH_ROOT_ENDPOINT/me/mailFolders/$folderId/messages") {
                 url {
-                    // Filter messages by conversationId
                     parameters.append("\$filter", "conversationId eq '$threadId'")
-                    // Select necessary fields for the Message model
                     parameters.append(
                         "\$select",
-                        "id,conversationId,receivedDateTime,sentDateTime,subject,bodyPreview,sender,from,toRecipients,isRead"
+                        "id,conversationId,receivedDateTime,sentDateTime,subject,bodyPreview,sender,from,toRecipients,ccRecipients,bccRecipients,isRead,parentFolderId,hasAttachments,importance,inferenceClassification,internetMessageId,isDraft,isReadReceiptRequested,replyTo,flag"
                     )
-                    parameters.append(
-                        "\$top",
-                        "100"
-                    ) // Sensible limit for messages in a single conversation view
-                    parameters.append(
-                        "\$orderby",
-                        "receivedDateTime asc"
-                    ) // Order messages chronologically
+                    parameters.append("\$top", "100")
                 }
-                accept(Json)
             }
 
             if (response.status.isSuccess()) {
@@ -433,7 +446,7 @@ class GraphApiHelper @Inject constructor(
                     graphMessageCollection.value.mapNotNull { mapGraphMessageToMessage(it) }
                 Log.d(
                     TAG,
-                    "Successfully mapped ${messages.size} messages for Outlook conversationId: $threadId"
+                    "GraphApiHelper: Successfully mapped ${messages.size} messages for Outlook conversationId: $threadId"
                 )
                 Result.success(messages)
             } else {

@@ -686,14 +686,28 @@ class GmailApiHelper @Inject constructor(
         }
     }
 
-    override suspend fun getMessagesForThread(threadId: String): Result<List<Message>> {
-        Log.d(TAG, "getMessagesForThread (Gmail): Fetching messages for threadId: $threadId")
+    override suspend fun getMessagesForThread(
+        threadId: String,
+        folderId: String // Added folderId to match interface, though Gmail API doesn't use it for threads.get
+    ): Result<List<Message>> {
+        Log.d(
+            TAG,
+            "getMessagesForThread (Gmail): Fetching messages for threadId: $threadId. folderId '$folderId' is unused for Gmail threads."
+        )
         return try {
+            // Gmail API: GET https://gmail.googleapis.com/gmail/v1/users/me/threads/{threadId}
+            // It's important to request a format that gives enough detail for messages,
+            // or be prepared to make subsequent calls for each message if only IDs are returned.
+            // Format "FULL" for threads usually embeds the message resources.
+            // Format "METADATA" gives headers but not body.
+            // Format "MINIMAL" gives only IDs.
             val response: HttpResponse = httpClient.get("$BASE_URL/threads/$threadId") {
                 parameter(
                     "format",
                     "FULL"
                 ) // Request full message details for messages within the thread
+                // Other parameters like fields could be used to trim response if needed, e.g.
+                // parameter("fields", "messages(id,snippet,payload/headers,internalDate,labelIds)")
             }
 
             if (!response.status.isSuccess()) {
@@ -701,18 +715,20 @@ class GmailApiHelper @Inject constructor(
                 Log.e(TAG, "Error fetching Gmail thread $threadId: ${response.status} - $errorBody")
                 val httpException =
                     IOException("Gmail API Error ${response.status.value} fetching thread $threadId: $errorBody")
+                // Use the existing errorMapper injected into the class
                 return Result.failure(Exception(errorMapper.mapNetworkOrApiException(httpException)))
             }
 
             val rawJsonResponse = response.bodyAsText()
-            Log.d(
+            // Log raw response only in verbose/debug modes if it's too large for regular debug logs
+            Log.v(
                 TAG,
                 "Thread ID: $threadId --- RAW JSON RESPONSE for THREAD.GET (Gmail): $rawJsonResponse"
             )
             val gmailThread = jsonParser.decodeFromString<GmailThread>(rawJsonResponse)
 
-            // Messages from threads.get with format=FULL should be complete.
-            // The existing mapGmailMessageToMessage will handle header recursion if needed.
+            // Messages from threads.get with format=FULL should be complete enough
+            // for mapGmailMessageToMessage to work, which handles recursive header search if needed.
             val messages = gmailThread.messages.mapNotNull { nestedGmailMessage ->
                 mapGmailMessageToMessage(nestedGmailMessage)
             }
@@ -723,8 +739,9 @@ class GmailApiHelper @Inject constructor(
             )
             Result.success(messages)
 
-        } catch (e: Exception) {
+        } catch (e: Exception) { // Catch a broader exception type, as Ktor/Serialization can throw various things
             Log.e(TAG, "Exception in getMessagesForThread for threadId $threadId (Gmail)", e)
+            // Use the existing errorMapper injected into the class
             val errorMessageString = errorMapper.mapNetworkOrApiException(e)
             Result.failure(Exception(errorMessageString))
         }

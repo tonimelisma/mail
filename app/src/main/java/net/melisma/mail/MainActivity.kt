@@ -346,7 +346,7 @@ fun MainApp(
                                     isRefreshing = if (state.currentViewMode == ViewMode.THREADS) {
                                         state.threadDataState is ThreadDataState.Loading && state.threads.isNullOrEmpty()
                                     } else {
-                                        state.isMessageLoading && state.messages.isNullOrEmpty()
+                                        state.isMessageLoading
                                     },
                                     onRefresh = { viewModel.refreshCurrentView(currentActivity) },
                                     modifier = Modifier.fillMaxSize()
@@ -365,8 +365,6 @@ fun MainApp(
                                             MessageListContent(
                                                 messageDataState = state.messageDataState,
                                                 accountContext = accountForMessages,
-                                                isRefreshing = state.isMessageLoading,
-                                                onRefresh = { viewModel.refreshCurrentView(currentActivity) },
                                                 onMessageClick = { messageId ->
                                                     showToast(context, "Message ID: $messageId clicked (Detail view TBD)")
                                                 }

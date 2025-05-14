@@ -23,7 +23,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,8 +46,6 @@ fun MessageListContent(
     // messages: List<Message>?, // Messages are now inside MessageDataState.Success
     // messageError: String?, // Error is now inside MessageDataState.Error
     accountContext: Account?, // Uses generic Account for context header
-    isRefreshing: Boolean, // Pass refreshing state for PullToRefreshBox indicator
-    onRefresh: () -> Unit,
     onMessageClick: (String) -> Unit
 ) {
     // val isRefreshing = messageDataState is MessageDataState.Loading // Determine refreshing state
@@ -60,15 +57,12 @@ fun MessageListContent(
             HorizontalDivider()
         }
 
-        // Pull-to-refresh container wrapping the main content
-        PullToRefreshBox(
-            isRefreshing = isRefreshing, // Control the indicator visibility
-            onRefresh = onRefresh,       // Action to perform on pull
+        // Determine content based on the messageDataState
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .weight(1f) // Ensure it fills available space in the Column
-        ) {
-            // Determine content based on the messageDataState
+                .weight(1f)
+        ) { // Ensure it fills available space in the Column
             when (messageDataState) {
                 // Initial state before loading or after clearing selection
                 is MessageDataState.Initial -> {
@@ -85,7 +79,7 @@ fun MessageListContent(
                     // Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     //     CircularProgressIndicator()
                     // }
-                    Spacer(Modifier.fillMaxSize()) // Let PullToRefreshBox handle indicator
+                    Spacer(Modifier.fillMaxSize()) // Let Parent PullToRefreshBox handle indicator, or show blank space
                 }
                 // Error state
                 is MessageDataState.Error -> {
@@ -115,7 +109,7 @@ fun MessageListContent(
                     }
                 }
             } // End when
-        } // End PullToRefreshBox
+        } // End Box that replaced PullToRefreshBox
     } // End Column
 }
 

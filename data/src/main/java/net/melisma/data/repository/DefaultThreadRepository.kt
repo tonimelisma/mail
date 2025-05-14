@@ -56,6 +56,15 @@ class DefaultThreadRepository @Inject constructor(
     // Max messages to show per thread in the summary list (if API limits, actual count might be less)
     private val maxMessagesPerThreadInList = 3
 
+    init {
+        Log.d(
+            TAG, "Initializing DefaultThreadRepository. Injected maps:" +
+                    " mailApiServices keys: ${mailApiServices.keys}, " +
+                    " mailApiServices values: ${mailApiServices.values.joinToString { it.javaClass.name }}, " +
+                    " errorMappers keys: ${errorMappers.keys}"
+        )
+    }
+
     override suspend fun setTargetFolderForThreads(
         account: Account?,
         folder: MailFolder?,
@@ -117,10 +126,19 @@ class DefaultThreadRepository @Inject constructor(
         activity: Activity? // Parameter for future use if auth refresh needs activity
     ) {
         cancelAndClearJob("Launching new thread fetch for ${folder.displayName}. Refresh: $isRefresh")
+        Log.d(
+            TAG,
+            "[${folder.displayName}] launchThreadFetchJobInternal for account type: ${account.providerType}"
+        )
 
         val providerType = account.providerType.uppercase()
         val apiService = mailApiServices[providerType]
         val errorMapper = errorMappers[providerType]
+
+        Log.d(
+            TAG,
+            "[${folder.displayName}] Using ApiService: ${apiService?.javaClass?.name ?: "NULL"} for provider: $providerType"
+        )
 
         if (apiService == null || errorMapper == null) {
             val errorMsg =
@@ -158,13 +176,15 @@ class DefaultThreadRepository @Inject constructor(
                 }
 
                 val initialMessages = initialMessagesResult.getOrThrow()
-                if (initialMessages.isEmpty()) {
-                    Log.i(
-                        TAG,
-                        "[${folder.displayName}] No initial messages found. Folder might be empty."
-                    )
-                    _threadDataState.value = ThreadDataState.Success(emptyList())
-                    return@launch
+                Log.d(
+                    TAG,
+                    "[${folder.displayName}] Fetched ${initialMessages.size} initial messages."
+                )
+                if (initialMessages.isNotEmpty()) {
+                    Log.d(
+                        TAG, "[${folder.displayName}] First 5 initial messages (or fewer): " +
+                                initialMessages.take(5)
+                                    .joinToString { "MsgID: ${it.id}, ThreadID: ${it.threadId}" })
                 }
 
                 val uniqueThreadIds = initialMessages.mapNotNull { it.threadId }.distinct()
@@ -172,6 +192,14 @@ class DefaultThreadRepository @Inject constructor(
                     TAG,
                     "[${folder.displayName}] Discovered ${uniqueThreadIds.size} unique thread IDs from ${initialMessages.size} initial messages."
                 )
+                if (uniqueThreadIds.isNotEmpty()) {
+                    Log.d(
+                        TAG,
+                        "[${folder.displayName}] Unique thread IDs (first 5 or fewer): ${
+                            uniqueThreadIds.take(5)
+                        }"
+                    )
+                }
 
                 if (uniqueThreadIds.isEmpty()) {
                     Log.i(
@@ -192,11 +220,18 @@ class DefaultThreadRepository @Inject constructor(
                                 TAG,
                                 "[${folder.displayName}] Fetching full details for thread ID: $threadId"
                             )
-                            val messagesInThreadResult = apiService.getMessagesForThread(threadId)
+                            val messagesInThreadResult = apiService.getMessagesForThread(
+                                threadId = threadId,
+                                folderId = folder.id
+                            )
                             ensureActive()
 
                             if (messagesInThreadResult.isSuccess) {
                                 val messages = messagesInThreadResult.getOrThrow()
+                                Log.d(
+                                    TAG,
+                                    "[${folder.displayName}] Thread $threadId: Fetched ${messages.size} messages."
+                                )
                                 if (messages.isNotEmpty()) {
                                     assembleMailThread(threadId, messages, account.id)
                                 } else {
@@ -224,6 +259,12 @@ class DefaultThreadRepository @Inject constructor(
                     TAG,
                     "[${folder.displayName}] Successfully assembled ${sortedThreads.size} threads."
                 )
+                if (sortedThreads.isNotEmpty()) {
+                    Log.d(
+                        TAG, "[${folder.displayName}] First 3 assembled threads (or fewer): " +
+                                sortedThreads.take(3)
+                                    .joinToString { "ThreadID: ${it.id}, Subject: '${it.subject}', Msgs: ${it.messages.size}" })
+                }
                 _threadDataState.value = ThreadDataState.Success(sortedThreads)
 
             } catch (e: CancellationException) {
