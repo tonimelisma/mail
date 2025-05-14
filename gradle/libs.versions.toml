@@ -46,6 +46,7 @@ appAuth = "0.11.1" # Latest stable version as of May 2025
 browserCustomTabs = "1.8.0" # Latest stable version as of May 2025
 
 ksp = "2.0.0-1.0.22" # Added KSP version
+datastorePreferences = "1.1.1" # <-- ADDED DATASTORE VERSION
 
 [libraries]
 kotlin-stdlib = { group = "org.jetbrains.kotlin", name = "kotlin-stdlib", version.ref = "kotlin" }
@@ -113,6 +114,8 @@ mockk-agent = { group = "io.mockk", name = "mockk-agent-jvm", version.ref = "moc
 
 turbine = { group = "app.cash.turbine", name = "turbine", version.ref = "turbine" }
 
+# DataStore Preferences
+androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastorePreferences" } # <-- ADDED DATASTORE LIBRARY
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

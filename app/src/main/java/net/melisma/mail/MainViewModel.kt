@@ -28,6 +28,8 @@ import net.melisma.core_data.model.MailThread
 import net.melisma.core_data.model.Message
 import net.melisma.core_data.model.MessageDataState
 import net.melisma.core_data.model.ThreadDataState
+import net.melisma.core_data.preferences.MailViewModePreference
+import net.melisma.core_data.preferences.UserPreferencesRepository
 import net.melisma.core_data.repository.AccountRepository
 import net.melisma.core_data.repository.FolderRepository
 import net.melisma.core_data.repository.MessageRepository
@@ -37,7 +39,8 @@ import net.melisma.data.repository.DefaultAccountRepository
 import javax.inject.Inject
 
 // Define ViewMode enum before MainScreenState
-enum class ViewMode { THREADS, MESSAGES }
+// enum class ViewMode { THREADS, MESSAGES } // <-- REMOVE THIS
+typealias ViewMode = MailViewModePreference // <-- ADD THIS TYPEALIAS
 
 @Immutable
 data class MainScreenState(
@@ -49,7 +52,7 @@ data class MainScreenState(
     val selectedFolder: MailFolder? = null,
     val messageDataState: MessageDataState = MessageDataState.Initial,
     val threadDataState: ThreadDataState = ThreadDataState.Initial,
-    val currentViewMode: ViewMode = ViewMode.THREADS,
+    val currentViewMode: ViewMode = MailViewModePreference.THREADS, // <-- UPDATE DEFAULT
     val toastMessage: String? = null,
     val pendingGoogleConsentAccountId: String? = null
 ) {
@@ -78,7 +81,8 @@ class MainViewModel @Inject constructor(
     private val accountRepository: AccountRepository,
     private val folderRepository: FolderRepository,
     private val messageRepository: MessageRepository,
-    private val threadRepository: ThreadRepository
+    private val threadRepository: ThreadRepository,
+    private val userPreferencesRepository: UserPreferencesRepository
 ) : ViewModel() {
 
     private val TAG = "MainViewModel_AppAuth"
@@ -109,6 +113,7 @@ class MainViewModel @Inject constructor(
         observeFolderRepository()
         observeMessageRepository()
         observeThreadRepository()
+        observeUserPreferences()
 
         if (accountRepository is DefaultAccountRepository) {
             Log.d(
@@ -364,6 +369,32 @@ class MainViewModel @Inject constructor(
         Log.d(TAG, "MainViewModel: Finished setting up ThreadRepository observation flow.")
     }
 
+    private fun observeUserPreferences() {
+        viewModelScope.launch {
+            userPreferencesRepository.userPreferencesFlow.collect { preferences ->
+                Log.d(TAG, "User preference for ViewMode loaded: ${preferences.mailViewMode}")
+                val currentUiStateViewMode = _uiState.value.currentViewMode
+                if (currentUiStateViewMode != preferences.mailViewMode) {
+                    _uiState.update { it.copy(currentViewMode = preferences.mailViewMode) }
+                    // If a folder is already selected, re-trigger fetch for the new view mode
+                    _uiState.value.selectedFolder?.let { folder ->
+                        _uiState.value.accounts.find { it.id == _uiState.value.selectedFolderAccountId }
+                            ?.let { account ->
+                                Log.d(
+                                    TAG,
+                                    "Preference changed, re-selecting folder ${folder.displayName} for new view mode ${preferences.mailViewMode}"
+                                )
+                                selectFolder(
+                                    folder,
+                                    account
+                                ) // selectFolder will use the updated currentViewMode from _uiState
+                            }
+                    }
+                }
+            }
+        }
+    }
+
     fun addAccount(activity: Activity) {
         Log.d(TAG, "addAccount() called for Microsoft account")
         viewModelScope.launch {
@@ -545,12 +576,14 @@ class MainViewModel @Inject constructor(
         val isSameFolderAndAccount =
             folder.id == _uiState.value.selectedFolder?.id && accountId == _uiState.value.selectedFolderAccountId
 
+        // Check if data for the *current* view mode is already loaded or loading for this folder
         if (isSameFolderAndAccount) {
             if (_uiState.value.currentViewMode == ViewMode.THREADS && _uiState.value.threadDataState !is ThreadDataState.Initial) {
                 Log.d(
                     TAG,
                     "Folder ${folder.displayName} already selected for THREADS view and data exists/loading. Skipping full re-fetch."
                 )
+                // Update selected folder state, but don't re-fetch
                 _uiState.update {
                     it.copy(
                         selectedFolder = folder,
@@ -564,6 +597,7 @@ class MainViewModel @Inject constructor(
                     TAG,
                     "Folder ${folder.displayName} already selected for MESSAGES view and data exists/loading. Skipping full re-fetch."
                 )
+                // Update selected folder state, but don't re-fetch
                 _uiState.update {
                     it.copy(
                         selectedFolder = folder,
@@ -577,14 +611,28 @@ class MainViewModel @Inject constructor(
         _uiState.update { it.copy(selectedFolder = folder, selectedFolderAccountId = accountId) }
 
         viewModelScope.launch {
+            // The logic here should correctly use the _uiState.value.currentViewMode which is now updated by observeUserPreferences
             if (_uiState.value.currentViewMode == ViewMode.THREADS) {
-                if (_uiState.value.messageDataState !is MessageDataState.Initial) {
-                    messageRepository.setTargetFolder(null, null)
+                Log.d(
+                    TAG,
+                    "selectFolder: Current view mode is THREADS. Clearing message state, setting target for threads."
+                )
+                // Clear the other view's data and trigger fetch for the current view.
+                if (_uiState.value.messageDataState !is MessageDataState.Initial) { // Only reset if not already initial
+                    messageRepository.setTargetFolder(null, null) // Reset message repo
                 }
                 threadRepository.setTargetFolderForThreads(account, folder)
-            } else {
-                if (_uiState.value.threadDataState !is ThreadDataState.Initial) {
-                    threadRepository.setTargetFolderForThreads(null, null, null)
+            } else { // ViewMode.MESSAGES
+                Log.d(
+                    TAG,
+                    "selectFolder: Current view mode is MESSAGES. Clearing thread state, setting target for messages."
+                )
+                if (_uiState.value.threadDataState !is ThreadDataState.Initial) { // Only reset if not already initial
+                    threadRepository.setTargetFolderForThreads(
+                        null,
+                        null,
+                        null
+                    ) // Reset thread repo
                 }
                 messageRepository.setTargetFolder(account, folder)
             }
@@ -634,6 +682,8 @@ class MainViewModel @Inject constructor(
                 capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
     }
 
+    // REMOVE THE OLD toggleViewMode()
+    /*
     fun toggleViewMode() {
         val newMode =
             if (_uiState.value.currentViewMode == ViewMode.THREADS) ViewMode.MESSAGES else ViewMode.THREADS
@@ -658,6 +708,49 @@ class MainViewModel @Inject constructor(
             TAG,
             "No folder selected, view mode toggled but no data fetch triggered for folder."
         )
+    }
+    */
+
+    // ADD THE NEW setViewModePreference FUNCTION
+    fun setViewModePreference(newMode: ViewMode) {
+        Log.i(TAG, "setViewModePreference called with new mode: $newMode")
+        if (_uiState.value.currentViewMode == newMode) {
+            Log.d(TAG, "setViewModePreference: View mode is already $newMode. No change.")
+            return // No change
+        }
+
+        viewModelScope.launch {
+            userPreferencesRepository.updateMailViewMode(newMode)
+            // userPreferencesFlow in observeUserPreferences will automatically update _uiState.value.currentViewMode
+            // and trigger re-selection of folder if needed.
+            // We also explicitly reset the *other* view's data here to ensure a clean switch.
+            _uiState.update { currentState ->
+                currentState.copy(
+                    // currentViewMode will be updated by the flow, but ensure other data states are reset
+                    messageDataState = if (newMode == ViewMode.THREADS && currentState.messageDataState !is MessageDataState.Initial) {
+                        Log.d(
+                            TAG,
+                            "setViewModePreference: Switching to THREADS, resetting MessageDataState."
+                        )
+                        MessageDataState.Initial
+                    } else {
+                        currentState.messageDataState
+                    },
+                    threadDataState = if (newMode == ViewMode.MESSAGES && currentState.threadDataState !is ThreadDataState.Initial) {
+                        Log.d(
+                            TAG,
+                            "setViewModePreference: Switching to MESSAGES, resetting ThreadDataState."
+                        )
+                        ThreadDataState.Initial
+                    } else {
+                        currentState.threadDataState
+                    }
+                )
+            }
+            // The flow collector in observeUserPreferences should handle calling selectFolder.
+            // If a folder is selected, it will be re-selected for the new mode.
+            // If no folder is selected, nothing extra needs to happen here regarding data fetching.
+        }
     }
 
     override fun onCleared() {

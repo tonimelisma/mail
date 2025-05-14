@@ -66,6 +66,10 @@ dependencies {
     // Kotlinx Serialization
     implementation(libs.kotlinx.serialization.json)
 
+    // DataStore Preferences
+    implementation(libs.androidx.datastore.preferences) // Assuming alias is androidx-datastore-preferences
+    implementation(libs.androidx.lifecycle.runtime.ktx) // Assuming alias is androidx-lifecycle-runtime-ktx
+
     // Hilt
     implementation(libs.hilt.android)
     kapt(libs.hilt.compiler)

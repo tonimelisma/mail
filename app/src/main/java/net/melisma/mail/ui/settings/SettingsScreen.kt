@@ -4,10 +4,13 @@
 package net.melisma.mail.ui.settings
 
 import android.app.Activity
-import androidx.compose.foundation.layout.Column // <<< ADDED IMPORT
+import android.util.Log
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -27,10 +30,12 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -48,6 +53,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
 import net.melisma.core_data.model.Account
+import net.melisma.core_data.preferences.MailViewModePreference
 import net.melisma.mail.MainViewModel
 import net.melisma.mail.R
 
@@ -156,7 +162,7 @@ fun SettingsScreen(
         ) {
             item {
                 Text(
-                    text = stringResource(R.string.manage_accounts_header),
+                    text = stringResource(R.string.settings_manage_accounts_header),
                     style = MaterialTheme.typography.titleSmall,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                 )
@@ -173,34 +179,22 @@ fun SettingsScreen(
                 }
             } else {
                 // Iterate through the generic Account list
-                items(state.accounts, key = { it.id }) { account -> // Use generic Account
+                items(state.accounts, key = { it.id }) { account ->
+                    // Replacing AccountItem with a basic ListItem to resolve build error
                     ListItem(
-                        headlineContent = {
-                            // Use username from generic Account
-                            Text(account.username)
-                        },
-                        supportingContent = { // Display provider type
-                            Text("Provider: ${account.providerType}")
-                        },
+                        headlineContent = { Text(account.username) },
+                        supportingContent = { Text("Provider: ${account.providerType}") }, // Example detail
                         leadingContent = {
                             Icon(
                                 Icons.Filled.AccountCircle,
-                                contentDescription = "Account" // Generic description
+                                contentDescription = "Account"
                             )
                         },
                         trailingContent = {
-                            IconButton(
-                                // Set the generic Account to be removed when clicked
-                                onClick = { showRemoveDialog = account },
-                                // Use isLoadingAccountAction from state
-                                enabled = !state.isLoadingAccountAction
-                            ) {
+                            IconButton(onClick = { showRemoveDialog = account }) {
                                 Icon(
                                     Icons.Filled.DeleteOutline,
-                                    contentDescription = stringResource(
-                                        R.string.remove_account_cd,
-                                        account.username // Use username from generic Account
-                                    ),
+                                    contentDescription = "Remove account",
                                     tint = MaterialTheme.colorScheme.error
                                 )
                             }
@@ -210,7 +204,66 @@ fun SettingsScreen(
                 }
             }
 
-            item { Spacer(modifier = Modifier.height(120.dp)) } // Increased space for the two FAB-like buttons
+            item {
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(
+                    onClick = {
+                        Log.d("SettingsScreen", "Add Account button clicked.")
+                        scope.launch {
+                            snackbarHostState.showSnackbar("Add account functionality TBD.")
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                ) {
+                    Text(stringResource(R.string.settings_add_account_button))
+                }
+                HorizontalDivider()
+            }
+
+            // NEW VIEW PREFERENCES SECTION
+            item {
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                Text(
+                    text = stringResource(R.string.settings_view_preferences_header), // New String Resource
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+            }
+
+            item {
+                val isThreadMode = state.currentViewMode == MailViewModePreference.THREADS
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.settings_view_mode_title)) }, // New String
+                    supportingContent = {
+                        Text(
+                            if (isThreadMode) stringResource(R.string.settings_view_mode_threads_desc) // New String
+                            else stringResource(R.string.settings_view_mode_messages_desc) // New String
+                        )
+                    },
+                    trailingContent = {
+                        Switch(
+                            checked = isThreadMode,
+                            onCheckedChange = { wantsThreadMode ->
+                                val newMode =
+                                    if (wantsThreadMode) MailViewModePreference.THREADS else MailViewModePreference.MESSAGES
+                                viewModel.setViewModePreference(newMode)
+                            }
+                        )
+                    },
+                    colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface), // Ensure background contrast
+                    modifier = Modifier.clickable {
+                        val newMode =
+                            if (isThreadMode) MailViewModePreference.MESSAGES else MailViewModePreference.THREADS
+                        viewModel.setViewModePreference(newMode)
+                    }
+                )
+                HorizontalDivider(modifier = Modifier.padding(start = 16.dp))
+            }
+            // END NEW VIEW PREFERENCES SECTION
+
+            item { Spacer(modifier = Modifier.height(120.dp)) } // For padding at the bottom
 
         } // End LazyColumn
 

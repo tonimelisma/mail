@@ -43,7 +43,7 @@ class DefaultMessageRepository @Inject constructor(
     private var messageFetchJob: Job? = null
 
     private val messageListSelectFields = listOf(
-        "id", "receivedDateTime", "subject", "sender", "isRead", "bodyPreview"
+        "id", "conversationId", "receivedDateTime", "subject", "sender", "isRead", "bodyPreview"
     )
     private val messageListPageSize = 25
 

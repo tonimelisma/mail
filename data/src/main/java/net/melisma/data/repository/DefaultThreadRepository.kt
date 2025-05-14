@@ -140,6 +140,7 @@ class DefaultThreadRepository @Inject constructor(
                 )
                 val initialMessagesResult = apiService.getMessagesForFolder(
                     folderId = folder.id,
+                    selectFields = listOf("id", "conversationId"),
                     maxResults = initialMessageFetchCountForThreadDiscovery
                 )
                 ensureActive() // Check for cancellation

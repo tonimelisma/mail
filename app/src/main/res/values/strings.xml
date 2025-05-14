@@ -57,4 +57,11 @@
     <string name="no_threads_title">No Threads</string>
     <string name="folder_contains_no_threads">This folder contains no threads.</string>
 
+    <string name="settings_view_preferences_header">View Preferences</string>
+    <string name="settings_view_mode_title">Email Display Mode</string>
+    <string name="settings_view_mode_threads_desc">Group emails by conversation (threaded)</string>
+    <string name="settings_view_mode_messages_desc">Show individual emails in a flat list</string>
+    <string name="settings_manage_accounts_header">Manage Accounts</string>
+    <string name="settings_add_account_button">Add Another Account</string>
+
 </resources>

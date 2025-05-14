@@ -20,15 +20,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.List
-import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
@@ -304,12 +299,12 @@ fun MainApp(
                     title = title,
                     onNavigationClick = { scope.launch { drawerState.open() } },
                     actions = {
-                        IconButton(onClick = { viewModel.toggleViewMode() }) {
-                            Icon(
-                                imageVector = if (state.currentViewMode == ViewMode.THREADS) Icons.AutoMirrored.Filled.List else Icons.Filled.Forum,
-                                contentDescription = if (state.currentViewMode == ViewMode.THREADS) "Switch to Message View" else "Switch to Thread View"
-                            )
-                        }
+                        // IconButton(onClick = { viewModel.toggleViewMode() }) { // <-- REMOVE THIS BLOCK
+                        //     Icon(
+                        //         imageVector = if (state.currentViewMode == ViewMode.THREADS) Icons.AutoMirrored.Filled.List else Icons.Filled.Forum,
+                        //         contentDescription = if (state.currentViewMode == ViewMode.THREADS) "Switch to Message View" else "Switch to Thread View"
+                        //     )
+                        // }
                     }
                 )
             },
