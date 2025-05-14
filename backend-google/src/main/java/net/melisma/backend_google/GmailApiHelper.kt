@@ -25,6 +25,7 @@ import net.melisma.backend_google.model.GmailLabel
 import net.melisma.backend_google.model.GmailLabelList
 import net.melisma.backend_google.model.GmailMessage
 import net.melisma.backend_google.model.GmailMessageList
+import net.melisma.backend_google.model.GmailThread
 import net.melisma.backend_google.model.MessagePart // Added for clarity in recursive search
 import net.melisma.backend_google.model.MessagePartHeader
 import net.melisma.core_data.datasource.MailApiService
@@ -452,6 +453,7 @@ class GmailApiHelper @Inject constructor(
 
         return Message(
             id = gmailMessage.id,
+            threadId = gmailMessage.threadId,
             subject = subject,
             receivedDateTime = formattedDate,
             senderName = senderName,
@@ -681,6 +683,50 @@ class GmailApiHelper @Inject constructor(
         } catch (e: Exception) {
             Log.e(TAG, "Exception in moveMessage for $messageId to $targetFolderId", e)
             Result.failure(Exception(errorMapper.mapNetworkOrApiException(e)))
+        }
+    }
+
+    override suspend fun getMessagesForThread(threadId: String): Result<List<Message>> {
+        Log.d(TAG, "getMessagesForThread (Gmail): Fetching messages for threadId: $threadId")
+        return try {
+            val response: HttpResponse = httpClient.get("$BASE_URL/threads/$threadId") {
+                parameter(
+                    "format",
+                    "FULL"
+                ) // Request full message details for messages within the thread
+            }
+
+            if (!response.status.isSuccess()) {
+                val errorBody = response.bodyAsText()
+                Log.e(TAG, "Error fetching Gmail thread $threadId: ${response.status} - $errorBody")
+                val httpException =
+                    IOException("Gmail API Error ${response.status.value} fetching thread $threadId: $errorBody")
+                return Result.failure(Exception(errorMapper.mapNetworkOrApiException(httpException)))
+            }
+
+            val rawJsonResponse = response.bodyAsText()
+            Log.d(
+                TAG,
+                "Thread ID: $threadId --- RAW JSON RESPONSE for THREAD.GET (Gmail): $rawJsonResponse"
+            )
+            val gmailThread = jsonParser.decodeFromString<GmailThread>(rawJsonResponse)
+
+            // Messages from threads.get with format=FULL should be complete.
+            // The existing mapGmailMessageToMessage will handle header recursion if needed.
+            val messages = gmailThread.messages.mapNotNull { nestedGmailMessage ->
+                mapGmailMessageToMessage(nestedGmailMessage)
+            }
+
+            Log.d(
+                TAG,
+                "Successfully mapped ${messages.size} messages for Gmail threadId: $threadId"
+            )
+            Result.success(messages)
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception in getMessagesForThread for threadId $threadId (Gmail)", e)
+            val errorMessageString = errorMapper.mapNetworkOrApiException(e)
+            Result.failure(Exception(errorMessageString))
         }
     }
 }

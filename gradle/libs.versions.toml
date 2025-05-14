@@ -45,6 +45,8 @@ appAuth = "0.11.1" # Latest stable version as of May 2025
 # Browser for CustomTabs support
 browserCustomTabs = "1.8.0" # Latest stable version as of May 2025
 
+ksp = "2.0.0-1.0.22" # Added KSP version
+
 [libraries]
 kotlin-stdlib = { group = "org.jetbrains.kotlin", name = "kotlin-stdlib", version.ref = "kotlin" }
 kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }
@@ -116,6 +118,7 @@ turbine = { group = "app.cash.turbine", name = "turbine", version.ref = "turbine
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" } # Compose compiler plugin is now part of AGP/Kotlin plugin
+kotlin-ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" } # Added KSP plugin
 android-library = { id = "com.android.library", version.ref = "agp" }
 hilt-gradle = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }
 kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }

@@ -70,6 +70,14 @@ interface MailApiService {
         targetFolderId: String
     ): Result<Boolean>
 
+    /**
+     * Fetches all messages belonging to a specific thread/conversation.
+     *
+     * @param threadId The ID of the thread (for Gmail) or conversation (for Outlook).
+     * @return Result containing the list of [Message] objects in the thread/conversation or an error.
+     */
+    suspend fun getMessagesForThread(threadId: String): Result<List<Message>>
+
     // Future methods to consider:
     // - getMessageContent(messageId) - For fetching full message content
     // - sendMessage(message) - For sending new messages

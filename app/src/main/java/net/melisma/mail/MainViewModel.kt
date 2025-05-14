@@ -24,15 +24,20 @@ import net.melisma.core_data.model.Account
 import net.melisma.core_data.model.AuthState
 import net.melisma.core_data.model.FolderFetchState
 import net.melisma.core_data.model.MailFolder
+import net.melisma.core_data.model.MailThread
 import net.melisma.core_data.model.Message
 import net.melisma.core_data.model.MessageDataState
+import net.melisma.core_data.model.ThreadDataState
 import net.melisma.core_data.repository.AccountRepository
 import net.melisma.core_data.repository.FolderRepository
 import net.melisma.core_data.repository.MessageRepository
+import net.melisma.core_data.repository.ThreadRepository
 import net.melisma.core_data.repository.capabilities.GoogleAccountCapability
 import net.melisma.data.repository.DefaultAccountRepository
 import javax.inject.Inject
 
+// Define ViewMode enum before MainScreenState
+enum class ViewMode { THREADS, MESSAGES }
 
 @Immutable
 data class MainScreenState(
@@ -43,6 +48,8 @@ data class MainScreenState(
     val selectedFolderAccountId: String? = null,
     val selectedFolder: MailFolder? = null,
     val messageDataState: MessageDataState = MessageDataState.Initial,
+    val threadDataState: ThreadDataState = ThreadDataState.Initial,
+    val currentViewMode: ViewMode = ViewMode.THREADS,
     val toastMessage: String? = null,
     val pendingGoogleConsentAccountId: String? = null
 ) {
@@ -54,14 +61,24 @@ data class MainScreenState(
         get() = (messageDataState as? MessageDataState.Success)?.messages
     val messageError: String?
         get() = (messageDataState as? MessageDataState.Error)?.error
+    val isThreadLoading: Boolean
+        get() = threadDataState is ThreadDataState.Loading
+    val threads: List<MailThread>?
+        get() = (threadDataState as? ThreadDataState.Success)?.threads
+    val threadError: String?
+        get() = (threadDataState as? ThreadDataState.Error)?.error
 }
+
+// Define ViewMode enum, can be outside or nested if preferred by style guide
+// enum class ViewMode { THREADS, MESSAGES } // This line is now effectively removed by moving it up
 
 @HiltViewModel
 class MainViewModel @Inject constructor(
     @ApplicationContext private val applicationContext: Context,
     private val accountRepository: AccountRepository,
     private val folderRepository: FolderRepository,
-    private val messageRepository: MessageRepository
+    private val messageRepository: MessageRepository,
+    private val threadRepository: ThreadRepository
 ) : ViewModel() {
 
     private val TAG = "MainViewModel_AppAuth"
@@ -89,8 +106,9 @@ class MainViewModel @Inject constructor(
     init {
         Log.d(TAG, "ViewModel Initializing")
         observeAccountRepository()
-        observeFolderRepository() // Restored body
-        observeMessageRepository() // Restored body
+        observeFolderRepository()
+        observeMessageRepository()
+        observeThreadRepository()
 
         if (accountRepository is DefaultAccountRepository) {
             Log.d(
@@ -211,7 +229,6 @@ class MainViewModel @Inject constructor(
         Log.d(TAG, "Finished setting up AccountRepository observation flows")
     }
 
-    // <<< RESTORED BODY for observeFolderRepository >>>
     private fun observeFolderRepository() {
         Log.d(TAG, "MainViewModel: observeFolderRepository() - Setting up flow")
 
@@ -275,7 +292,6 @@ class MainViewModel @Inject constructor(
         Log.d(TAG, "MainViewModel: Finished setting up FolderRepository observation flow")
     }
 
-    // <<< RESTORED BODY for observeMessageRepository >>>
     private fun observeMessageRepository() {
         Log.d(TAG, "MainViewModel: observeMessageRepository() - Setting up flow")
 
@@ -332,6 +348,21 @@ class MainViewModel @Inject constructor(
         Log.d(TAG, "MainViewModel: Finished setting up MessageRepository observation flow")
     }
 
+    private fun observeThreadRepository() {
+        Log.d(TAG, "MainViewModel: observeThreadRepository() - Setting up flow")
+        threadRepository.threadDataState
+            .onEach { newThreadState ->
+                if (_uiState.value.threadDataState != newThreadState) {
+                    Log.d(
+                        TAG,
+                        "MainViewModel: ThreadRepo State Changed: ${newThreadState::class.simpleName}"
+                    )
+                    _uiState.update { it.copy(threadDataState = newThreadState) }
+                    Log.d(TAG, "MainViewModel: UI state updated with new thread state.")
+                }
+            }.launchIn(viewModelScope)
+        Log.d(TAG, "MainViewModel: Finished setting up ThreadRepository observation flow.")
+    }
 
     fun addAccount(activity: Activity) {
         Log.d(TAG, "addAccount() called for Microsoft account")
@@ -508,14 +539,56 @@ class MainViewModel @Inject constructor(
         val accountId = account.id
         Log.i(
             TAG,
-            "Folder selected: '${folder.displayName}' from account ${account.username} (ID: $accountId)"
+            "Folder selected: '${folder.displayName}' from account ${account.username} (ID: $accountId), Current ViewMode: ${_uiState.value.currentViewMode}"
         )
-        if (folder.id == _uiState.value.selectedFolder?.id && accountId == _uiState.value.selectedFolderAccountId) {
-            Log.d(TAG, "Folder ${folder.displayName} already selected. Skipping.")
-            return
+
+        val isSameFolderAndAccount =
+            folder.id == _uiState.value.selectedFolder?.id && accountId == _uiState.value.selectedFolderAccountId
+
+        if (isSameFolderAndAccount) {
+            if (_uiState.value.currentViewMode == ViewMode.THREADS && _uiState.value.threadDataState !is ThreadDataState.Initial) {
+                Log.d(
+                    TAG,
+                    "Folder ${folder.displayName} already selected for THREADS view and data exists/loading. Skipping full re-fetch."
+                )
+                _uiState.update {
+                    it.copy(
+                        selectedFolder = folder,
+                        selectedFolderAccountId = accountId
+                    )
+                }
+                return
+            }
+            if (_uiState.value.currentViewMode == ViewMode.MESSAGES && _uiState.value.messageDataState !is MessageDataState.Initial) {
+                Log.d(
+                    TAG,
+                    "Folder ${folder.displayName} already selected for MESSAGES view and data exists/loading. Skipping full re-fetch."
+                )
+                _uiState.update {
+                    it.copy(
+                        selectedFolder = folder,
+                        selectedFolderAccountId = accountId
+                    )
+                }
+                return
+            }
         }
+
         _uiState.update { it.copy(selectedFolder = folder, selectedFolderAccountId = accountId) }
-        viewModelScope.launch { messageRepository.setTargetFolder(account, folder) }
+
+        viewModelScope.launch {
+            if (_uiState.value.currentViewMode == ViewMode.THREADS) {
+                if (_uiState.value.messageDataState !is MessageDataState.Initial) {
+                    messageRepository.setTargetFolder(null, null)
+                }
+                threadRepository.setTargetFolderForThreads(account, folder)
+            } else {
+                if (_uiState.value.threadDataState !is ThreadDataState.Initial) {
+                    threadRepository.setTargetFolderForThreads(null, null, null)
+                }
+                messageRepository.setTargetFolder(account, folder)
+            }
+        }
     }
 
     fun refreshAllFolders(activity: Activity?) {
@@ -523,11 +596,11 @@ class MainViewModel @Inject constructor(
         viewModelScope.launch { folderRepository.refreshAllFolders(activity) }
     }
 
-    fun refreshMessages(activity: Activity?) {
+    fun refreshCurrentView(activity: Activity?) {
         val currentSelectedFolder = _uiState.value.selectedFolder
         val currentSelectedAccountId = _uiState.value.selectedFolderAccountId
         if (currentSelectedFolder == null || currentSelectedAccountId == null) {
-            Log.w(TAG, "Refresh messages called but no folder/account selected.")
+            Log.w(TAG, "Refresh current view called but no folder/account selected.")
             tryEmitToastMessage("Select a folder first.")
             return
         }
@@ -535,11 +608,20 @@ class MainViewModel @Inject constructor(
             tryEmitToastMessage("No internet connection.")
             return
         }
-        Log.d(
-            TAG,
-            "Requesting message refresh via MessageRepository for folder: ${currentSelectedFolder.id}"
-        )
-        viewModelScope.launch { messageRepository.refreshMessages(activity) }
+
+        if (_uiState.value.currentViewMode == ViewMode.THREADS) {
+            Log.d(
+                TAG,
+                "Requesting thread refresh via ThreadRepository for folder: ${currentSelectedFolder.displayName}"
+            )
+            viewModelScope.launch { threadRepository.refreshThreads(activity) }
+        } else {
+            Log.d(
+                TAG,
+                "Requesting message refresh via MessageRepository for folder: ${currentSelectedFolder.displayName}"
+            )
+            viewModelScope.launch { messageRepository.refreshMessages(activity) }
+        }
     }
 
     private fun isOnline(): Boolean {
@@ -550,6 +632,32 @@ class MainViewModel @Inject constructor(
         return capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
                 capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ||
                 capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+    }
+
+    fun toggleViewMode() {
+        val newMode =
+            if (_uiState.value.currentViewMode == ViewMode.THREADS) ViewMode.MESSAGES else ViewMode.THREADS
+        Log.i(TAG, "Toggling view mode from ${_uiState.value.currentViewMode} to: $newMode")
+        _uiState.update {
+            it.copy(
+                currentViewMode = newMode,
+                messageDataState = if (newMode == ViewMode.THREADS) MessageDataState.Initial else it.messageDataState,
+                threadDataState = if (newMode == ViewMode.MESSAGES) ThreadDataState.Initial else it.threadDataState
+            )
+        }
+        _uiState.value.selectedFolder?.let { folder ->
+            _uiState.value.accounts.find { it.id == _uiState.value.selectedFolderAccountId }
+                ?.let { account ->
+                    Log.d(
+                        TAG,
+                        "Re-selecting folder ${folder.displayName} for new view mode $newMode"
+                    )
+                    selectFolder(folder, account)
+                }
+        } ?: Log.d(
+            TAG,
+            "No folder selected, view mode toggled but no data fetch triggered for folder."
+        )
     }
 
     override fun onCleared() {

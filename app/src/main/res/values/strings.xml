@@ -50,4 +50,11 @@
     <string name="cancel_action">Cancel</string>
     <string name="cd_navigate_up">Navigate Up</string>
 
+    <string name="select_a_folder_to_see_threads">Select a folder to see threads</string>
+    <string name="cd_error_loading_threads">Error loading threads icon</string>
+    <string name="error_loading_threads_title">Error Loading Threads</string>
+    <string name="cd_no_threads">No threads icon</string>
+    <string name="no_threads_title">No Threads</string>
+    <string name="folder_contains_no_threads">This folder contains no threads.</string>
+
 </resources>

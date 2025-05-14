@@ -135,7 +135,7 @@ private fun MessageListSuccessContent(messages: List<Message>, onMessageClick: (
 
 /** Displays a centered message, typically used for error or empty states. */
 @Composable
-private fun FullScreenMessage(
+internal fun FullScreenMessage(
     icon: ImageVector?,
     iconContentDescription: String?,
     title: String,
@@ -189,7 +189,7 @@ private fun FullScreenMessage(
 
 /** Displays a simple header showing the username of the current account context. */
 @Composable
-private fun AccountContextHeader(account: Account) {
+internal fun AccountContextHeader(account: Account) {
     Row(
         modifier = Modifier
             .fillMaxWidth()

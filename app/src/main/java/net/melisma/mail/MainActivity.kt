@@ -3,7 +3,7 @@ package net.melisma.mail
 
 import android.app.Activity
 import android.content.Context
-import android.content.Intent // Required for Intent
+import android.content.Intent
 import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
@@ -20,14 +20,20 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.List
+import androidx.compose.material.icons.filled.Forum
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -47,9 +53,11 @@ import androidx.lifecycle.lifecycleScope
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch
 import net.melisma.core_data.model.AuthState
+import net.melisma.core_data.model.ThreadDataState
 import net.melisma.mail.ui.MailDrawerContent
 import net.melisma.mail.ui.MailTopAppBar
 import net.melisma.mail.ui.MessageListContent
+import net.melisma.mail.ui.ThreadListContent
 import net.melisma.mail.ui.settings.SettingsScreen
 import net.melisma.mail.ui.theme.MailTheme
 import net.openid.appauth.AuthorizationException
@@ -294,7 +302,15 @@ fun MainApp(
                 val title = state.selectedFolder?.displayName ?: stringResource(R.string.app_name)
                 MailTopAppBar(
                     title = title,
-                    onNavigationClick = { scope.launch { drawerState.open() } }
+                    onNavigationClick = { scope.launch { drawerState.open() } },
+                    actions = {
+                        IconButton(onClick = { viewModel.toggleViewMode() }) {
+                            Icon(
+                                imageVector = if (state.currentViewMode == ViewMode.THREADS) Icons.AutoMirrored.Filled.List else Icons.Filled.Forum,
+                                contentDescription = if (state.currentViewMode == ViewMode.THREADS) "Switch to Message View" else "Switch to Thread View"
+                            )
+                        }
+                    }
                 )
             },
             floatingActionButton = { /* Placeholder */ }
@@ -329,21 +345,40 @@ fun MainApp(
                             state.selectedFolder != null -> {
                                 val accountForMessages =
                                     state.accounts.find { it.id == state.selectedFolderAccountId }
-                                MessageListContent(
-                                    messageDataState = state.messageDataState,
-                                    accountContext = accountForMessages,
-                                    isRefreshing = state.isMessageLoading,
-                                    onRefresh = {
-                                        Log.d(TAG_COMPOSABLE, "Refresh triggered for messages.")
-                                        viewModel.refreshMessages(activity)
+                                val currentActivity = LocalContext.current as? Activity
+
+                                PullToRefreshBox(
+                                    isRefreshing = if (state.currentViewMode == ViewMode.THREADS) {
+                                        state.threadDataState is ThreadDataState.Loading && state.threads.isNullOrEmpty()
+                                    } else {
+                                        state.isMessageLoading && state.messages.isNullOrEmpty()
                                     },
-                                    onMessageClick = { messageId ->
-                                        showToast(
-                                            context,
-                                            "Clicked Message ID: $messageId (View not implemented)"
-                                        )
+                                    onRefresh = { viewModel.refreshCurrentView(currentActivity) },
+                                    modifier = Modifier.fillMaxSize()
+                                ) {
+                                    when (state.currentViewMode) {
+                                        ViewMode.THREADS -> {
+                                            ThreadListContent(
+                                                threadDataState = state.threadDataState,
+                                                accountContext = accountForMessages,
+                                                onThreadClick = { threadId ->
+                                                    showToast(context, "Thread ID: $threadId clicked (Detail view TBD)")
+                                                }
+                                            )
+                                        }
+                                        ViewMode.MESSAGES -> {
+                                            MessageListContent(
+                                                messageDataState = state.messageDataState,
+                                                accountContext = accountForMessages,
+                                                isRefreshing = state.isMessageLoading,
+                                                onRefresh = { viewModel.refreshCurrentView(currentActivity) },
+                                                onMessageClick = { messageId ->
+                                                    showToast(context, "Message ID: $messageId clicked (Detail view TBD)")
+                                                }
+                                            )
+                                        }
                                     }
-                                )
+                                }
                             }
                             else -> {
                                 Box(

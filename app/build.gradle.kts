@@ -4,7 +4,7 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
-    id("org.jetbrains.kotlin.kapt") // Apply kapt using its standard ID
+    alias(libs.plugins.kotlin.ksp)
     alias(libs.plugins.hilt.gradle)
 }
 
@@ -101,7 +101,7 @@ dependencies {
 
     // --- Hilt ---
     implementation(libs.hilt.android)
-    kapt(libs.hilt.compiler)
+    ksp(libs.hilt.compiler)
 
     // --- Coroutines ---
     implementation(libs.kotlinx.coroutines.core)
@@ -130,8 +130,4 @@ dependencies {
     androidTestImplementation(libs.androidx.ui.test.junit4)
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
-}
-
-kapt {
-    correctErrorTypes = true
 }

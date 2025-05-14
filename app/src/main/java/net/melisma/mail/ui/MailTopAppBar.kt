@@ -1,5 +1,6 @@
 package net.melisma.mail.ui
 
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -18,8 +19,7 @@ import net.melisma.mail.R // Ensure R is imported
 fun MailTopAppBar(
     title: String,
     onNavigationClick: () -> Unit,
-    // Removed selectedAccount parameter
-    // Removed actions parameter (or ensure it defaults to empty)
+    actions: @Composable RowScope.() -> Unit = {} // Added actions parameter
 ) {
     TopAppBar(
         title = { Text(title, maxLines = 1, overflow = TextOverflow.Ellipsis) },
@@ -31,9 +31,6 @@ fun MailTopAppBar(
                 )
             }
         },
-        actions = {
-            // Actions slot is now empty
-            // Placeholder for future actions like Search or Compose New Mail
-        }
+        actions = actions // Use the actions parameter here
     )
 }

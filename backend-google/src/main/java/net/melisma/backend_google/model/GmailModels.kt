@@ -111,3 +111,16 @@ data class MessagePart(
     @SerialName("body") val body: MessagePartBody? = null,
     @SerialName("parts") val parts: List<MessagePart>? = null
 )
+
+/**
+ * Model for a Gmail thread resource, typically returned by threads.get API.
+ */
+@Serializable
+data class GmailThread(
+    @SerialName("id") val id: String,
+    @SerialName("snippet") val snippet: String? = null, // Snippet of the latest message in the thread
+    @SerialName("historyId") val historyId: String,
+    // Messages are often included directly when fetching a thread,
+    // ensure your `GmailMessage` model is compatible.
+    @SerialName("messages") val messages: List<GmailMessage> = emptyList()
+)

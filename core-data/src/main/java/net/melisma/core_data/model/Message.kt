@@ -12,9 +12,11 @@ package net.melisma.core_data.model
  * @property senderAddress The email address of the sender.
  * @property bodyPreview A short plain text preview of the message body.
  * @property isRead A boolean flag indicating whether the message has been marked as read.
+ * @property threadId Stores Gmail threadId or Outlook conversationId
  */
 data class Message(
     val id: String,
+    val threadId: String?,
     val receivedDateTime: String, // Consider parsing this to a date/time type later if needed for sorting/logic
     val subject: String?,
     val senderName: String?,

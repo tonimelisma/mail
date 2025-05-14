@@ -45,9 +45,13 @@ private data class GraphMailFolder(
 @Serializable
 private data class GraphMessage(
     val id: String,
+    val conversationId: String?,
     val receivedDateTime: String? = null,
+    val sentDateTime: String? = null,
     val subject: String? = null,
     val sender: GraphRecipient? = null,
+    val from: GraphRecipient? = null,
+    val toRecipients: List<GraphRecipient> = emptyList(),
     val isRead: Boolean = true,
     val bodyPreview: String? = null
 )
@@ -251,17 +255,7 @@ class GraphApiHelper @Inject constructor(
 
             if (response.status.isSuccess()) {
                 val graphMessages = response.body<GraphCollection<GraphMessage>>().value
-                val messages = graphMessages.mapNotNull { graphMsg ->
-                    Message(
-                        id = graphMsg.id,
-                        receivedDateTime = graphMsg.receivedDateTime ?: "",
-                        subject = graphMsg.subject,
-                        senderName = graphMsg.sender?.emailAddress?.name,
-                        senderAddress = graphMsg.sender?.emailAddress?.address,
-                        bodyPreview = graphMsg.bodyPreview,
-                        isRead = graphMsg.isRead
-                    )
-                }
+                val messages = graphMessages.mapNotNull { mapGraphMessageToMessage(it) }
                 Log.d(TAG, "Successfully fetched ${messages.size} messages for folder $folderId.")
                 Result.success(messages)
             } else {
@@ -273,6 +267,64 @@ class GraphApiHelper @Inject constructor(
             Log.e(TAG, "Exception fetching messages for folder $folderId", e)
             Result.failure(errorMapper.mapExceptionToError(e))
         }
+    }
+
+    private fun mapGraphMessageToMessage(graphMessage: GraphMessage): Message {
+        val sender = graphMessage.sender // GraphMessage.sender is already GraphRecipient?
+        val from = graphMessage.from // Also GraphRecipient?
+        val effectiveSender = from ?: sender // Prefer 'from' if available
+
+        // Date: Prefer sentDateTime for sent items, otherwise receivedDateTime
+        // Assuming folder context isn't directly available here to check if it's "Sent Items"
+        // A more robust way might involve passing folder context or message properties indicating direction.
+        // For now, prioritize receivedDateTime as it's more consistently available.
+        val dateTimeStr = graphMessage.receivedDateTime ?: graphMessage.sentDateTime
+        val date = dateTimeStr?.let { parseOutlookDate(it) }
+            ?: java.util.Date() // parseOutlookDate needs to be robust
+
+        val outputDateFormat =
+            java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
+        outputDateFormat.timeZone = java.util.TimeZone.getTimeZone("UTC")
+
+        return Message(
+            id = graphMessage.id,
+            threadId = graphMessage.conversationId, // Map conversationId to threadId
+            receivedDateTime = outputDateFormat.format(date),
+            subject = graphMessage.subject,
+            senderName = effectiveSender?.emailAddress?.name,
+            senderAddress = effectiveSender?.emailAddress?.address,
+            bodyPreview = graphMessage.bodyPreview,
+            isRead = graphMessage.isRead
+                ?: true // Default to true if null, as per existing GraphMessage model
+        )
+    }
+
+    private fun parseOutlookDate(dateStr: String): java.util.Date? {
+        // Microsoft Graph typically uses ISO 8601 format.
+        // Examples: "2014-01-01T00:00:00Z" or with milliseconds "2014-01-01T00:00:00.123Z"
+        val formatters = listOf(
+            java.text.SimpleDateFormat(
+                "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS'Z'",
+                java.util.Locale.US
+            ), // With up to 7 millis
+            java.text.SimpleDateFormat(
+                "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",
+                java.util.Locale.US
+            ),     // With 3 millis
+            java.text.SimpleDateFormat(
+                "yyyy-MM-dd'T'HH:mm:ss'Z'",
+                java.util.Locale.US
+            )          // Without millis
+        )
+        for (formatter in formatters) {
+            formatter.timeZone = java.util.TimeZone.getTimeZone("UTC")
+            try {
+                return formatter.parse(dateStr.trim())
+            } catch (e: Exception) { /* Try next format */
+            }
+        }
+        Log.w(TAG, "Could not parse Outlook date string: '$dateStr' with known formats.")
+        return null
     }
 
     override suspend fun markMessageRead(
@@ -344,6 +396,56 @@ class GraphApiHelper @Inject constructor(
             }
         } catch (e: Exception) {
             Log.e(TAG, "Exception moving message $messageId to folder $targetFolderId", e)
+            Result.failure(errorMapper.mapExceptionToError(e))
+        }
+    }
+
+    override suspend fun getMessagesForThread(threadId: String): Result<List<Message>> {
+        Log.d(
+            TAG,
+            "getMessagesForThread (Outlook): Fetching messages for conversationId: $threadId"
+        )
+        return try {
+            val response: HttpResponse = httpClient.get("$MS_GRAPH_ROOT_ENDPOINT/me/messages") {
+                url {
+                    // Filter messages by conversationId
+                    parameters.append("\$filter", "conversationId eq '$threadId'")
+                    // Select necessary fields for the Message model
+                    parameters.append(
+                        "\$select",
+                        "id,conversationId,receivedDateTime,sentDateTime,subject,bodyPreview,sender,from,toRecipients,isRead"
+                    )
+                    parameters.append(
+                        "\$top",
+                        "100"
+                    ) // Sensible limit for messages in a single conversation view
+                    parameters.append(
+                        "\$orderby",
+                        "receivedDateTime asc"
+                    ) // Order messages chronologically
+                }
+                accept(Json)
+            }
+
+            if (response.status.isSuccess()) {
+                val graphMessageCollection = response.body<GraphCollection<GraphMessage>>()
+                val messages =
+                    graphMessageCollection.value.mapNotNull { mapGraphMessageToMessage(it) }
+                Log.d(
+                    TAG,
+                    "Successfully mapped ${messages.size} messages for Outlook conversationId: $threadId"
+                )
+                Result.success(messages)
+            } else {
+                val errorBody = response.bodyAsText()
+                Log.e(
+                    TAG,
+                    "Error fetching messages for conversation $threadId (Outlook): ${response.status} - $errorBody"
+                )
+                Result.failure(errorMapper.mapHttpError(response.status.value, errorBody))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception in getMessagesForThread for ID: $threadId (Outlook)", e)
             Result.failure(errorMapper.mapExceptionToError(e))
         }
     }
