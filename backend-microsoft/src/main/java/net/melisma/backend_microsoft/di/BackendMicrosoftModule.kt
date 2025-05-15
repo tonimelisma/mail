@@ -21,6 +21,7 @@ import kotlinx.serialization.json.Json
 import net.melisma.backend_microsoft.GraphApiHelper
 import net.melisma.backend_microsoft.auth.MicrosoftAuthManager
 import net.melisma.backend_microsoft.auth.MicrosoftKtorTokenProvider
+import net.melisma.backend_microsoft.auth.MicrosoftTokenPersistenceService
 import net.melisma.backend_microsoft.errors.MicrosoftErrorMapper
 import net.melisma.core_data.datasource.MailApiService
 import net.melisma.core_data.di.AuthConfigProvider
@@ -50,10 +51,11 @@ object BackendMicrosoftModule { // Changed to object module as it now only conta
     @Singleton
     fun provideMicrosoftAuthManager(
         @ApplicationContext context: Context,
-        authConfigProvider: AuthConfigProvider
+        authConfigProvider: AuthConfigProvider,
+        tokenPersistenceService: MicrosoftTokenPersistenceService
     ): MicrosoftAuthManager {
-        Log.d("BackendMSModule", "Providing MicrosoftAuthManager")
-        return MicrosoftAuthManager(context, authConfigProvider)
+        Log.d("BackendMSModule", "Providing MicrosoftAuthManager with TokenPersistenceService")
+        return MicrosoftAuthManager(context, authConfigProvider, tokenPersistenceService)
     }
 
     @Provides

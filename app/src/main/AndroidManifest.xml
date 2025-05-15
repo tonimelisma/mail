@@ -69,6 +69,17 @@
                 android:resource="@xml/google_authenticator" />
         </service>
 
+        <service
+            android:name="net.melisma.backend_microsoft.auth.MicrosoftAuthenticatorService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.accounts.AccountAuthenticator" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accounts.AccountAuthenticator"
+                android:resource="@xml/microsoft_authenticator" />
+        </service>
+
     </application>
 
 </manifest>
