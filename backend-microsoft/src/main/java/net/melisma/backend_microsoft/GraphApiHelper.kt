@@ -421,22 +421,26 @@ class GraphApiHelper @Inject constructor(
 
     override suspend fun getMessagesForThread(
         threadId: String,
-        folderId: String
+        folderId: String // This parameter will be ignored for this specific Graph API call
     ): Result<List<Message>> {
         Log.d(
             TAG,
-            "GraphApiHelper: getMessagesForThread (Outlook) called for conversationId: $threadId in folder: $folderId"
+            "GraphApiHelper: getMessagesForThread (Outlook) called for conversationId: $threadId. FolderId '$folderId' is ignored for global conversation fetch."
         )
         return try {
+            // Query the /me/messages endpoint and filter by conversationId for true cross-folder threading
             val response: HttpResponse =
-                httpClient.get("$MS_GRAPH_ROOT_ENDPOINT/me/mailFolders/$folderId/messages") {
+                httpClient.get("$MS_GRAPH_ROOT_ENDPOINT/me/messages") { // Changed from /me/mailFolders/$folderId/messages
                 url {
                     parameters.append("\$filter", "conversationId eq '$threadId'")
                     parameters.append(
                         "\$select",
                         "id,conversationId,receivedDateTime,sentDateTime,subject,bodyPreview,sender,from,toRecipients,ccRecipients,bccRecipients,isRead,parentFolderId,hasAttachments,importance,inferenceClassification,internetMessageId,isDraft,isReadReceiptRequested,replyTo,flag"
                     )
-                    parameters.append("\$top", "100")
+                    parameters.append(
+                        "\$top",
+                        "100"
+                    ) // Max messages per conversation; consider pagination if needed for >100
                 }
             }
 

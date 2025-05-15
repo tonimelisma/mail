@@ -28,9 +28,14 @@ import net.melisma.core_data.model.FolderFetchState
 import net.melisma.core_data.model.MailFolder
 import net.melisma.core_data.model.Message
 import net.melisma.core_data.model.MessageDataState
+import net.melisma.core_data.model.ThreadDataState
+import net.melisma.core_data.preferences.MailViewModePreference
+import net.melisma.core_data.preferences.UserPreferences
+import net.melisma.core_data.preferences.UserPreferencesRepository
 import net.melisma.core_data.repository.AccountRepository
 import net.melisma.core_data.repository.FolderRepository
 import net.melisma.core_data.repository.MessageRepository
+import net.melisma.core_data.repository.ThreadRepository
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -78,6 +83,8 @@ class MainViewModelTest {
     private lateinit var accountRepository: AccountRepository
     private lateinit var folderRepository: FolderRepository
     private lateinit var messageRepository: MessageRepository
+    private lateinit var threadRepository: ThreadRepository
+    private lateinit var userPreferencesRepository: UserPreferencesRepository
 
     // --- Flows for Mocks ---
     private lateinit var authStateFlow: MutableStateFlow<AuthState>
@@ -86,6 +93,8 @@ class MainViewModelTest {
     private lateinit var accountActionMessageFlow: MutableSharedFlow<String?> // Use SharedFlow for transient messages
     private lateinit var folderStatesFlow: MutableStateFlow<Map<String, FolderFetchState>>
     private lateinit var messageDataStateFlow: MutableStateFlow<MessageDataState>
+    private lateinit var threadDataStateFlow: MutableStateFlow<ThreadDataState>
+    private lateinit var userPreferencesFlow: MutableStateFlow<UserPreferences>
 
     // --- Class Under Test ---
     private lateinit var viewModel: MainViewModel
@@ -101,6 +110,7 @@ class MainViewModelTest {
         OffsetDateTime.now().minusDays(1).format(DateTimeFormatter.ISO_OFFSET_DATE_TIME)
     private val testMessage1 = Message(
         id = "msg1",
+        threadId = "testThreadId1",
         receivedDateTime = testDateTimeString,
         subject = "Test Subject 1",
         senderName = "Sender Name",
@@ -126,6 +136,8 @@ class MainViewModelTest {
             accountRepository = mockk(relaxUnitFun = true)
             folderRepository = mockk(relaxUnitFun = true)
             messageRepository = mockk(relaxUnitFun = true)
+            threadRepository = mockk(relaxUnitFun = true)
+            userPreferencesRepository = mockk(relaxUnitFun = true)
 
             authStateFlow = MutableStateFlow(AuthState.Initializing)
             accountsFlow = MutableStateFlow(emptyList())
@@ -133,6 +145,8 @@ class MainViewModelTest {
             accountActionMessageFlow = MutableSharedFlow(replay = 0, extraBufferCapacity = 1)
             folderStatesFlow = MutableStateFlow(emptyMap())
             messageDataStateFlow = MutableStateFlow(MessageDataState.Initial)
+            threadDataStateFlow = MutableStateFlow(ThreadDataState.Initial)
+            userPreferencesFlow = MutableStateFlow(UserPreferences(MailViewModePreference.THREADS))
 
             every { accountRepository.authState } returns authStateFlow.asStateFlow()
             every { accountRepository.accounts } returns accountsFlow.asStateFlow()
@@ -140,6 +154,8 @@ class MainViewModelTest {
             every { accountRepository.accountActionMessage } returns accountActionMessageFlow.asSharedFlow()
             every { folderRepository.observeFoldersState() } returns folderStatesFlow.asStateFlow()
             every { messageRepository.messageDataState } returns messageDataStateFlow.asStateFlow()
+            every { threadRepository.threadDataState } returns threadDataStateFlow.asStateFlow()
+            every { userPreferencesRepository.userPreferencesFlow } returns userPreferencesFlow.asStateFlow()
 
             coEvery { accountRepository.addAccount(any(), any()) } just runs
             coEvery { accountRepository.removeAccount(any()) } just runs
@@ -147,12 +163,17 @@ class MainViewModelTest {
             coEvery { folderRepository.manageObservedAccounts(any()) } just runs
             coEvery { messageRepository.refreshMessages(any()) } just runs
             coEvery { messageRepository.setTargetFolder(any(), any()) } just runs
+            coEvery { threadRepository.setTargetFolderForThreads(any(), any(), any()) } just runs
+            coEvery { threadRepository.refreshThreads(any()) } just runs
+            coEvery { userPreferencesRepository.updateMailViewMode(any()) } just runs
 
             viewModel = MainViewModel(
                 applicationContext = mockContext,
                 accountRepository = accountRepository,
                 folderRepository = folderRepository,
-                messageRepository = messageRepository
+                messageRepository = messageRepository,
+                threadRepository = threadRepository,
+                userPreferencesRepository = userPreferencesRepository
             )
 
             mainCoroutineRule.testDispatcher.scheduler.advanceUntilIdle()
@@ -194,6 +215,8 @@ class MainViewModelTest {
                 assertTrue(initialState.foldersByAccountId.isEmpty())
                 assertNull(initialState.selectedFolder)
                 assertEquals(MessageDataState.Initial, initialState.messageDataState)
+                assertEquals(ThreadDataState.Initial, initialState.threadDataState)
+                assertEquals(MailViewModePreference.THREADS, initialState.currentViewMode)
                 assertNull(initialState.toastMessage)
                 cancelAndIgnoreRemainingEvents()
             }

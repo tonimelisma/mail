@@ -690,60 +690,24 @@ class GmailApiHelper @Inject constructor(
         threadId: String,
         folderId: String // Added folderId to match interface, though Gmail API doesn't use it for threads.get
     ): Result<List<Message>> {
-        Log.d(
-            TAG,
-            "getMessagesForThread (Gmail): Fetching messages for threadId: $threadId. folderId '$folderId' is unused for Gmail threads."
-        )
         return try {
-            // Gmail API: GET https://gmail.googleapis.com/gmail/v1/users/me/threads/{threadId}
-            // It's important to request a format that gives enough detail for messages,
-            // or be prepared to make subsequent calls for each message if only IDs are returned.
-            // Format "FULL" for threads usually embeds the message resources.
-            // Format "METADATA" gives headers but not body.
-            // Format "MINIMAL" gives only IDs.
-            val response: HttpResponse = httpClient.get("$BASE_URL/threads/$threadId") {
-                parameter(
-                    "format",
-                    "FULL"
-                ) // Request full message details for messages within the thread
-                // Other parameters like fields could be used to trim response if needed, e.g.
-                // parameter("fields", "messages(id,snippet,payload/headers,internalDate,labelIds)")
+            Log.d(TAG, "Fetching messages for thread ID: $threadId (original folder: $folderId)")
+            // The 'folderId' is less relevant for Gmail's threads.get API but kept for interface consistency.
+            val response = httpClient.get("$BASE_URL/threads/$threadId") {
+                // You might want to control the format (e.g., "full", "metadata") if needed
+                // parameter("format", "full") // "full" is often default and includes payload
             }
+            val gmailThread = response.body<GmailThread>()
 
-            if (!response.status.isSuccess()) {
-                val errorBody = response.bodyAsText()
-                Log.e(TAG, "Error fetching Gmail thread $threadId: ${response.status} - $errorBody")
-                val httpException =
-                    IOException("Gmail API Error ${response.status.value} fetching thread $threadId: $errorBody")
-                // Use the existing errorMapper injected into the class
-                return Result.failure(Exception(errorMapper.mapNetworkOrApiException(httpException)))
-            }
-
-            val rawJsonResponse = response.bodyAsText()
-            // Log raw response only in verbose/debug modes if it's too large for regular debug logs
-            Log.v(
-                TAG,
-                "Thread ID: $threadId --- RAW JSON RESPONSE for THREAD.GET (Gmail): $rawJsonResponse"
-            )
-            val gmailThread = jsonParser.decodeFromString<GmailThread>(rawJsonResponse)
-
-            // Messages from threads.get with format=FULL should be complete enough
-            // for mapGmailMessageToMessage to work, which handles recursive header search if needed.
-            val messages = gmailThread.messages.mapNotNull { nestedGmailMessage ->
-                mapGmailMessageToMessage(nestedGmailMessage)
-            }
-
+            val messages = gmailThread.messages.map { mapGmailMessageToMessage(it) }
             Log.d(
                 TAG,
-                "Successfully mapped ${messages.size} messages for Gmail threadId: $threadId"
+                "Successfully fetched and mapped ${messages.size} messages for thread ID: $threadId"
             )
             Result.success(messages)
-
-        } catch (e: Exception) { // Catch a broader exception type, as Ktor/Serialization can throw various things
-            Log.e(TAG, "Exception in getMessagesForThread for threadId $threadId (Gmail)", e)
-            // Use the existing errorMapper injected into the class
-            val errorMessageString = errorMapper.mapNetworkOrApiException(e)
-            Result.failure(Exception(errorMessageString))
+        } catch (e: Exception) {
+            Log.e(TAG, "Error fetching messages for thread ID: $threadId", e)
+            Result.failure(Exception(errorMapper.mapNetworkOrApiException(e)))
         }
     }
 }

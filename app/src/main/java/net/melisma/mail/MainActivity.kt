@@ -8,6 +8,7 @@ import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.ActivityResultLauncher
@@ -340,7 +341,7 @@ fun MainApp(
                             state.selectedFolder != null -> {
                                 val accountForMessages =
                                     state.accounts.find { it.id == state.selectedFolderAccountId }
-                                val currentActivity = LocalContext.current as? Activity
+                                val currentActivity = LocalActivity.current
 
                                 PullToRefreshBox(
                                     isRefreshing = if (state.currentViewMode == ViewMode.THREADS) {

@@ -46,7 +46,7 @@ class RepositoryModuleTest {
         val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 
         // Act
-        val scope = RepositoryModule.provideApplicationCoroutineScope(ioDispatcher)
+        val scope = AppProvidesModule.provideApplicationCoroutineScope(ioDispatcher)
 
         // Assert
         assertNotNull("CoroutineScope should not be null", scope)
@@ -75,7 +75,7 @@ class RepositoryModuleTest {
     @Test
     fun `provideIoDispatcher returns Dispatchers IO`() {
         // Act
-        val dispatcher = RepositoryModule.provideIoDispatcher()
+        val dispatcher = AppProvidesModule.provideIoDispatcher()
 
         // Assert
         assertEquals("Should provide Dispatchers.IO", Dispatchers.IO, dispatcher)
@@ -85,12 +85,12 @@ class RepositoryModuleTest {
     fun `provideAuthConfigProvider returns AuthConfigProvider instance`() {
         try {
             // Run the test normally
-            val authConfigProvider = RepositoryModule.provideAuthConfigProvider()
+            val authConfigProvider = AppProvidesModule.provideAuthConfigProvider()
             assertNotNull("AuthConfigProvider should not be null", authConfigProvider)
 
             // Try to get the resource ID
             val methodName = "getMsalConfigResId"
-            val method = authConfigProvider.javaClass.getMethod(methodName)
+            val method = authConfigProvider.java.getMethod(methodName)
             val resId = method.invoke(authConfigProvider)
 
             // Check that it returns an Int

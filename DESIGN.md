@@ -1,7 +1,7 @@
 # Melisma Mail - Comprehensive Project Guide
 
-**Version:** 1.8 (Consolidated and Updated on May 12, 2025 - Reflecting Current Implementation and
-Future Work)
+**Version:** 1.9 (Consolidated and Updated - Reflecting Harmonization Plan Implementation and Future
+Work)
 
 ## 1. Project Overview
 
@@ -32,6 +32,9 @@ authorization and token management.
 * **Core Functionality:**
     * Basic UI for displaying accounts, folders, and message lists is in place using Jetpack
       Compose. (Implemented)
+  * Harmonized Conversation Views: Email threads in folder views are now consistently displayed with
+    participant summaries for both Google and Microsoft accounts, leveraging a unified threading
+    model. (Implemented)
 * **Identified Issues/Future Work (Action Items):**
     * **Performance - Main Thread Jank:** Logcat indicates "Skipped frames," suggesting potential
       main thread blocking during app startup or initial UI rendering. This needs investigation and
@@ -70,25 +73,29 @@ authorization and token management.
     * **Purpose**: UI (Jetpack Compose), ViewModels, and the `MailApplication` class. Handles
       UI-specific logic like launching AppAuth's authorization intent via `ActivityResultLauncher`.
     * **Key Classes/Files**: `MainActivity.kt`, `MainViewModel.kt`, UI Composables (e.g.,
-      `MailDrawerContent.kt`, `MessageListContent.kt`, `SettingsScreen.kt`).
+      `MailDrawerContent.kt`, `MessageListContent.kt`, `ThreadListContent.kt`, `ThreadListItem.kt`,
+      `SettingsScreen.kt`).
 
 * **:core-data**: Defines core data interfaces, domain models, DI helpers, and shared services.
     * **Purpose**: Provides abstractions for data handling and common utilities.
-    * **Key Classes/Files**: `AccountRepository.kt`, `FolderRepository.kt`, `MessageRepository.kt` (
-      interfaces); `MailApiService.kt` (interface); `Account.kt`, `MailFolder.kt`, `Message.kt` (
-      models); `ErrorMapperService.kt` (interface); `SecureEncryptionService.kt`; Hilt
+  * **Key Classes/Files**: `AccountRepository.kt`, `FolderRepository.kt`, `MessageRepository.kt`,
+    `ThreadRepository.kt` (interfaces); `MailApiService.kt` (interface); `Account.kt`,
+    `MailFolder.kt`, `Message.kt`, `MailThread.kt` (models, `MailThread` includes
+    `participantsSummary`); `ErrorMapperService.kt` (interface); `SecureEncryptionService.kt`; Hilt
       Qualifiers/Scopes (`Dispatchers.kt`, `Qualifiers.kt`).
 
 * **:data**: Implements repository interfaces from `:core-data`.
     * **Purpose**: Orchestrates data operations, selecting appropriate backend services.
     * **Key Classes/Files**: `DefaultAccountRepository.kt`, `DefaultFolderRepository.kt`,
-      `DefaultMessageRepository.kt`; DI modules (`DataModule.kt`, `MultiBindingModule.kt`).
+      `DefaultMessageRepository.kt`, `DefaultThreadRepository.kt` (implements `ThreadRepository`,
+      central to conversation assembly); DI modules (`DataModule.kt`, `MultiBindingModule.kt`).
 
 * **:backend-microsoft**: Handles Microsoft/Outlook specific logic.
     * **Purpose**: Authentication (MSAL) and API interaction (Microsoft Graph) for Microsoft
       accounts.
     * **Key Classes/Files**: `MicrosoftAuthManager.kt` (MSAL wrapper),
-      `MicrosoftKtorTokenProvider.kt` (for Ktor), `GraphApiHelper.kt` (implements `MailApiService`),
+      `MicrosoftKtorTokenProvider.kt` (for Ktor), `GraphApiHelper.kt` (implements `MailApiService`,
+      `getMessagesForThread` now fetches globally by `conversationId` for cross-folder threading),
       `MicrosoftErrorMapper.kt`, `ActiveMicrosoftAccountHolder.kt`; DI module (
       `BackendMicrosoftModule.kt`).
 
@@ -133,7 +140,9 @@ The application development follows a prioritized backlog of features grouped in
 * **Requirement 1.4 (Unified Inbox - UI/UX):** As a user, I want an option to view emails from all
   my accounts in a single combined inbox view. **(Pending)**
 * **Requirement 1.5 (Conversation View - UI/UX):** As a user, I want emails belonging to the same
-  thread to be grouped. **(Pending)**
+  thread to be grouped. **(Done for folder views)**
+    * *Note:* Folder views now group messages by conversation and display participant summaries for
+      both Google and Microsoft accounts, as per the May 2025 harmonization plan.
 
 ---
 **EPIC 2: Basic Mail Actions** (High Priority)
@@ -283,6 +292,17 @@ The application development follows a prioritized backlog of features grouped in
       `GraphApiHelper.kt` (for Microsoft) and `GmailApiHelper.kt` (for Google). Repositories in
       `:data` (e.g., `DefaultFolderRepository.kt`, `DefaultMessageRepository.kt`) use this
       abstraction via Hilt multibindings.
+* **Conversation View Harmonization:**
+    * `DefaultThreadRepository.kt` in `:data` is the central component for fetching and assembling
+      `MailThread` objects for all conversation-aware list views (e.g., Inbox, Sent).
+    * `MailThread.kt` model in `:core-data` is the primary data object for these lists, featuring a
+      `participantsSummary`.
+    * `GraphApiHelper.kt`'s `getMessagesForThread` method has been updated to query `/me/messages` (
+      filtered by `conversationId`), ensuring true cross-folder threading for Microsoft accounts.
+      `GmailApiHelper.kt` already supported this.
+    * The UI (`MainApp.kt` in `:app`) displays `ThreadListContent.kt` (which uses
+      `ThreadListItem.kt`) when the view mode is set to "Threads", correctly rendering participant
+      summaries.
 * **Authentication Layer:**
     * **Microsoft:** Uses `MicrosoftAuthManager.kt` (MSAL wrapper) in `:backend-microsoft`. Token
       storage and management are handled by MSAL's internal mechanisms. Ktor integration via
