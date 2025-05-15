@@ -76,10 +76,11 @@ object BackendMicrosoftModule { // Changed to object module as it now only conta
             install(ContentNegotiation) { json(json) }
 
             install(Logging) {
-                level = LogLevel.HEADERS
+                level = LogLevel.INFO
                 logger = object : io.ktor.client.plugins.logging.Logger {
                     override fun log(message: String) {
-                        Log.d("KtorMSGraphClient", message)
+                        val firstLine = message.lines().firstOrNull { it.isNotBlank() } ?: message
+                        Log.d("KtorMSGraphClient", firstLine)
                     }
                 }
             }

@@ -231,7 +231,114 @@ class DefaultAccountRepository @Inject constructor(
     ) { /* ... (no changes from previous, ensure activeMicrosoftAccountHolder is set on success) ... */
     }
 
-    private suspend fun removeMicrosoftAccount(account: Account) { /* ... (no changes from previous, ensure activeMicrosoftAccountHolder is cleared if active was removed) ... */
+    private suspend fun removeMicrosoftAccount(account: Account) {
+        Log.i(
+            TAG,
+            "removeMicrosoftAccount: Attempting for account: ${account.username} (ID: ${account.id})"
+        )
+        val errorMapper = getErrorMapperForProvider("MS")
+        if (errorMapper == null) {
+            Log.e(
+                TAG,
+                "removeMicrosoftAccount: Microsoft Error handler not found for account ${account.id}."
+            )
+            tryEmitMessage("Internal error: Microsoft Error handler not found.")
+            _isLoadingAccountAction.value = false // Reset here as we are returning early
+            providerTypeForLoadingAction = null
+            return
+        }
+        // _isLoadingAccountAction is already true, set by the calling removeAccount method
+
+        var message: String? = null
+        try {
+            val accountToRemove = microsoftAuthManager.accounts.find { it.id == account.id }
+            if (accountToRemove == null) {
+                Log.e(
+                    TAG,
+                    "Account to remove (ID: ${account.id}) not found in MicrosoftAuthManager's list before removal call."
+                )
+                message = "Account not found for removal."
+                // No need to call MSAL if account not found by manager
+            } else {
+                Log.d(
+                    TAG,
+                    "Calling microsoftAuthManager.removeAccount for ${accountToRemove.username}"
+                )
+                // Collect the Flow from MicrosoftAuthManager
+                // This flow emits a single result (Success or Error)
+                microsoftAuthManager.removeAccount(accountToRemove)
+                    .collect { result -> // Changed from onEach for single emission if that's the case, or use .first()
+                        Log.d(TAG, "removeMicrosoftAccount: MSAL removeAccount result: $result")
+                        when (result) {
+                            is net.melisma.backend_microsoft.auth.RemoveAccountResult.Success -> {
+                                message = "Account removed: ${accountToRemove.username}"
+                                Log.i(
+                                    TAG,
+                                    "MSAL account removal successful for ${accountToRemove.username}"
+                                )
+                                // The AuthStateListener should update the accounts list.
+                                // We also need to ensure the active account holder is updated if this was the active account.
+                                if (activeMicrosoftAccountHolder.activeMicrosoftAccountId.value == account.id) {
+                                    Log.i(
+                                        TAG,
+                                        "Cleared active Microsoft account ID: ${account.id} as it was removed."
+                                    )
+                                    activeMicrosoftAccountHolder.setActiveMicrosoftAccountId(null)
+                                }
+                            }
+
+                            is net.melisma.backend_microsoft.auth.RemoveAccountResult.Error -> {
+                                message = "Error removing account: ${
+                                    errorMapper.mapAuthExceptionToUserMessage(result.exception)
+                                }"
+                                Log.e(
+                                    TAG,
+                                    "MSAL account removal error for ${accountToRemove.username}",
+                                    result.exception
+                                )
+                            }
+
+                            is net.melisma.backend_microsoft.auth.RemoveAccountResult.NotInitialized -> {
+                                message = "Authentication system not ready."
+                                Log.w(TAG, "MSAL not initialized during removeMicrosoftAccount.")
+                            }
+
+                            is net.melisma.backend_microsoft.auth.RemoveAccountResult.AccountNotFound -> {
+                                // This case might be redundant if we check accountToRemove existence before calling
+                                message = "Account to remove not found by authentication manager."
+                                Log.w(
+                                    TAG,
+                                    "MSAL could not find account ${accountToRemove.username} to remove."
+                                )
+                            }
+                        }
+                    }
+            }
+            // Regardless of MSAL operation outcome, refresh accounts from source of truth
+            // onAuthStateChanged will be triggered by MSAL eventually if removal was successful there,
+            // which in turn updates _accounts. Here we can force an update based on current MSAL state.
+            val currentMsAccounts = microsoftAuthManager.accounts
+            val persistedGoogleAccounts = googleTokenPersistenceService.getAllPersistedAccounts()
+            _accounts.value = mapToGenericAccounts(currentMsAccounts, persistedGoogleAccounts)
+            Log.i(
+                TAG,
+                "Refreshed accounts list in removeMicrosoftAccount. New MS count: ${currentMsAccounts.size}, Total: ${_accounts.value.size}"
+            )
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception in removeMicrosoftAccount for ${account.username}", e)
+            message =
+                "An unexpected error occurred while removing the Microsoft account: ${e.message}"
+        } finally {
+            Log.d(
+                TAG,
+                "removeMicrosoftAccount finally block for ${account.id}. Emitting message: '$message'"
+            )
+            tryEmitMessage(message)
+            _isLoadingAccountAction.value = false
+            providerTypeForLoadingAction = null
+            Log.d(TAG, "isLoadingAccountAction set to false for MS account ${account.id}.")
+        }
     }
 
     private fun tryEmitMessage(message: String?) { /* ... (no changes) ... */
@@ -595,7 +702,15 @@ class DefaultAccountRepository @Inject constructor(
             "removeGoogleAccountWithAppAuth: Attempting for account: ${account.username} (ID: ${account.id})"
         )
         val errorMapper = getErrorMapperForProvider("GOOGLE")
-        if (errorMapper == null) { /* ... (error handling) ... */ return
+        if (errorMapper == null) {
+            Log.e(
+                TAG,
+                "removeGoogleAccountWithAppAuth: Google Error handler not found for account ${account.id}."
+            )
+            tryEmitMessage("Internal error: Google Error handler not found.")
+            _isLoadingAccountAction.value = false
+            providerTypeForLoadingAction = null
+            return
         }
         // _isLoadingAccountAction is already true
 
@@ -620,13 +735,25 @@ class DefaultAccountRepository @Inject constructor(
 
             Log.d(
                 TAG,
-                "Calling googleAuthManager.signOut() to clear CredentialManager state for ${account.id}."
+                "Attempting to call googleAuthManager.signOut() for ${account.id}."
             )
-            googleAuthManager.signOut() // This clears Credential Manager state, not AppAuth tokens.
-            Log.i(
-                TAG,
-                "CredentialManager state cleared for Google Sign-Out related to ${account.id}."
-            )
+            try {
+                googleAuthManager.signOut() // This clears Credential Manager state.
+                Log.i(
+                    TAG,
+                    "googleAuthManager.signOut() completed for ${account.id} (from coroutine's perspective)."
+                )
+            } catch (e: Exception) {
+                Log.e(
+                    TAG,
+                    "Exception directly from googleAuthManager.signOut() call for ${account.id}. This might be the AndroidX Credentials NPE if it's catchable here.",
+                    e
+                )
+                // message will be overridden by the outer catch block if this is the primary error source.
+                // If the NPE is a Binder exception, it might not be caught here, leading to the coroutine potentially hanging or being killed.
+            }
+            Log.d(TAG, "Proceeding after googleAuthManager.signOut() attempt for ${account.id}.")
+
 
             if (activeGoogleAccountHolder.activeAccountId.value == account.id) {
                 Log.d(TAG, "Clearing active Google account ID: ${account.id}")
@@ -645,13 +772,18 @@ class DefaultAccountRepository @Inject constructor(
             )
 
         } catch (e: Exception) {
-            Log.e(TAG, "Error removing Google account ${account.id}", e)
+            Log.e(TAG, "Error removing Google account ${account.id} in outer catch block.", e)
             message =
                 "Error removing Google account: ${errorMapper.mapAuthExceptionToUserMessage(e)}"
         } finally {
+            Log.d(
+                TAG,
+                "removeGoogleAccountWithAppAuth finally block for ${account.id}. Message: '$message'"
+            )
             tryEmitMessage(message)
             _isLoadingAccountAction.value = false
             providerTypeForLoadingAction = null
+            Log.d(TAG, "isLoadingAccountAction set to false for ${account.id}.")
         }
     }
 }

@@ -6,12 +6,10 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentSender
 import android.util.Log
-import androidx.credentials.ClearCredentialStateRequest
 import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.GetCredentialResponse
-import androidx.credentials.exceptions.ClearCredentialException
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialException
 import androidx.credentials.exceptions.NoCredentialException
@@ -19,7 +17,7 @@ import com.google.android.gms.auth.api.identity.AuthorizationRequest
 import com.google.android.gms.auth.api.identity.AuthorizationResult
 import com.google.android.gms.auth.api.identity.Identity
 import com.google.android.gms.common.api.ApiException
-import com.google.android.gms.common.api.Scope // Keep this import
+import com.google.android.gms.common.api.Scope
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.android.libraries.identity.googleid.GoogleIdTokenParsingException
@@ -66,7 +64,7 @@ class GoogleAuthManager @Inject constructor(
     private val oneTapClient by lazy { Identity.getSignInClient(context) }
 
     private val SERVER_CLIENT_ID =
-        "326576675855-r404vqtrr8ohbpl7g6tianaekkt70igd.apps.googleusercontent.com" // Your ANDROID Client ID
+        "326576675855-6vc6rrjhijjfch6j6106sd5ui2htbh61.apps.googleusercontent.com" // Your WEB Client ID for server-side verification
     private var currentNonce: String? = null
 
     private fun generateNonce(): String {
@@ -83,21 +81,15 @@ class GoogleAuthManager @Inject constructor(
     }
 
     suspend fun signInWithGoogle(activity: Activity): GoogleSignInResult {
-        Log.d(TAG, "GoogleAuthManager: signInWithGoogle() called")
+        Log.d(
+            TAG,
+            "GoogleAuthManager: signInWithGoogle() called - forcing account chooser for explicit add."
+        )
         return try {
-            Log.d(TAG, "GoogleAuthManager: Attempting sign-in with authorized accounts only")
-            val result = attemptSignIn(activity, true)
-
-            if (result is GoogleSignInResult.NoCredentialsAvailable) {
-                Log.d(
-                    TAG,
-                    "GoogleAuthManager: No authorized accounts found, retrying with all accounts"
-                )
-                attemptSignIn(activity, false)
-            } else {
-                Log.d(TAG, "GoogleAuthManager: Sign-in result: ${result::class.java.simpleName}")
-                result
-            }
+            // Always attempt sign-in with account chooser visible for explicit "Add Account"
+            // filterByAuthorizedAccounts = false ensures all accounts are shown in chooser
+            // autoSelectEnabled = false ensures chooser is shown even if only one account exists
+            attemptSignIn(activity, filterByAuthorizedAccounts = false, autoSelectEnabled = false)
         } catch (e: Exception) {
             currentNonce = null
             Log.e(TAG, "GoogleAuthManager: An unexpected error occurred during Google Sign-In", e)
@@ -107,18 +99,19 @@ class GoogleAuthManager @Inject constructor(
 
     private suspend fun attemptSignIn(
         activity: Activity,
-        filterByAuthorizedAccounts: Boolean
+        filterByAuthorizedAccounts: Boolean,
+        autoSelectEnabled: Boolean
     ): GoogleSignInResult {
         Log.d(
             TAG,
-            "GoogleAuthManager: attemptSignIn(filterByAuthorizedAccounts=$filterByAuthorizedAccounts)"
+            "GoogleAuthManager: attemptSignIn(filterByAuthorizedAccounts=$filterByAuthorizedAccounts, autoSelectEnabled=$autoSelectEnabled)"
         )
         val nonce = generateNonce()
         val googleIdOption: GetGoogleIdOption = GetGoogleIdOption.Builder()
-            .setFilterByAuthorizedAccounts(filterByAuthorizedAccounts)
+            .setFilterByAuthorizedAccounts(false)
             .setServerClientId(SERVER_CLIENT_ID)
             .setNonce(nonce)
-            .setAutoSelectEnabled(filterByAuthorizedAccounts)
+            .setAutoSelectEnabled(autoSelectEnabled)
             .build()
 
         val request: GetCredentialRequest = GetCredentialRequest.Builder()
@@ -230,17 +223,29 @@ class GoogleAuthManager @Inject constructor(
     }
 
     suspend fun signOut() {
-        Log.d(TAG, "GoogleAuthManager: signOut() called")
-        try {
-            credentialManager.clearCredentialState(ClearCredentialStateRequest())
-            Log.i(TAG, "GoogleAuthManager: CredentialManager state cleared for sign-out.")
-        } catch (e: ClearCredentialException) {
-            Log.e(
-                TAG,
-                "GoogleAuthManager: Error clearing CredentialManager state during sign-out",
-                e
-            )
-        }
+        Log.d(
+            TAG,
+            "GoogleAuthManager: signOut() called. The step to clear credential state has been removed."
+        )
+        // try {
+        // credentialManager.clearCredentialState(ClearCredentialStateRequest())
+        // Log.i(TAG, "GoogleAuthManager: clearCredentialState call completed successfully (from CredentialManager's perspective).")
+        // } catch (e: ClearCredentialException) {
+        // Log.e(
+        // TAG,
+        // "GoogleAuthManager: ClearCredentialException during signOut",
+        // e
+        // )
+        // Optionally rethrow or handle as a specific sign-out failure
+        // } catch (e: Exception) {
+        // Log.e(
+        // TAG,
+        // "GoogleAuthManager: Generic Exception during signOut (after ClearCredentialException check)",
+        // e
+        // )
+        // Potentially an unexpected issue, decide if this indicates sign-out failure
+        // }
+        Log.d(TAG, "GoogleAuthManager: signOut() finished.")
     }
 
     suspend fun requestAccessToken(

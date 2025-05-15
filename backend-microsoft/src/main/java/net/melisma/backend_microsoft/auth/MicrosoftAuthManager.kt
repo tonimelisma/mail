@@ -336,12 +336,14 @@ class MicrosoftAuthManager(
                     TAG,
                     "MicrosoftAuthManager: Error details: ${exception.message}, Error code: ${exception.errorCode}"
                 )
+                loadAccountsAsync() // Ensure listener is notified to update state
                 trySend(AddAccountResult.Error(exception))
                 close()
             }
 
             override fun onCancel() {
                 Log.w(TAG, "MicrosoftAuthManager: Interactive addAccount/signIn cancelled by user")
+                loadAccountsAsync() // Ensure listener is notified to update state
                 trySend(AddAccountResult.Cancelled)
                 close()
             }

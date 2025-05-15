@@ -87,14 +87,16 @@ class GmailApiHelper @Inject constructor(
             val responseBodyText = response.bodyAsText()
 
             if (!response.status.isSuccess()) {
-                Log.e(TAG, "Error fetching labels: ${response.status} - $responseBodyText")
+                Log.e(
+                    TAG,
+                    "Error fetching labels: ${response.status} - Error details in API response."
+                )
                 val httpException =
                     IOException("Gmail API Error ${response.status.value} fetching labels: $responseBodyText")
                 val errorMessageString = errorMapper.mapNetworkOrApiException(httpException)
                 return Result.failure(Exception(errorMessageString))
             }
 
-            Log.v(TAG, "Raw Gmail labels response: $responseBodyText")
             val labelList = jsonParser.decodeFromString<GmailLabelList>(responseBodyText)
             Log.d(TAG, "Received ${labelList.labels.size} labels from API. Processing...")
 
@@ -256,7 +258,7 @@ class GmailApiHelper @Inject constructor(
                 val errorBody = messageIdsResponse.bodyAsText()
                 Log.e(
                     TAG,
-                    "Error fetching message list for $folderId: ${messageIdsResponse.status} - $errorBody"
+                    "Error fetching message list for $folderId: ${messageIdsResponse.status} - Error details in API response."
                 )
                 val httpException =
                     IOException("HTTP Error ${messageIdsResponse.status.value} fetching messages for $folderId: $errorBody")
@@ -299,13 +301,12 @@ class GmailApiHelper @Inject constructor(
             if (!response.status.isSuccess()) {
                 Log.w(
                     TAG,
-                    "Error fetching details for message $messageId: ${response.status} - ${response.bodyAsText()}"
+                    "Error fetching details for message $messageId: ${response.status} - Error details in API response."
                 )
                 return null
             }
 
             val rawJsonResponse = response.bodyAsText()
-            Log.d(TAG, "Message ID: $messageId --- RAW JSON RESPONSE: $rawJsonResponse")
 
             val gmailMessage = jsonParser.decodeFromString<GmailMessage>(rawJsonResponse)
 
@@ -533,7 +534,7 @@ class GmailApiHelper @Inject constructor(
                 val errorBody = response.bodyAsText()
                 Log.e(
                     TAG,
-                    "Error marking message read/unread for $messageId: ${response.status} - $errorBody"
+                    "Error marking message read/unread for $messageId: ${response.status} - Error details in API response."
                 )
                 val httpException =
                     IOException("HTTP Error ${response.status.value} marking message read/unread: $errorBody")
@@ -555,7 +556,7 @@ class GmailApiHelper @Inject constructor(
                 val errorBody = response.bodyAsText()
                 Log.e(
                     TAG,
-                    "Error deleting (trashing) message $messageId: ${response.status} - $errorBody"
+                    "Error deleting (trashing) message $messageId: ${response.status} - Error details in API response."
                 )
                 val httpException =
                     IOException("HTTP Error ${response.status.value} deleting message: $errorBody")
@@ -584,7 +585,7 @@ class GmailApiHelper @Inject constructor(
                 val errorBody = messageDetailsResponse.bodyAsText()
                 Log.e(
                     TAG,
-                    "Error fetching message details for move operation ($messageId): ${messageDetailsResponse.status} - $errorBody"
+                    "Error fetching message details for move operation ($messageId): ${messageDetailsResponse.status} - Error details in API response."
                 )
                 return Result.failure(Exception("Failed to get message details before move: ${errorBody}"))
             }
@@ -656,7 +657,6 @@ class GmailApiHelper @Inject constructor(
                     }
                 }
             }
-            Log.d(TAG, "Modify request body for $messageId: $requestBodyJson")
 
 
             val response: HttpResponse = httpClient.post(endpoint) {
@@ -674,7 +674,7 @@ class GmailApiHelper @Inject constructor(
                 val errorBody = response.bodyAsText()
                 Log.e(
                     TAG,
-                    "Error moving message $messageId (modifying labels): ${response.status} - $errorBody"
+                    "Error moving message $messageId (modifying labels): ${response.status} - Error details in API response."
                 )
                 val httpException =
                     IOException("HTTP Error ${response.status.value} (modifying labels for move): $errorBody")

@@ -49,11 +49,13 @@ object NetworkModule {
             install(Logging) {
                 logger = object : Logger {
                     override fun log(message: String) {
-                        Log.v(KTOR_CLIENT_TAG, message) // Log to Android Logcat
+                        // Only log the first non-blank line of the message
+                        val firstLine = message.lines().firstOrNull { it.isNotBlank() } ?: message
+                        Log.v(KTOR_CLIENT_TAG, firstLine) // Log to Android Logcat
                     }
                 }
                 level =
-                    LogLevel.BODY // Log headers and body, change level as needed (e.g., LogLevel.INFO)
+                    LogLevel.INFO // Keep INFO, filtering is now in the logger
             }
 
             // Optional: Throw exceptions for non-2xx responses

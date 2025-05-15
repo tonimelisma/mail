@@ -123,7 +123,10 @@ class GraphApiHelper @Inject constructor(
                 Result.success(mailFolders)
             } else {
                 val errorBody = response.bodyAsText()
-                Log.e(TAG, "Error fetching folders: ${response.status} - $errorBody")
+                Log.e(
+                    TAG,
+                    "Error fetching folders: ${response.status} - Error details in API response."
+                )
                 Result.failure(errorMapper.mapHttpError(response.status.value, errorBody))
             }
         } catch (e: Exception) {
@@ -275,7 +278,10 @@ class GraphApiHelper @Inject constructor(
                 Result.success(messages)
             } else {
                 val errorBody = response.bodyAsText()
-                Log.e(TAG, "Error fetching messages for $folderId: ${response.status} - $errorBody")
+                Log.e(
+                    TAG,
+                    "Error fetching messages for $folderId: ${response.status} - Error details in API response."
+                )
                 Result.failure(errorMapper.mapHttpError(response.status.value, errorBody))
             }
         } catch (e: Exception) {
@@ -363,7 +369,10 @@ class GraphApiHelper @Inject constructor(
                 Result.success(true)
             } else {
                 val errorBody = response.bodyAsText()
-                Log.e(TAG, "Error marking message: ${response.status} - $errorBody")
+                Log.e(
+                    TAG,
+                    "Error marking message: ${response.status} - Error details in API response."
+                )
                 Result.failure(errorMapper.mapHttpError(response.status.value, errorBody))
             }
         } catch (e: Exception) {
@@ -384,7 +393,10 @@ class GraphApiHelper @Inject constructor(
                 Result.success(true)
             } else {
                 val errorBody = response.bodyAsText()
-                Log.e(TAG, "Error deleting message: ${response.status} - $errorBody")
+                Log.e(
+                    TAG,
+                    "Error deleting message: ${response.status} - Error details in API response."
+                )
                 Result.failure(errorMapper.mapHttpError(response.status.value, errorBody))
             }
         } catch (e: Exception) {
@@ -410,7 +422,10 @@ class GraphApiHelper @Inject constructor(
                 Result.success(true)
             } else {
                 val errorBody = response.bodyAsText()
-                Log.e(TAG, "Error moving message: ${response.status} - $errorBody")
+                Log.e(
+                    TAG,
+                    "Error moving message: ${response.status} - Error details in API response."
+                )
                 Result.failure(errorMapper.mapHttpError(response.status.value, errorBody))
             }
         } catch (e: Exception) {
@@ -457,7 +472,7 @@ class GraphApiHelper @Inject constructor(
                 val errorBody = response.bodyAsText()
                 Log.e(
                     TAG,
-                    "Error fetching messages for conversation $threadId (Outlook): ${response.status} - $errorBody"
+                    "Error fetching messages for conversation $threadId (Outlook): ${response.status} - Error details in API response."
                 )
                 Result.failure(errorMapper.mapHttpError(response.status.value, errorBody))
             }

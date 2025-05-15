@@ -1,4 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest>
-    <!-- No specific permissions needed in the library manifest -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.CREDENTIAL_MANAGER_SERVICE" />
+
+    <application>
+        <!-- Service declaration removed -->
+    </application>
+
 </manifest>

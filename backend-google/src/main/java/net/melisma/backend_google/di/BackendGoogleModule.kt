@@ -68,10 +68,12 @@ object BackendGoogleModule {
 
             // Optional: Logging for Ktor requests/responses
             install(Logging) {
-                level = LogLevel.HEADERS // Or LogLevel.ALL for more detail
+                level = LogLevel.INFO
                 logger = object : io.ktor.client.plugins.logging.Logger {
                     override fun log(message: String) {
-                        Log.d("KtorGoogleClient", message)
+                        // Only log the first non-blank line of the message
+                        val firstLine = message.lines().firstOrNull { it.isNotBlank() } ?: message
+                        Log.d("KtorGoogleClient", firstLine)
                     }
                 }
             }

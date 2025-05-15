@@ -4,13 +4,11 @@
 package net.melisma.mail.ui.settings
 
 import android.app.Activity
-import android.util.Log
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -202,24 +200,6 @@ fun SettingsScreen(
                     )
                     HorizontalDivider(modifier = Modifier.padding(start = 16.dp))
                 }
-            }
-
-            item {
-                Spacer(modifier = Modifier.height(8.dp))
-                Button(
-                    onClick = {
-                        Log.d("SettingsScreen", "Add Account button clicked.")
-                        scope.launch {
-                            snackbarHostState.showSnackbar("Add account functionality TBD.")
-                        }
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
-                ) {
-                    Text(stringResource(R.string.settings_add_account_button))
-                }
-                HorizontalDivider()
             }
 
             // NEW VIEW PREFERENCES SECTION
