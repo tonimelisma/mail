@@ -5,7 +5,6 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.util.Log
-import androidx.browser.customtabs.CustomTabsIntent
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -174,16 +173,20 @@ class AppAuthHelperService @Inject constructor(
      * @param clientId The Android OAuth client ID from Google Cloud Console
      * @param redirectUri The registered redirect URI for the Android client
      * @param scopes Space-separated list of OAuth scopes to request
+     * @param loginHint Optional login hint to include in the authorization request
+     * @param idTokenHint Optional ID token hint to include in the authorization request
      * @return AuthorizationRequest configured for Google OAuth
      */
     suspend fun buildAuthorizationRequest(
         clientId: String,
         redirectUri: Uri,
-        scopes: String
+        scopes: String,
+        loginHint: String? = null,
+        idTokenHint: String? = null
     ): AuthorizationRequest = withContext(ioDispatcher) {
         Log.d(
             TAG,
-            "AppAuthHelperService: buildAuthorizationRequest(clientId=$clientId, redirectUri=$redirectUri, scopes=$scopes)"
+            "AppAuthHelperService: buildAuthorizationRequest(clientId=$clientId, redirectUri=$redirectUri, scopes=$scopes, loginHint=$loginHint, idTokenHint=${idTokenHint != null})"
         )
 
         // Ensure we have a service configuration
@@ -201,7 +204,7 @@ class AppAuthHelperService @Inject constructor(
             "AppAuthHelperService: Building authorization request with PKCE (code challenge method: $codeChallengeMethod)"
         )
         // Build and return the authorization request with PKCE
-        val request = AuthorizationRequest.Builder(
+        val requestBuilder = AuthorizationRequest.Builder(
             serviceConfiguration,
             clientId,
             ResponseTypeValues.CODE,
@@ -213,7 +216,37 @@ class AppAuthHelperService @Inject constructor(
                 codeChallenge,
                 codeChallengeMethod
             )
-            .build()
+
+        // Add additional parameters like id_token_hint
+        val additionalParams = mutableMapOf<String, String>()
+        var useLoginHint = true // Flag to determine if login_hint should be used
+
+        idTokenHint?.let {
+            if (it.isNotBlank()) {
+                additionalParams["id_token_hint"] = it
+                Log.d(TAG, "AppAuthHelperService: Added id_token_hint: $it to AuthorizationRequest")
+                useLoginHint = false // id_token_hint is present, so don't use login_hint
+            }
+        }
+
+        // Add login hint if provided AND id_token_hint was not used
+        if (useLoginHint) {
+            loginHint?.let {
+                if (it.isNotBlank()) {
+                    requestBuilder.setLoginHint(it)
+                    Log.d(
+                        TAG,
+                        "AppAuthHelperService: Added login_hint: $it (id_token_hint was not present/used)"
+                    )
+                }
+            }
+        }
+
+        if (additionalParams.isNotEmpty()) {
+            requestBuilder.setAdditionalParameters(additionalParams)
+        }
+
+        val request = requestBuilder.build()
 
         // Add detailed logging of the full authorization request URI and components
         Log.i(TAG, "Constructed AuthorizationRequest URI: ${request.toUri()}")
@@ -238,42 +271,34 @@ class AppAuthHelperService @Inject constructor(
      * @param clientId The Android OAuth client ID from Google Cloud Console
      * @param redirectUri The registered redirect URI for the Android client
      * @param scopes Space-separated list of OAuth scopes to request (defaults to GMAIL_SCOPES)
+     * @param loginHint Optional login hint to include in the authorization request
+     * @param idTokenHint Optional ID token hint to include in the authorization request
      * @return An intent that should be launched via startActivityForResult or an ActivityResultLauncher
      */
     suspend fun initiateAuthorizationRequest(
         activity: Activity,
         clientId: String,
         redirectUri: Uri,
-        scopes: String = GMAIL_SCOPES
+        scopes: String = GMAIL_SCOPES,
+        loginHint: String? = null,
+        idTokenHint: String? = null
     ): Intent = withContext(ioDispatcher) {
         Log.d(
             TAG,
-            "AppAuthHelperService: initiateAuthorizationRequest(clientId=$clientId, redirectUri=$redirectUri, scopes=$scopes)"
+            "AppAuthHelperService: initiateAuthorizationRequest(clientId=$clientId, redirectUri=$redirectUri, scopes=$scopes, loginHint=$loginHint, idTokenHint=${idTokenHint != null})"
         )
+        _authState.value = STATE_AUTHORIZING
+        _lastError.value = null
+
         try {
-            _authState.value = STATE_AUTHORIZING
-            _lastError.value = null
-            Log.d(TAG, "AppAuthHelperService: State changed to AUTHORIZING")
-
-            // Build the authorization request
             Log.d(TAG, "AppAuthHelperService: Building authorization request")
-            val authRequest = buildAuthorizationRequest(clientId, redirectUri, scopes)
+            // Pass loginHint and idTokenHint to buildAuthorizationRequest
+            val authRequest =
+                buildAuthorizationRequest(clientId, redirectUri, scopes, loginHint, idTokenHint)
 
-            // Create a custom tabs intent builder for better user experience
             Log.d(TAG, "AppAuthHelperService: Creating custom tabs intent for authorization")
-            val customTabsIntent = CustomTabsIntent.Builder()
-                .setShowTitle(true)
-                .build()
-
-            // Get the intent from AppAuth's authorization service
-            Log.d(
-                TAG,
-                "AppAuthHelperService: Getting authorization request intent from auth service"
-            )
-            val authIntent = authService.getAuthorizationRequestIntent(
-                authRequest,
-                customTabsIntent
-            )
+            val authService = AuthorizationService(activity) // Use activity context for service
+            val authIntent = authService.getAuthorizationRequestIntent(authRequest)
 
             Log.d(TAG, "AppAuthHelperService: Authorization request intent created successfully")
             return@withContext authIntent

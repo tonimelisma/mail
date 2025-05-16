@@ -222,13 +222,89 @@ class DefaultAccountRepository @Inject constructor(
         tryEmitMessage(null)
     }
 
-    private fun getErrorMapperForProvider(providerType: String): ErrorMapperService? { /* ... (no changes) ... */ return errorMappers[providerType.uppercase()]
+    private fun getErrorMapperForProvider(providerType: String): ErrorMapperService? {
+        return errorMappers[providerType.uppercase()]
     }
 
     private suspend fun addMicrosoftAccount(
         activity: Activity,
         scopes: List<String>
-    ) { /* ... (no changes from previous, ensure activeMicrosoftAccountHolder is set on success) ... */
+    ) {
+        Log.i(TAG, "addMicrosoftAccount: Attempting for scopes: $scopes")
+        val errorMapper = getErrorMapperForProvider("MS")
+        if (errorMapper == null) {
+            Log.e(TAG, "addMicrosoftAccount: Microsoft Error handler not found.")
+            tryEmitMessage("Internal error: Microsoft Error handler not found.")
+            _isLoadingAccountAction.value = false // Reset here as we are returning early
+            providerTypeForLoadingAction = null
+            return
+        }
+        // _isLoadingAccountAction is already true, set by the calling addAccount method
+
+        var message: String? = null
+        try {
+            Log.d(TAG, "Calling microsoftAuthManager.addAccount for interactive flow.")
+            microsoftAuthManager.addAccount(activity, scopes)
+                .collect { result -> // Process the single emitted result
+                    Log.d(TAG, "addMicrosoftAccount: MSAL addAccount result: $result")
+                    when (result) {
+                        is net.melisma.backend_microsoft.auth.AddAccountResult.Success -> {
+                            val addedAccount = result.account
+                            message = "Microsoft account added: ${addedAccount.username}"
+                            Log.i(
+                                TAG,
+                                "MSAL account addition successful for ${addedAccount.username} (ID: ${addedAccount.id})"
+                            )
+
+                            // Set as active account
+                            activeMicrosoftAccountHolder.setActiveMicrosoftAccountId(addedAccount.id)
+                            Log.i(TAG, "Set active Microsoft account ID: ${addedAccount.id}")
+
+                            // Update the main accounts list
+                            // Even though onAuthStateChanged will fire, explicitly updating here ensures
+                            // the new account is reflected immediately if there's any lag or
+                            // if onAuthStateChanged doesn't pick it up for some reason before next UI composition.
+                            val currentMsAccounts =
+                                microsoftAuthManager.accounts // Should now include the new one
+                            val persistedGoogleAccounts =
+                                googleTokenPersistenceService.getAllPersistedAccounts()
+                            _accounts.value =
+                                mapToGenericAccounts(currentMsAccounts, persistedGoogleAccounts)
+                            Log.i(
+                                TAG,
+                                "Refreshed accounts list in addMicrosoftAccount. New MS count: ${currentMsAccounts.size}, Total: ${_accounts.value.size}"
+                            )
+                        }
+
+                        is net.melisma.backend_microsoft.auth.AddAccountResult.Error -> {
+                            message = "Error adding Microsoft account: ${
+                                errorMapper.mapAuthExceptionToUserMessage(result.exception)
+                            }"
+                            Log.e(TAG, "MSAL account addition error", result.exception)
+                        }
+
+                        is net.melisma.backend_microsoft.auth.AddAccountResult.Cancelled -> {
+                            message = "Microsoft account addition cancelled by user."
+                            Log.w(TAG, "MSAL account addition cancelled.")
+                        }
+
+                        is net.melisma.backend_microsoft.auth.AddAccountResult.NotInitialized -> {
+                            message = "Authentication system not ready for Microsoft accounts."
+                            Log.w(TAG, "MSAL not initialized during addMicrosoftAccount.")
+                        }
+                    }
+                }
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception in addMicrosoftAccount flow collection", e)
+            message =
+                "An unexpected error occurred while adding the Microsoft account: ${e.message}"
+        } finally {
+            Log.d(TAG, "addMicrosoftAccount finally block. Emitting message: '$message'")
+            tryEmitMessage(message)
+            _isLoadingAccountAction.value = false
+            providerTypeForLoadingAction = null
+            Log.d(TAG, "isLoadingAccountAction set to false for MS account addition.")
+        }
     }
 
     private suspend fun removeMicrosoftAccount(account: Account) {
@@ -432,7 +508,11 @@ class DefaultAccountRepository @Inject constructor(
                     "addGoogleAccountWithAppAuth: CredentialManager Sign-In successful. User ID: ${idTokenCredential.id}"
                 )
 
-                pendingGoogleAccountId = idTokenCredential.id
+                pendingGoogleAccountId =
+                    idTokenCredential.id // This is the email, used as login_hint
+                val actualIdToken =
+                    idTokenCredential.idToken // The actual JWT, used as id_token_hint
+
                 pendingGoogleEmail =
                     googleAuthManager.getEmailFromCredential(idTokenCredential) // This might be null
                 pendingGoogleDisplayName = idTokenCredential.displayName
@@ -497,7 +577,9 @@ class DefaultAccountRepository @Inject constructor(
                         activity = activity,
                         clientId = androidClientId,
                         redirectUri = redirectUri,
-                        scopes = requiredScopesString
+                        scopes = requiredScopesString,
+                        loginHint = pendingGoogleAccountId, // Pass the account ID (email) as login_hint
+                        idTokenHint = actualIdToken      // Pass the actual ID token as id_token_hint
                     )
                     Log.d(
                         TAG,
