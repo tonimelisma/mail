@@ -5,14 +5,12 @@ package net.melisma.backend_google.errors
 // Remove unused GoogleAuthenticationException if it's no longer directly mapped
 // import net.melisma.backend_google.auth.GoogleAuthenticationException
 import android.util.Log
-import androidx.credentials.exceptions.GetCredentialCancellationException
-import androidx.credentials.exceptions.GetCredentialUnknownException
-import androidx.credentials.exceptions.NoCredentialException
-import com.google.android.gms.common.api.ApiException
-import com.google.android.libraries.identity.googleid.GoogleIdTokenParsingException
+import com.auth0.android.jwt.DecodeException
 import io.mockk.every
+import io.mockk.mockk
 import io.mockk.mockkStatic
 import io.mockk.unmockkStatic
+import net.openid.appauth.AuthorizationException
 import org.junit.AfterClass
 import org.junit.Assert.assertEquals
 import org.junit.BeforeClass
@@ -20,7 +18,6 @@ import org.junit.Test
 import java.io.IOException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
-import kotlin.coroutines.cancellation.CancellationException
 
 /**
  * Unit tests for the GoogleErrorMapper implementation.
@@ -56,128 +53,143 @@ class GoogleErrorMapperTest {
     // --- mapAuthExceptionToUserMessage Tests ---
 
     @Test
-    fun `mapAuthExceptionToUserMessage handles GetCredentialCancellationException`() {
+    fun `mapAuthExceptionToUserMessage handles USER_CANCELED_AUTH_FLOW`() {
+        val exception = AuthorizationException.GeneralErrors.USER_CANCELED_AUTH_FLOW
         assertEquals(
             "Sign-in cancelled by user.",
-            errorMapper.mapAuthExceptionToUserMessage(GetCredentialCancellationException("User cancelled"))
-        )
-    }
-
-    @Test
-    fun `mapAuthExceptionToUserMessage handles GetCredentialCancellationException with null message`() {
-        assertEquals(
-            "Sign-in cancelled by user.",
-            errorMapper.mapAuthExceptionToUserMessage(GetCredentialCancellationException(null))
-        )
-    }
-
-    @Test
-    fun `mapAuthExceptionToUserMessage handles NoCredentialException`() {
-        assertEquals(
-            "No Google accounts found on this device to sign in. Please add an account to your device or try another method.",
-            errorMapper.mapAuthExceptionToUserMessage(NoCredentialException("No accounts"))
-        )
-    }
-
-    @Test
-    fun `mapAuthExceptionToUserMessage handles GetCredentialException`() {
-        val message = "Some credential error from UnknownException"
-        val actualException = GetCredentialUnknownException(message)
-        val expectedMessagePart = "Google Sign-In failed. Please try again."
-        val mappedMessage = errorMapper.mapAuthExceptionToUserMessage(actualException)
-        assert(mappedMessage.startsWith(expectedMessagePart))
-        assert(mappedMessage.contains("(Error:") && mappedMessage.endsWith(")"))
-    }
-
-    @Test
-    fun `mapAuthExceptionToUserMessage handles GetCredentialException with null type and message`() {
-        val actualException = GetCredentialUnknownException(null)
-        val mappedMessage = errorMapper.mapAuthExceptionToUserMessage(actualException)
-        val expectedMessagePart = "Google Sign-In failed. Please try again."
-        assert(mappedMessage.startsWith(expectedMessagePart))
-        assert(mappedMessage.contains("(Error:") && mappedMessage.endsWith(")"))
-    }
-
-    @Test
-    fun `mapAuthExceptionToUserMessage handles GoogleIdTokenParsingException`() {
-        assertEquals(
-            "An error occurred while processing your Google Sign-In. Please try again.",
-            errorMapper.mapAuthExceptionToUserMessage(GoogleIdTokenParsingException(null as Throwable?))
-        )
-    }
-
-    @Test
-    fun `mapAuthExceptionToUserMessage handles IllegalStateException with PendingIntent missing`() {
-        val exception = IllegalStateException("PendingIntent missing for Sign-in")
-        assertEquals(
-            "An internal error occurred with Google Sign-In. Please try again. (${exception.message})",
             errorMapper.mapAuthExceptionToUserMessage(exception)
         )
     }
 
     @Test
-    fun `mapAuthExceptionToUserMessage handles IllegalStateException with access token null`() {
-        val exception = IllegalStateException("Access token is null")
+    fun `mapAuthExceptionToUserMessage handles PROGRAM_CANCELED_AUTH_FLOW`() {
+        val exception = AuthorizationException.GeneralErrors.PROGRAM_CANCELED_AUTH_FLOW
         assertEquals(
-            "An internal error occurred with Google Sign-In. Please try again. (${exception.message})",
+            "Sign-in process was cancelled.",
             errorMapper.mapAuthExceptionToUserMessage(exception)
         )
     }
 
     @Test
-    fun `mapAuthExceptionToUserMessage handles general IllegalStateException`() {
+    fun `mapAuthExceptionToUserMessage handles INVALID_GRANT`() {
+        val exception = AuthorizationException.TokenRequestErrors.INVALID_GRANT
+        assertEquals(
+            "Authentication failed. Your session might have expired or been revoked. Please try signing in again.",
+            errorMapper.mapAuthExceptionToUserMessage(exception)
+        )
+    }
+
+    @Test
+    fun `mapAuthExceptionToUserMessage handles TokenRequestErrors like INVALID_CLIENT`() {
+        val exception = AuthorizationException.TokenRequestErrors.INVALID_CLIENT
+        val expectedMessage =
+            "Authentication configuration error. Please contact support if this persists. (Error: ${exception.errorDescription ?: exception.code})"
+        assertEquals(
+            expectedMessage,
+            errorMapper.mapAuthExceptionToUserMessage(exception)
+        )
+    }
+
+    @Test
+    fun `mapAuthExceptionToUserMessage handles TokenRequestErrors with null description`() {
+        val exception = AuthorizationException(
+            AuthorizationException.TYPE_OAUTH_TOKEN_ERROR,
+            AuthorizationException.TokenRequestErrors.INVALID_REQUEST.code,
+            "invalid_request",
+            null,
+            null,
+            null
+        )
+        val expectedMessage =
+            "Authentication configuration error. Please contact support if this persists. (Error: ${exception.code})"
+        assertEquals(
+            expectedMessage,
+            errorMapper.mapAuthExceptionToUserMessage(exception)
+        )
+    }
+
+    @Test
+    fun `mapAuthExceptionToUserMessage handles GeneralErrors NETWORK_ERROR`() {
+        val exception = AuthorizationException.GeneralErrors.NETWORK_ERROR
+        assertEquals(
+            "Network error during sign-in. Please check your connection.",
+            errorMapper.mapAuthExceptionToUserMessage(exception)
+        )
+    }
+
+    @Test
+    fun `mapAuthExceptionToUserMessage handles GeneralErrors SERVER_ERROR`() {
+        val exception = AuthorizationException.GeneralErrors.SERVER_ERROR
+        assertEquals(
+            "Google server error during sign-in. Please try again later.",
+            errorMapper.mapAuthExceptionToUserMessage(exception)
+        )
+    }
+
+    @Test
+    fun `mapAuthExceptionToUserMessage handles other AuthorizationException`() {
+        // Using a custom AuthorizationException that doesn't match specific codes
+        val exception = AuthorizationException(
+            AuthorizationException.TYPE_GENERAL_ERROR,
+            777, // Custom code for "other"
+            "custom_auth_error_name",
+            "A custom general auth error description",
+            null, // errorUri
+            null  // rootCause
+        )
+        val expectedMessage =
+            "An authentication error occurred with Google. (AppAuth: ${exception.errorDescription ?: exception.code})"
+        assertEquals(
+            expectedMessage,
+            errorMapper.mapAuthExceptionToUserMessage(exception)
+        )
+    }
+
+    @Test
+    fun `mapAuthExceptionToUserMessage handles other AuthorizationException with null description`() {
+        val exception = AuthorizationException(
+            AuthorizationException.TYPE_GENERAL_ERROR,
+            999, // Code 999 for "other"
+            "other_error_name",
+            null, // errorDescription
+            null, // errorUri
+            null  // rootCause
+        )
+        val expectedMessage =
+            "An authentication error occurred with Google. (AppAuth: ${exception.code})" // errorDescription is null
+        assertEquals(
+            expectedMessage,
+            errorMapper.mapAuthExceptionToUserMessage(exception)
+        )
+    }
+
+    @Test
+    fun `mapAuthExceptionToUserMessage handles DecodeException`() {
+        val mockException = mockk<DecodeException>()
+        every { mockException.message } returns "Failed to decode token" // Optional: if message is used by mapper
+        // If the mapper logs exception.javaClass.simpleName, that will also be mocked.
+
+        assertEquals(
+            "An error occurred while processing your Google Sign-In data. Please try again.",
+            errorMapper.mapAuthExceptionToUserMessage(mockException)
+        )
+    }
+
+    @Test
+    fun `mapAuthExceptionToUserMessage handles IllegalStateException`() {
+        val exception = IllegalStateException("Some other state issue")
         assertEquals(
             "An unexpected authentication error occurred. Please try again later.",
-            errorMapper.mapAuthExceptionToUserMessage(IllegalStateException("Some other state issue"))
-        )
-    }
-
-    @Test
-    fun `mapAuthExceptionToUserMessage handles ApiException`() {
-        val statusCode = 10 // Example status code
-        assertEquals(
-            "A Google authentication error occurred (Code: $statusCode). Please try again.",
-            errorMapper.mapAuthExceptionToUserMessage(
-                ApiException(
-                    com.google.android.gms.common.api.Status(
-                        statusCode,
-                        "Auth API Error"
-                    )
-                )
-            )
-        )
-    }
-
-    @Test
-    fun `mapAuthExceptionToUserMessage handles generic IOException via fallback`() {
-        // mapAuthExceptionToUserMessage will use its own "Unknown Google Auth error" for non-specific exceptions
-        assertEquals(
-            "An unknown authentication error occurred with Google. Please try again.",
-            errorMapper.mapAuthExceptionToUserMessage(IOException("Network issue"))
-        )
-    }
-
-    @Test
-    fun `mapAuthExceptionToUserMessage handles UnknownHostException via fallback`() {
-        assertEquals(
-            "An unknown authentication error occurred with Google. Please try again.",
-            errorMapper.mapAuthExceptionToUserMessage(UnknownHostException("Cannot resolve"))
+            errorMapper.mapAuthExceptionToUserMessage(exception) // This will hit the 'else' for unknown exceptions
         )
     }
 
     @Test
     fun `mapAuthExceptionToUserMessage handles unknown Exception`() {
+        val exception = RuntimeException("Some generic runtime error")
         assertEquals(
             "An unknown authentication error occurred with Google. Please try again.",
-            errorMapper.mapAuthExceptionToUserMessage(RuntimeException("Unknown error message"))
-        )
-    }
-
-    @Test
-    fun `mapAuthExceptionToUserMessage handles unknown Exception with blank message`() {
-        assertEquals(
-            "An unknown authentication error occurred with Google. Please try again.",
-            errorMapper.mapAuthExceptionToUserMessage(RuntimeException(""))
+            errorMapper.mapAuthExceptionToUserMessage(exception)
         )
     }
 
@@ -192,6 +204,43 @@ class GoogleErrorMapperTest {
     // --- mapNetworkOrApiException Tests ---
 
     @Test
+    fun `mapNetworkOrApiException handles AuthorizationException NETWORK_ERROR`() {
+        val exception = AuthorizationException.GeneralErrors.NETWORK_ERROR
+        assertEquals(
+            "Network error during Google operation. Please check your connection or try again. (AppAuth Code: ${exception.code})",
+            errorMapper.mapNetworkOrApiException(exception)
+        )
+    }
+
+    @Test
+    fun `mapNetworkOrApiException handles AuthorizationException SERVER_ERROR`() {
+        val exception = AuthorizationException.GeneralErrors.SERVER_ERROR
+        assertEquals(
+            "Network error during Google operation. Please check your connection or try again. (AppAuth Code: ${exception.code})",
+            errorMapper.mapNetworkOrApiException(exception)
+        )
+    }
+
+    @Test
+    fun `mapNetworkOrApiException handles other AuthorizationException`() {
+        val exception = AuthorizationException(
+            AuthorizationException.TYPE_OAUTH_TOKEN_ERROR, // A type that hits the else in the mapper's when for AuthEx
+            888, // Custom code not matching NETWORK_ERROR or SERVER_ERROR
+            "custom_api_token_error_name",
+            "A custom API related token auth error description",
+            null, // errorUri
+            null  // rootCause
+        )
+        // This should fall into the 'else' for AuthorizationException in mapNetworkOrApiException
+        val expectedMessage =
+            "A Google service error occurred during authentication. (AppAuth Code: ${exception.code})"
+        assertEquals(
+            expectedMessage,
+            errorMapper.mapNetworkOrApiException(exception)
+        )
+    }
+
+    @Test
     fun `mapNetworkOrApiException handles IOException`() {
         assertEquals(
             "Network error. Please check your internet connection and try again.",
@@ -201,7 +250,7 @@ class GoogleErrorMapperTest {
 
     @Test
     fun `mapNetworkOrApiException handles SocketTimeoutException`() {
-        // SocketTimeoutException is an IOException, so it gets the generic IOException message
+        // SocketTimeoutException is an IOException
         assertEquals(
             "Network error. Please check your internet connection and try again.",
             errorMapper.mapNetworkOrApiException(SocketTimeoutException("Request timed out"))
@@ -218,24 +267,7 @@ class GoogleErrorMapperTest {
     }
 
     @Test
-    fun `mapNetworkOrApiException handles ApiException`() {
-        val statusCode = 16 // Example: CommonStatusCodes.TIMEOUT or another API status
-        assertEquals(
-            "A Google service error occurred (Code: $statusCode). Please check your connection or try again.",
-            errorMapper.mapNetworkOrApiException(
-                ApiException(
-                    com.google.android.gms.common.api.Status(
-                        statusCode,
-                        "API Error"
-                    )
-                )
-            )
-        )
-    }
-
-    @Test
     fun `mapNetworkOrApiException handles generic Exception with message`() {
-        // Generic exceptions fall into the 'else' branch
         assertEquals(
             "An unknown network or Google service error occurred. Please try again.",
             errorMapper.mapNetworkOrApiException(RuntimeException("Gmail API processing failed"))
@@ -247,23 +279,6 @@ class GoogleErrorMapperTest {
         assertEquals(
             "An unknown network or Google service error occurred. Please try again.",
             errorMapper.mapNetworkOrApiException(RuntimeException(""))
-        )
-    }
-
-    // CancellationException is not explicitly handled by mapNetworkOrApiException, so it falls to generic
-    @Test
-    fun `mapNetworkOrApiException handles CancellationException with message`() {
-        assertEquals(
-            "An unknown network or Google service error occurred. Please try again.",
-            errorMapper.mapNetworkOrApiException(CancellationException("User cancelled"))
-        )
-    }
-
-    @Test
-    fun `mapNetworkOrApiException handles CancellationException with null message`() {
-        assertEquals(
-            "An unknown network or Google service error occurred. Please try again.",
-            errorMapper.mapNetworkOrApiException(CancellationException(null as String?))
         )
     }
 

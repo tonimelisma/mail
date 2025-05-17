@@ -85,6 +85,10 @@ dependencies {
     testImplementation(libs.turbine)
     testImplementation(libs.ktor.client.mock)
 
+    // For testing with credential manager exceptions
+    testImplementation(libs.androidx.credentials)
+    testImplementation(libs.google.id) // For GoogleIdTokenParsingException
+
     // --- Instrumented Testing ---
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

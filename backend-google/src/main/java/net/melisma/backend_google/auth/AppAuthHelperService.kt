@@ -130,7 +130,7 @@ class AppAuthHelperService @Inject constructor(
                 } else {
                     Timber.e(ex, "Resuming: Token exchange failed.")
                     continuation.resumeWithException(
-                        ex ?: AuthorizationException.GeneralErrors.UNKNOWN_ERROR
+                        ex ?: AuthorizationException.GeneralErrors.SERVER_ERROR
                     )
                 }
             } else {
@@ -221,40 +221,73 @@ class AppAuthHelperService @Inject constructor(
 
     suspend fun revokeToken(refreshToken: String): Boolean =
         suspendCancellableCoroutine { continuation ->
-            Timber.d("Attempting to revoke refresh token: ${refreshToken.take(10)}...")
-            // Note: Google's revocation endpoint might not strictly follow typical OAuth2 error responses for already invalid tokens.
-            // It often returns 200 OK even if the token was already invalid or didn't exist.
-            // The primary goal is to ensure Google marks it as revoked if it was valid.
+            val googleRevocationEndpoint = "https://oauth2.googleapis.com/revoke"
+            Timber.d(
+                "Attempting to revoke refresh token: ${
+                    refreshToken.take(
+                        10
+                    )
+                }... via manual POST to $googleRevocationEndpoint"
+            )
 
-            // This will likely fail if serviceConfig doesn't have revocationEndpoint.
-            // We'll address this after confirming basic AppAuth classes resolve.
-            val revocationEndpointUri = serviceConfig.revocationEndpoint
-            if (revocationEndpointUri == null) {
-                Timber.e("Revocation endpoint URI is null in serviceConfig. Cannot revoke token.")
-                if (continuation.isActive) continuation.resume(false)
-                return@suspendCancellableCoroutine
-            }
+            // IMPORTANT: The AppAuth library does not provide a helper method for RFC 7009 token revocation.
+            // This must be implemented by making a direct HTTP POST request to the revocation endpoint.
+            // You will need an HTTP client (e.g., OkHttp, Ktor Client) for this.
+            //
+            // The request should be:
+            // METHOD: POST
+            // URL: https://oauth2.googleapis.com/revoke
+            // HEADER: Content-Type: application/x-www-form-urlencoded
+            // BODY: token=THE_REFRESH_TOKEN_STRING
 
-            val revocationRequest = RevokeTokenRequest.Builder(revocationEndpointUri)
-                .setTokenToRevoke(refreshToken)
-                .build()
+            // Pseudocode for HTTP client usage:
+            /*
+            val httpClient = // ... obtain/configure your HTTP client
+            val requestBodyString = "token=$refreshToken"
+            // ... create appropriate request body for your client
 
-            authService.performRevokeTokenRequest(revocationRequest) { ex: AuthorizationException? ->
-                if (continuation.isActive) {
-                    if (ex == null) {
-                        Timber.i("Token revocation request completed (likely successful or token was already invalid).")
-                        continuation.resume(true)
-                    } else {
-                        Timber.e(ex, "Token revocation request failed.")
-                        // Check if it's a network error vs. a specific revocation error, though AppAuth might generalize this.
-                        continuation.resume(false) // Indicate failure but don't necessarily throw to block logout.
-                    }
-                } else {
-                    Timber.w("Token revocation coroutine no longer active when response/exception received.")
-                }
-            }
-            continuation.invokeOnCancellation {
-                Timber.w("Token revocation coroutine cancelled for token: ${refreshToken.take(10)}...")
+            // ... build the POST request to googleRevocationEndpoint with the body and headers
+
+            // ... execute the request asynchronously
+
+            // httpClient.newCall(request).enqueue(object : Callback {
+            //    override fun onResponse(call: Call, response: Response) {
+            //        if (continuation.isActive) {
+            //            if (response.isSuccessful) { // Typically 200 OK
+            //                Timber.i("Token revocation request completed successfully (HTTP ${response.code()}).")
+            //                continuation.resume(true)
+            //            } else {
+            //                Timber.e(response.body?.string(), "Token revocation request failed (HTTP ${response.code()}).")
+            //                continuation.resume(false)
+            //            }
+            //        }
+            //        response.close() // Ensure response is closed
+            //    }
+            //
+            //    override fun onFailure(call: Call, e: IOException) {
+            //        if (continuation.isActive) {
+            //            Timber.e(e, "Token revocation HTTP call failed.")
+            //            continuation.resumeWithException(e) // Or simply resume(false)
+            //        }
+            //    }
+            // })
+            //
+            // continuation.invokeOnCancellation {
+            //    Timber.w("Token revocation coroutine cancelled for token: ${refreshToken.take(10)}...")
+            //    // If your HTTP client supports cancellation, trigger it here.
+            // }
+            */
+
+            // For now, indicating non-implementation:
+            Timber.e(
+                "Token revocation for ${
+                    refreshToken.take(
+                        10
+                    )
+                } not fully implemented. Manual HTTP POST request logic is required."
+            )
+            if (continuation.isActive) {
+                continuation.resume(false) // Placeholder: Revocation is not actually performed.
             }
     }
 } 

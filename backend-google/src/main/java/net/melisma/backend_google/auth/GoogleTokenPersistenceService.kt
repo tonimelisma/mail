@@ -99,7 +99,7 @@ class GoogleTokenPersistenceService @Inject constructor(
                 return@withContext null
             }
             Timber.d("Successfully retrieved and decrypted AuthState for ID: %s", accountId)
-            return@withContext AuthState.jsonDeserializeString(authStateJson)
+            return@withContext AuthState.jsonDeserialize(authStateJson)
         } catch (e: Exception) {
             Timber.e(e, "Error retrieving/deserializing AuthState for Google ID: %s", accountId)
             return@withContext null

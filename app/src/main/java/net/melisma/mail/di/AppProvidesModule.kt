@@ -6,7 +6,6 @@ import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import net.melisma.core_data.di.ApplicationScope
 import net.melisma.core_data.di.AuthConfigProvider
@@ -27,11 +26,6 @@ object AppProvidesModule {
     ): CoroutineScope {
         return CoroutineScope(SupervisorJob() + ioDispatcher)
     }
-
-    @Dispatcher(MailDispatchers.IO)
-    @Provides
-    @Singleton
-    fun provideIoDispatcher(): CoroutineDispatcher = Dispatchers.IO
 
     @Provides
     @Singleton
