@@ -58,7 +58,7 @@ android {
             isIncludeAndroidResources = true // Enable access to Android resources in tests
             all {
                 // Configure the test to continue even when there are failures
-                it.ignoreFailures = true
+                // it.ignoreFailures = true // TODO: Removed as per R-CRITICAL-01
             }
         }
     }

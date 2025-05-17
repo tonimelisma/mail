@@ -33,6 +33,15 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import net.melisma.backend_google.BuildConfig as GoogleBuildConfig
 
+// Companion object for constants
+private const val GMAIL_API_SCOPE_BASE = "https://www.googleapis.com/auth/gmail."
+private val GMAIL_SCOPES_FOR_LOGIN = listOf(
+    "${GMAIL_API_SCOPE_BASE}readonly", // View your messages and settings
+    "${GMAIL_API_SCOPE_BASE}modify",   // Modify but not delete messages (e.g., mark read/unread)
+    "${GMAIL_API_SCOPE_BASE}labels"    // Manage your labels (folders)
+    // Add other Gmail scopes as needed, e.g., send, metadata
+)
+
 @Singleton
 class DefaultAccountRepository @Inject constructor(
     private val microsoftAccountRepository: MicrosoftAccountRepository,
@@ -341,55 +350,72 @@ class DefaultAccountRepository @Inject constructor(
     // getAuthenticationIntentRequest - Implemented for new interface
     override fun getAuthenticationIntentRequest(
         providerType: String,
-        activity: Activity
+        activity: Activity,
+        loginHint: String? // Added loginHint for consistency with MSAL
     ): Flow<Intent?> {
-        Timber.tag(TAG).d("getAuthenticationIntentRequest called for provider: $providerType")
+        Timber.tag(TAG)
+            .d("getAuthenticationIntentRequest called. Provider: $providerType, LoginHint: $loginHint")
+        _isLoadingAccountAction.value = true
+        providerTypeForLoadingAction = providerType
+
         return when (providerType.uppercase()) {
-            Account.PROVIDER_TYPE_GOOGLE -> {
-                externalScope.launch {
-                    try {
-                        val clientId = GoogleBuildConfig.GOOGLE_CLIENT_ID
-                        val redirectUri = Uri.parse(GoogleBuildConfig.GOOGLE_REDIRECT_URI)
-                        // Scopes for Google Sign-In, as per AppAuth examples and common use.
-                        val requiredScopes = setOf("openid", "email", "profile")
-
-                        Timber.tag(TAG)
-                            .d("Google AppAuth: Building auth request with ClientID: $clientId, RedirectURI: $redirectUri, Scopes: $requiredScopes")
-                        val authRequest = appAuthHelperService.buildAuthorizationRequest(
-                            clientId,
-                            redirectUri,
-                            requiredScopes
-                        )
-                        val authIntent =
-                            appAuthHelperService.createAuthorizationRequestIntent(authRequest)
-                        _googleAuthRequestIntent.emit(authIntent)
-                        Timber.tag(TAG)
-                            .d("Google AppAuth: Authorization intent created and emitted.")
-                    } catch (e: Exception) {
-                        Timber.tag(TAG)
-                            .e(e, "Google AppAuth: Failed to create authorization request.")
-                        _googleAuthRequestIntent.emit(null) // Emit null on error
-                        _accountActionMessage.tryEmit("Failed to start Google Sign-In: ${e.localizedMessage}")
-                    }
-                }
-                _googleAuthRequestIntent.asSharedFlow() // Return the flow that will emit the intent
-            }
-
             Account.PROVIDER_TYPE_MS -> {
-                Timber.tag(TAG)
-                    .d("Delegating getAuthenticationIntentRequest to MicrosoftAccountRepository for MS provider.")
-                // MicrosoftAccountRepository's method itself returns Flow<Intent?>, which should be flowOf(null) as per plan
-                microsoftAccountRepository.getAuthenticationIntentRequest(
-                    Account.PROVIDER_TYPE_MS,
-                    activity
-                )
+                // MSAL handles its own UI. We trigger it via MicrosoftAccountRepository.
+                // MicrosoftAccountRepository will emit on its own action messages/auth state.
+                externalScope.launch {
+                    microsoftAccountRepository.initiateSignIn(activity, loginHint)
+                }
+                flowOf(null) // Indicate no intent to launch from here directly
             }
-
+            Account.PROVIDER_TYPE_GOOGLE -> {
+                try {
+                    val redirectUri =
+                        Uri.parse(BuildConfig.REDIRECT_URI_APP_AUTH) // Ensure this is defined
+                    val authRequest = appAuthHelperService.buildAuthorizationRequest(
+                        clientId = GoogleBuildConfig.GOOGLE_ANDROID_CLIENT_ID,
+                        redirectUri = redirectUri,
+                        scopes = getGoogleLoginScopes(), // Use the new method
+                        loginHint = loginHint
+                    )
+                    val authIntent =
+                        appAuthHelperService.createAuthorizationRequestIntent(authRequest)
+                    // Emit the intent for the UI to launch
+                    // _googleAuthRequestIntent.tryEmit(authIntent)
+                    // Return it directly in the flow
+                    flowOf(authIntent)
+                } catch (e: Exception) {
+                    Timber.tag(TAG).e(e, "Error building Google auth request")
+                    _accountActionMessage.tryEmit("Error preparing Google sign-in: ${e.message}")
+                    _isLoadingAccountAction.value = false
+                    flowOf(null)
+                }
+            }
             else -> {
                 Timber.tag(TAG)
-                    .w("getAuthenticationIntentRequest: Unknown provider type: $providerType")
-                _accountActionMessage.tryEmit("Unknown sign-in provider specified.")
-                flowOf(null) // Return a flow emitting null for unknown providers
+                    .w("Unsupported providerType for getAuthenticationIntentRequest: $providerType")
+                _accountActionMessage.tryEmit("Sign-in for $providerType not supported.")
+                _isLoadingAccountAction.value = false
+                flowOf(null)
+            }
+        }.also {
+            // Set loading to false if flow emits null immediately (error or MS case)
+            // For Google, loading will be set to false in handleAuthenticationResult
+            if (providerType.uppercase() == Account.PROVIDER_TYPE_MS) {
+                // For MS, loading is managed by observing MicrosoftAccountRepository's loading state.
+                // Here we just set it to false as we don't emit an intent.
+                //isLoadingAccountAction might need to be managed by combining MS repo's loading state.
+                // For now, assuming MS repo handles its loading UI message.
+            } else {
+                // If flow is null for Google (e.g. exception), then set loading to false.
+                // This assumes the flowOf(null) implies immediate failure before intent emission.
+                // This part is tricky as the intent itself is emitted.
+                // Better to manage loading in the collection site (ViewModel) or in handleAuthResult.
+            }
+            if (providerType.uppercase() != Account.PROVIDER_TYPE_GOOGLE) {
+                // Set loading to false for non-Google (MS handled by its repo, others are errors)
+                // viewModelScope.launch { _isLoadingAccountAction.value = false } // Cannot use viewModelScope here
+                // This loading state will be set to false if an error occurs or for MS case.
+                // For Google, it is reset in handleAuthenticationResult.
             }
         }
     }
@@ -746,6 +772,11 @@ class DefaultAccountRepository @Inject constructor(
                 }
             }
         }
+    }
+
+    // --- Public API for Scopes ---
+    fun getGoogleLoginScopes(): List<String> {
+        return GMAIL_SCOPES_FOR_LOGIN
     }
 }
 

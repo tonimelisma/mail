@@ -18,7 +18,6 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import net.melisma.backend_google.auth.AppAuthHelperService
 import net.melisma.core_data.model.Account
 import net.melisma.core_data.model.AuthState
 import net.melisma.core_data.model.FolderFetchState
@@ -89,9 +88,6 @@ class MainViewModel @Inject constructor(
 
     private val _uiState = MutableStateFlow(MainScreenState())
     val uiState: StateFlow<MainScreenState> = _uiState.asStateFlow()
-
-    private val mailReadScopes = listOf("User.Read", "Mail.Read")
-    private val gmailAppAuthScopes = AppAuthHelperService.GMAIL_SCOPES
 
     private val _appAuthIntentToLaunch = MutableStateFlow<Intent?>(null)
     val appAuthIntentToLaunch: StateFlow<Intent?> = _appAuthIntentToLaunch.asStateFlow()
@@ -331,33 +327,34 @@ class MainViewModel @Inject constructor(
         }
     }
 
-    fun addAccount(activity: Activity, providerType: String) {
+    fun addAccount(activity: Activity, providerType: String, loginHint: String? = null) {
         Timber.tag(TAG).i("addAccount called for provider: $providerType")
         _uiState.update { it.copy(isLoadingAccountAction = true) }
         viewModelScope.launch {
-            try {
-                defaultAccountRepository.getAuthenticationIntentRequest(providerType, activity)
-                    .collect { intent ->
-                        if (intent != null) {
-                            Timber.tag(TAG)
-                                .d("Received intent from repository, emitting to _appAuthIntentToLaunch")
-                            _appAuthIntentToLaunch.value = intent
-                        } else {
-                            Timber.tag(TAG)
-                                .d("Received null intent from repository (e.g., MSAL handling UI internally).")
-                        }
+            if (providerType.equals(Account.PROVIDER_TYPE_GOOGLE, ignoreCase = true)) {
+                defaultAccountRepository.getGoogleLoginScopes()
+            } else {
+                emptyList()
+            }
+
+            defaultAccountRepository.getAuthenticationIntentRequest(
+                providerType,
+                activity,
+                loginHint
+            )
+                .onEach { intent ->
+                    if (intent != null && providerType.equals(
+                            Account.PROVIDER_TYPE_GOOGLE,
+                            ignoreCase = true
+                        )
+                    ) {
+                        _appAuthIntentToLaunch.value = intent
+                    } else if (providerType.equals(Account.PROVIDER_TYPE_MS, ignoreCase = true)) {
+                        _uiState.update { it.copy(isLoadingAccountAction = false) }
+                    } else {
                         _uiState.update { it.copy(isLoadingAccountAction = false) }
                     }
-            } catch (e: Exception) {
-                Timber.tag(TAG)
-                    .e(e, "Error calling getAuthenticationIntentRequest for $providerType")
-                _uiState.update {
-                    it.copy(
-                        isLoadingAccountAction = false,
-                        toastMessage = "Error starting sign-in: ${e.localizedMessage}"
-                    )
-                }
-            }
+                }.launchIn(viewModelScope)
         }
     }
 

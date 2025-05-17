@@ -440,4 +440,239 @@ class GraphApiHelperTest {
         assertNotNull(exception)
         assertTrue(exception is SerializationException)
     }
+
+    // --- getMessageById Tests (assuming similar structure to getMessagesForFolder) ---
+    @Test
+    fun `getMessageById success returns mapped message`() = runTest {
+        val messageId = "testMsgId123"
+        val singleMessageJsonResponse = """
+        {
+          "id": "$messageId",
+          "receivedDateTime": "2023-03-01T12:00:00Z",
+          "subject": "Single Message Subject",
+          "bodyPreview": "Body preview for single message...",
+          "isRead": false,
+          "sender": { "emailAddress": { "name": "Sender Name", "address": "sender@example.com" } }
+        }
+        """.trimIndent()
+
+        val mockClient = createMockClient { request ->
+            assertTrue(
+                "URL should contain /messages/$messageId",
+                request.url.toString().contains("/messages/$messageId")
+            )
+            assertEquals(
+                ContentType.Application.Json.toString(),
+                request.headers[HttpHeaders.Accept]
+            )
+            respond(
+                content = singleMessageJsonResponse,
+                status = HttpStatusCode.OK,
+                headers = headersOf(
+                    HttpHeaders.ContentType,
+                    ContentType.Application.Json.toString()
+                )
+            )
+        }
+        graphApiHelper = GraphApiHelper(mockClient, mockErrorMapper)
+        val result = graphApiHelper.getMessageById(messageId)
+
+        assertTrue("API call should be successful", result.isSuccess)
+        val message = result.getOrNull()
+        assertNotNull("Message should not be null", message)
+        assertEquals(messageId, message?.id)
+        assertEquals("Single Message Subject", message?.subject)
+    }
+
+    @Test
+    fun `getMessageById not found error returns failure`() = runTest {
+        val messageId = "nonExistentMsgId"
+        val mockClient = createMockClient {
+            respond(
+                content = graphApiErrorJsonResponse(
+                    "ErrorItemNotFound",
+                    "The specified object was not found in the store."
+                ),
+                status = HttpStatusCode.NotFound,
+                headers = headersOf(
+                    HttpHeaders.ContentType,
+                    ContentType.Application.Json.toString()
+                )
+            )
+        }
+        graphApiHelper = GraphApiHelper(mockClient, mockErrorMapper)
+        val result = graphApiHelper.getMessageById(messageId)
+
+        assertTrue("API call should fail", result.isFailure)
+        val exception = result.exceptionOrNull()
+        assertNotNull("Exception should not be null", exception)
+        assertTrue(
+            "Exception message should indicate item not found",
+            exception?.message?.contains("Item not found", ignoreCase = true) == true
+        )
+    }
+
+    // --- markMessageRead/Unread Tests ---
+    @Test
+    fun `markMessageRead success returns true`() = runTest {
+        val messageId = "testMsgIdToMarkRead"
+        val mockClient = createMockClient { request ->
+            assertEquals("PATCH", request.method.value)
+            assertTrue(request.url.toString().endsWith("/messages/$messageId"))
+            // Check request body for {"isRead":true}
+            val requestBody = request.body.toByteArray().decodeToString()
+            assertEquals("""{"isRead":true}""", requestBody.trim())
+            respond(
+                content = "", // Typically no content for successful PATCH
+                status = HttpStatusCode.OK
+            )
+        }
+        graphApiHelper = GraphApiHelper(mockClient, mockErrorMapper)
+        val result = graphApiHelper.markMessageRead(messageId, true)
+        assertTrue(
+            "Marking message as read should be successful",
+            result.isSuccess && result.getOrThrow()
+        )
+    }
+
+    @Test
+    fun `markMessageUnread success returns true`() = runTest {
+        val messageId = "testMsgIdToMarkUnread"
+        val mockClient = createMockClient { request ->
+            assertEquals("PATCH", request.method.value)
+            assertTrue(request.url.toString().endsWith("/messages/$messageId"))
+            // Check request body for {"isRead":false}
+            val requestBody = request.body.toByteArray().decodeToString()
+            assertEquals("""{"isRead":false}""", requestBody.trim())
+            respond(
+                content = "", // Typically no content for successful PATCH
+                status = HttpStatusCode.OK
+            )
+        }
+        graphApiHelper = GraphApiHelper(mockClient, mockErrorMapper)
+        val result = graphApiHelper.markMessageRead(messageId, false) // markRead(false) is unread
+        assertTrue(
+            "Marking message as unread should be successful",
+            result.isSuccess && result.getOrThrow()
+        )
+    }
+
+    @Test
+    fun `markMessageRead API error returns false`() = runTest {
+        val messageId = "testMsgIdApiError"
+        val mockClient = createMockClient {
+            respond(
+                content = graphApiErrorJsonResponse(
+                    "ErrorInternalServerError",
+                    "Server error on PATCH"
+                ),
+                status = HttpStatusCode.InternalServerError,
+                headers = headersOf(
+                    HttpHeaders.ContentType,
+                    ContentType.Application.Json.toString()
+                )
+            )
+        }
+        graphApiHelper = GraphApiHelper(mockClient, mockErrorMapper)
+        val result = graphApiHelper.markMessageRead(messageId, true)
+        assertTrue(
+            "Marking message as read should fail",
+            result.isFailure || (result.isSuccess && !result.getOrThrow())
+        )
+    }
+
+    // --- deleteMessage Tests ---
+    @Test
+    fun `deleteMessage success returns true`() = runTest {
+        val messageId = "testMsgIdToDelete"
+        val mockClient = createMockClient { request ->
+            assertEquals("DELETE", request.method.value)
+            assertTrue(request.url.toString().endsWith("/messages/$messageId"))
+            respond(content = "", status = HttpStatusCode.NoContent)
+        }
+        graphApiHelper = GraphApiHelper(mockClient, mockErrorMapper)
+        val result = graphApiHelper.deleteMessage(messageId)
+        assertTrue("Deleting message should be successful", result.isSuccess && result.getOrThrow())
+    }
+
+    @Test
+    fun `deleteMessage API error returns false`() = runTest {
+        val messageId = "testMsgIdDeleteError"
+        val mockClient = createMockClient {
+            respond(
+                content = graphApiErrorJsonResponse("ErrorAccessDenied", "Cannot delete message"),
+                status = HttpStatusCode.Forbidden,
+                headers = headersOf(
+                    HttpHeaders.ContentType,
+                    ContentType.Application.Json.toString()
+                )
+            )
+        }
+        graphApiHelper = GraphApiHelper(mockClient, mockErrorMapper)
+        val result = graphApiHelper.deleteMessage(messageId)
+        assertTrue(
+            "Deleting message should fail",
+            result.isFailure || (result.isSuccess && !result.getOrThrow())
+        )
+    }
+
+    // --- moveMessage Tests ---
+    @Test
+    fun `moveMessage success returns new messageId and true`() = runTest {
+        val messageId = "testMsgIdToMove"
+        val destinationFolderId = "archiveFolderId"
+        val movedMessageId = "movedMsgId_123"
+        // Example response for a successful move, includes the new message item
+        val moveSuccessJsonResponse = """
+        {
+          "id": "$movedMessageId",
+          "subject": "Moved Message Subject"
+        }
+        """.trimIndent()
+
+        val mockClient = createMockClient { request ->
+            assertEquals("POST", request.method.value)
+            assertTrue(request.url.toString().endsWith("/messages/$messageId/move"))
+            // Check request body for {"destinationId":"archiveFolderId"}
+            val requestBody = request.body.toByteArray().decodeToString()
+            assertEquals("""{"destinationId":"$destinationFolderId"}""", requestBody.trim())
+            respond(
+                content = moveSuccessJsonResponse,
+                status = HttpStatusCode.Created, // Or OK depending on API
+                headers = headersOf(
+                    HttpHeaders.ContentType,
+                    ContentType.Application.Json.toString()
+                )
+            )
+        }
+        graphApiHelper = GraphApiHelper(mockClient, mockErrorMapper)
+        val result = graphApiHelper.moveMessage(messageId, destinationFolderId)
+        assertTrue("Moving message should be successful", result.isSuccess)
+        val movedMessage = result.getOrNull()
+        assertNotNull("Moved message data should not be null", movedMessage)
+        assertEquals(movedMessageId, movedMessage?.id)
+    }
+
+    @Test
+    fun `moveMessage API error returns failure`() = runTest {
+        val messageId = "testMsgIdMoveError"
+        val destinationFolderId = "archiveFolderId"
+        val mockClient = createMockClient {
+            respond(
+                content = graphApiErrorJsonResponse(
+                    "ErrorInvalidDestination",
+                    "Destination folder not found"
+                ),
+                status = HttpStatusCode.BadRequest,
+                headers = headersOf(
+                    HttpHeaders.ContentType,
+                    ContentType.Application.Json.toString()
+                )
+            )
+        }
+        graphApiHelper = GraphApiHelper(mockClient, mockErrorMapper)
+        val result = graphApiHelper.moveMessage(messageId, destinationFolderId)
+        assertTrue("Moving message should fail", result.isFailure)
+        assertNull("Moved message data should be null on failure", result.getOrNull())
+    }
 }
