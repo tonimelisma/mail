@@ -12,5 +12,12 @@ package net.melisma.core_data.model
 data class Account(
     val id: String,
     val username: String,
-    val providerType: String
-)
+    val providerType: String,
+    val needsReauthentication: Boolean = false
+) {
+    companion object {
+        const val PROVIDER_TYPE_MS = "MS"
+        const val PROVIDER_TYPE_GOOGLE = "GOOGLE"
+        // Add other provider type constants here if needed
+    }
+}

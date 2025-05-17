@@ -4,10 +4,8 @@ package net.melisma.mail
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
-import android.content.IntentSender
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
-import android.util.Log
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -20,6 +18,7 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import net.melisma.backend_google.auth.AppAuthHelperService
 import net.melisma.core_data.model.Account
 import net.melisma.core_data.model.AuthState
 import net.melisma.core_data.model.FolderFetchState
@@ -28,14 +27,15 @@ import net.melisma.core_data.model.MailThread
 import net.melisma.core_data.model.Message
 import net.melisma.core_data.model.MessageDataState
 import net.melisma.core_data.model.ThreadDataState
+import net.melisma.core_data.model.WellKnownFolderType
 import net.melisma.core_data.preferences.MailViewModePreference
 import net.melisma.core_data.preferences.UserPreferencesRepository
-import net.melisma.core_data.repository.AccountRepository
 import net.melisma.core_data.repository.FolderRepository
 import net.melisma.core_data.repository.MessageRepository
+import net.melisma.core_data.repository.OverallApplicationAuthState
 import net.melisma.core_data.repository.ThreadRepository
-import net.melisma.core_data.repository.capabilities.GoogleAccountCapability
 import net.melisma.data.repository.DefaultAccountRepository
+import timber.log.Timber
 import javax.inject.Inject
 
 // Define ViewMode enum before MainScreenState
@@ -44,7 +44,7 @@ typealias ViewMode = MailViewModePreference // <-- ADD THIS TYPEALIAS
 
 @Immutable
 data class MainScreenState(
-    val authState: AuthState = AuthState.Initializing,
+    val overallApplicationAuthState: OverallApplicationAuthState = OverallApplicationAuthState.UNKNOWN,
     val accounts: List<Account> = emptyList(),
     val isLoadingAccountAction: Boolean = false,
     val foldersByAccountId: Map<String, FolderFetchState> = emptyMap(),
@@ -53,8 +53,7 @@ data class MainScreenState(
     val messageDataState: MessageDataState = MessageDataState.Initial,
     val threadDataState: ThreadDataState = ThreadDataState.Initial,
     val currentViewMode: ViewMode = MailViewModePreference.THREADS, // <-- UPDATE DEFAULT
-    val toastMessage: String? = null,
-    val pendingGoogleConsentAccountId: String? = null
+    val toastMessage: String? = null
 ) {
     val isAnyFolderLoading: Boolean
         get() = foldersByAccountId.values.any { it is FolderFetchState.Loading }
@@ -78,7 +77,7 @@ data class MainScreenState(
 @HiltViewModel
 class MainViewModel @Inject constructor(
     @ApplicationContext private val applicationContext: Context,
-    private val accountRepository: AccountRepository,
+    private val defaultAccountRepository: DefaultAccountRepository,
     private val folderRepository: FolderRepository,
     private val messageRepository: MessageRepository,
     private val threadRepository: ThreadRepository,
@@ -92,102 +91,59 @@ class MainViewModel @Inject constructor(
     val uiState: StateFlow<MainScreenState> = _uiState.asStateFlow()
 
     private val mailReadScopes = listOf("User.Read", "Mail.Read")
-    private val gmailReadScopes = listOf(
-        "https://www.googleapis.com/auth/gmail.readonly",
-        "email",
-        "profile"
-    )
+    private val gmailAppAuthScopes = AppAuthHelperService.GMAIL_SCOPES
 
     private val _appAuthIntentToLaunch = MutableStateFlow<Intent?>(null)
     val appAuthIntentToLaunch: StateFlow<Intent?> = _appAuthIntentToLaunch.asStateFlow()
 
-    private val _googleConsentIntentSender = MutableStateFlow<IntentSender?>(null)
-    val googleConsentIntentSender: StateFlow<IntentSender?> =
-        _googleConsentIntentSender.asStateFlow()
-    private val googleAccountCapability = accountRepository as? GoogleAccountCapability
-
-
     init {
-        Log.d(TAG, "ViewModel Initializing")
-        observeAccountRepository()
+        Timber.tag(TAG).d("ViewModel Initializing")
+        observeAccountRepositoryState()
         observeFolderRepository()
         observeMessageRepository()
         observeThreadRepository()
         observeUserPreferences()
-
-        if (accountRepository is DefaultAccountRepository) {
-            Log.d(
-                TAG,
-                "Setting up observation of appAuthAuthorizationIntent from DefaultAccountRepository"
-            )
-            accountRepository.appAuthAuthorizationIntent
-                .onEach { intent ->
-                    Log.d(TAG, "Received AppAuth Intent in ViewModel: ${intent?.action}")
-                    _appAuthIntentToLaunch.value = intent
-                }.launchIn(viewModelScope)
-        } else {
-            Log.w(
-                TAG,
-                "AccountRepository is not DefaultAccountRepository, cannot observe AppAuth intent directly."
-            )
-        }
-
-        googleAccountCapability?.let { capability ->
-            Log.d(
-                TAG,
-                "Setting up observation of legacy googleConsentIntent from GoogleAccountCapability"
-            )
-            capability.googleConsentIntent
-                .onEach { intentSender ->
-                    if (intentSender != null) {
-                        Log.d(TAG, "Legacy Google consent IntentSender received. Signaling UI.")
-                        _googleConsentIntentSender.value = intentSender
-                    }
-                }.launchIn(viewModelScope)
-        } ?: run {
-            Log.d(
-                TAG,
-                "GoogleAccountCapability not available from AccountRepository (legacy consent)."
-            )
-        }
-
-        viewModelScope.launch {
-            val initialAccounts = accountRepository.accounts.value
-            Log.d(TAG, "Initializing FolderRepository with ${initialAccounts.size} accounts.")
-            folderRepository.manageObservedAccounts(initialAccounts)
-        }
     }
 
-    private fun observeAccountRepository() {
-        Log.d(TAG, "MainViewModel: observeAccountRepository() - Setting up flows")
-        accountRepository.authState
-            .onEach { newAuthState ->
-                Log.d(TAG, "AccountRepo AuthState Changed: $newAuthState")
-                val wasInitialized = _uiState.value.authState is AuthState.Initialized
-                val isInitialized = newAuthState is AuthState.Initialized
+    private fun observeAccountRepositoryState() {
+        Timber.tag(TAG).d("MainViewModel: observeAccountRepositoryState() - Setting up flows")
+
+        defaultAccountRepository.overallApplicationAuthState
+            .onEach { newOverallAuthState ->
+                Timber.tag(TAG)
+                    .d("AccountRepo OverallApplicationAuthState Changed: $newOverallAuthState")
                 _uiState.update { currentState ->
-                    val clearSelection = (!isInitialized && wasInitialized) ||
-                            (newAuthState is AuthState.InitializationError) ||
-                            (newAuthState is AuthState.Initializing && wasInitialized)
-                    if (clearSelection) viewModelScope.launch {
-                        messageRepository.setTargetFolder(
-                            null,
-                            null
-                        )
+                    val clearSelection =
+                        newOverallAuthState == OverallApplicationAuthState.NO_ACCOUNTS_CONFIGURED ||
+                                newOverallAuthState == OverallApplicationAuthState.ALL_ACCOUNTS_NEED_REAUTHENTICATION ||
+                                newOverallAuthState == OverallApplicationAuthState.UNKNOWN
+                    if (clearSelection && currentState.selectedFolder != null) {
+                        Timber.tag(TAG)
+                            .d("Clearing folder selection due to auth state change to $newOverallAuthState")
+                        viewModelScope.launch {
+                            messageRepository.setTargetFolder(null, null)
+                            threadRepository.setTargetFolderForThreads(null, null, null)
+                        }
                     }
                     currentState.copy(
-                        authState = newAuthState,
+                        overallApplicationAuthState = newOverallAuthState,
+                        isLoadingAccountAction = when (newOverallAuthState) {
+                            OverallApplicationAuthState.AT_LEAST_ONE_ACCOUNT_AUTHENTICATED,
+                            OverallApplicationAuthState.NO_ACCOUNTS_CONFIGURED,
+                            OverallApplicationAuthState.ALL_ACCOUNTS_NEED_REAUTHENTICATION,
+                            OverallApplicationAuthState.PARTIAL_ACCOUNTS_NEED_REAUTHENTICATION -> false
+
+                            else -> currentState.isLoadingAccountAction
+                        },
                         selectedFolder = if (clearSelection) null else currentState.selectedFolder,
-                        selectedFolderAccountId = if (clearSelection) null else currentState.selectedFolderAccountId,
-                        pendingGoogleConsentAccountId = if (clearSelection) null else currentState.pendingGoogleConsentAccountId
+                        selectedFolderAccountId = if (clearSelection) null else currentState.selectedFolderAccountId
                     )
                 }
             }.launchIn(viewModelScope)
 
-        accountRepository.accounts
+        defaultAccountRepository.getAccounts()
             .onEach { newAccountList ->
-                Log.d(
-                    TAG,
+                Timber.tag(TAG).d(
                     "AccountRepo Accounts Changed: ${newAccountList.size} accounts. Usernames: ${newAccountList.joinToString { it.username }}"
                 )
                 val previousAccounts = _uiState.value.accounts
@@ -198,120 +154,104 @@ class MainViewModel @Inject constructor(
                         previousAccounts.map { it.id } - newAccountList.map { it.id }.toSet()
                     val selectedAccountRemoved =
                         previousSelectedAccountId != null && previousSelectedAccountId in removedAccountIds
-                    if (selectedAccountRemoved) viewModelScope.launch {
-                        messageRepository.setTargetFolder(
-                            null,
-                            null
-                        )
+                    if (selectedAccountRemoved) {
+                        Timber.tag(TAG)
+                            .d("Selected account $previousSelectedAccountId was removed, clearing folder selection.")
+                        viewModelScope.launch {
+                            messageRepository.setTargetFolder(null, null)
+                            threadRepository.setTargetFolderForThreads(null, null, null)
+                        }
                     }
                     currentState.copy(
                         accounts = newAccountList,
                         selectedFolder = if (selectedAccountRemoved) null else currentState.selectedFolder,
-                        selectedFolderAccountId = if (selectedAccountRemoved) null else currentState.selectedFolderAccountId,
-                        pendingGoogleConsentAccountId = if (selectedAccountRemoved && previousSelectedAccountId == currentState.pendingGoogleConsentAccountId) null else currentState.pendingGoogleConsentAccountId
+                        selectedFolderAccountId = if (selectedAccountRemoved) null else currentState.selectedFolderAccountId
                     )
                 }
-                if (_uiState.value.selectedFolder == null) {
+                if (_uiState.value.selectedFolder == null && newAccountList.isNotEmpty()) {
                     selectDefaultFolderIfNeeded(_uiState.value)
                 }
             }.launchIn(viewModelScope)
 
-        accountRepository.isLoadingAccountAction
-            .onEach { isLoading ->
-                if (_uiState.value.isLoadingAccountAction != isLoading) {
-                    Log.d(TAG, "AccountRepo isLoadingAccountAction changed: $isLoading")
-                    _uiState.update { it.copy(isLoadingAccountAction = isLoading) }
-                }
-            }.launchIn(viewModelScope)
-
-        accountRepository.accountActionMessage
+        defaultAccountRepository.observeActionMessages()
             .onEach { message ->
-                if (_uiState.value.toastMessage != message) {
-                    Log.d(TAG, "AccountRepo accountActionMessage: $message")
+                if (message != null) {
+                    Timber.tag(TAG).d("AccountRepo accountActionMessage: $message")
                     _uiState.update { it.copy(toastMessage = message) }
                 }
             }.launchIn(viewModelScope)
-        Log.d(TAG, "Finished setting up AccountRepository observation flows")
+        Timber.tag(TAG).d("Finished setting up AccountRepository observation flows")
     }
 
     private fun observeFolderRepository() {
-        Log.d(TAG, "MainViewModel: observeFolderRepository() - Setting up flow")
+        Timber.tag(TAG).d("MainViewModel: observeFolderRepository() - Setting up flow")
 
         folderRepository.observeFoldersState()
             .onEach { folderStatesMap ->
                 val previousFolderMap = _uiState.value.foldersByAccountId
                 if (previousFolderMap != folderStatesMap) {
-                    Log.d(
-                        TAG,
+                    Timber.tag(TAG).d(
                         "MainViewModel: FolderRepo State Changed: ${folderStatesMap.entries.joinToString { "${it.key}=${it.value::class.simpleName}" }}"
                     )
                     folderStatesMap.forEach { (accountId, state) ->
                         when (state) {
                             is FolderFetchState.Success -> {
-                                Log.d(
-                                    TAG,
+                                Timber.tag(TAG).d(
                                     "MainViewModel: Account $accountId has ${state.folders.size} folders"
                                 )
                                 if (state.folders.isNotEmpty()) {
-                                    Log.d(
-                                        TAG,
+                                    Timber.tag(TAG).d(
                                         "MainViewModel: Folder names: ${state.folders.joinToString { it.displayName }}"
                                     )
                                 }
                             }
 
-                            is FolderFetchState.Loading -> Log.d(
-                                TAG,
+                            is FolderFetchState.Loading -> Timber.tag(TAG).d(
                                 "MainViewModel: Account $accountId folders are loading"
                             )
 
-                            is FolderFetchState.Error -> Log.e(
-                                TAG,
+                            is FolderFetchState.Error -> Timber.tag(TAG).e(
                                 "MainViewModel: Account $accountId folders error: ${state.error}"
                             )
                         }
                     }
                     _uiState.update { it.copy(foldersByAccountId = folderStatesMap) }
-                    Log.d(TAG, "MainViewModel: UI state updated with new folder states")
+                    Timber.tag(TAG).d("MainViewModel: UI state updated with new folder states")
 
                     val justLoaded = folderStatesMap.any { (id, state) ->
                         val wasLoading = previousFolderMap[id] is FolderFetchState.Loading
                         val isNotLoadingNow = state !is FolderFetchState.Loading
                         wasLoading && isNotLoadingNow.also {
-                            if (it) Log.d(
-                                TAG,
+                            if (it) Timber.tag(TAG).d(
                                 "MainViewModel: Folders for account $id just finished loading"
                             )
                         }
                     }
 
                     if (justLoaded && _uiState.value.selectedFolder == null) {
-                        Log.d(
-                            TAG,
+                        Timber.tag(TAG).d(
                             "MainViewModel: Folders just loaded and no folder selected, attempting default selection"
                         )
                         selectDefaultFolderIfNeeded(_uiState.value)
                     }
                 }
             }.launchIn(viewModelScope)
-        Log.d(TAG, "MainViewModel: Finished setting up FolderRepository observation flow")
+        Timber.tag(TAG).d("MainViewModel: Finished setting up FolderRepository observation flow")
     }
 
     private fun observeMessageRepository() {
-        Log.d(TAG, "MainViewModel: observeMessageRepository() - Setting up flow")
+        Timber.tag(TAG).d("MainViewModel: observeMessageRepository() - Setting up flow")
 
         messageRepository.messageDataState
             .onEach { newMessageState ->
                 if (_uiState.value.messageDataState != newMessageState) {
-                    Log.d(
-                        TAG,
+                    Timber.tag(TAG).d(
                         "MainViewModel: MessageRepo State Changed: ${newMessageState::class.simpleName}"
                     )
                     when (newMessageState) {
                         is MessageDataState.Success -> {
                             val messageCount = newMessageState.messages.size
-                            Log.d(
-                                TAG,
+                            Timber.tag(TAG).d(
                                 "ViewModel received Success with ${newMessageState.messages.size} messages. First 3 subjects: ${
                                     newMessageState.messages.take(3).map { it.subject }
                                 }"
@@ -376,7 +316,6 @@ class MainViewModel @Inject constructor(
                 val currentUiStateViewMode = _uiState.value.currentViewMode
                 if (currentUiStateViewMode != preferences.mailViewMode) {
                     _uiState.update { it.copy(currentViewMode = preferences.mailViewMode) }
-                    // If a folder is already selected, re-trigger fetch for the new view mode
                     _uiState.value.selectedFolder?.let { folder ->
                         _uiState.value.accounts.find { it.id == _uiState.value.selectedFolderAccountId }
                             ?.let { account ->
@@ -384,10 +323,7 @@ class MainViewModel @Inject constructor(
                                     TAG,
                                     "Preference changed, re-selecting folder ${folder.displayName} for new view mode ${preferences.mailViewMode}"
                                 )
-                                selectFolder(
-                                    folder,
-                                    account
-                                ) // selectFolder will use the updated currentViewMode from _uiState
+                                selectFolder(folder, account)
                             }
                     }
                 }
@@ -395,107 +331,85 @@ class MainViewModel @Inject constructor(
         }
     }
 
-    fun addAccount(activity: Activity) {
-        Log.d(TAG, "addAccount() called for Microsoft account")
+    fun addAccount(activity: Activity, providerType: String) {
+        Timber.tag(TAG).i("addAccount called for provider: $providerType")
+        _uiState.update { it.copy(isLoadingAccountAction = true) }
         viewModelScope.launch {
-            accountRepository.addAccount(activity, mailReadScopes, "MS")
-        }
-    }
-
-    fun addGoogleAccount(activity: Activity) {
-        Log.i(TAG, "addGoogleAccount() called - AppAuth Flow")
-        viewModelScope.launch {
-            accountRepository.addAccount(activity, gmailReadScopes, "GOOGLE")
-        }
-    }
-
-    fun removeAccount(activity: Activity, accountToRemove: Account?) {
-        Log.d(TAG, "removeAccount() called for account: ${accountToRemove?.username}")
-        if (accountToRemove == null) {
-            tryEmitToastMessage("Cannot remove null account.")
-            return
-        }
-        viewModelScope.launch {
-            accountRepository.removeAccount(accountToRemove)
+            try {
+                defaultAccountRepository.getAuthenticationIntentRequest(providerType, activity)
+                    .collect { intent ->
+                        if (intent != null) {
+                            Timber.tag(TAG)
+                                .d("Received intent from repository, emitting to _appAuthIntentToLaunch")
+                            _appAuthIntentToLaunch.value = intent
+                        } else {
+                            Timber.tag(TAG)
+                                .d("Received null intent from repository (e.g., MSAL handling UI internally).")
+                        }
+                        _uiState.update { it.copy(isLoadingAccountAction = false) }
+                    }
+            } catch (e: Exception) {
+                Timber.tag(TAG)
+                    .e(e, "Error calling getAuthenticationIntentRequest for $providerType")
+                _uiState.update {
+                    it.copy(
+                        isLoadingAccountAction = false,
+                        toastMessage = "Error starting sign-in: ${e.localizedMessage}"
+                    )
+                }
+            }
         }
     }
 
     fun clearAppAuthIntentToLaunch() {
-        Log.d(TAG, "clearAppAuthIntentToLaunch() called")
         _appAuthIntentToLaunch.value = null
     }
 
-    fun finalizeGoogleAppAuth(intent: Intent) {
-        Log.i(TAG, "finalizeGoogleAppAuth called with intent data. Action: ${intent.action}")
-        if (accountRepository is DefaultAccountRepository) {
-            viewModelScope.launch {
-                Log.d(TAG, "Calling repository.finalizeGoogleAccountSetupWithAppAuth")
-                accountRepository.finalizeGoogleAccountSetupWithAppAuth(intent)
-            }
-        } else {
-            Log.e(
-                TAG,
-                "Cannot finalize Google AppAuth: AccountRepository is not DefaultAccountRepository type."
-            )
-            tryEmitToastMessage("Internal error: Cannot complete Google account setup.")
-            _uiState.update { it.copy(isLoadingAccountAction = false) }
-        }
-    }
-
-    fun handleGoogleAppAuthError(errorMessage: String) {
-        Log.e(TAG, "handleGoogleAppAuthError: $errorMessage")
-        tryEmitToastMessage("Google Sign-In Error: $errorMessage")
-        _uiState.update { it.copy(isLoadingAccountAction = false) }
-        if (accountRepository is DefaultAccountRepository) {
-            Log.d(TAG, "Calling resetPendingGoogleAccountState in repository due to AppAuth error.")
-            accountRepository.resetPendingGoogleAccountState()
-        }
-    }
-
-    fun isAccountPendingGoogleConsent(accountId: String?): Boolean {
-        return _uiState.value.pendingGoogleConsentAccountId == accountId
-    }
-
-    fun finalizeGoogleScopeConsent(
-        account: Account,
-        intent: Intent?,
-        activity: Activity
+    fun handleAuthenticationResult(
+        resultCode: Int,
+        data: Intent?,
+        activity: Activity,
+        providerType: String
     ) {
-        Log.d(TAG, "finalizeGoogleScopeConsent (legacy) called for account: ${account.username}")
-        googleAccountCapability?.let {
-            viewModelScope.launch {
-                it.finalizeGoogleScopeConsent(account, intent, activity)
-                _uiState.update { it.copy(pendingGoogleConsentAccountId = null) }
-                _googleConsentIntentSender.value = null
-            }
-        } ?: run {
-            Log.e(
-                TAG,
-                "Cannot finalize legacy Google consent: GoogleAccountCapability not available"
-            )
-            tryEmitToastMessage("Error: Cannot complete Google account setup (legacy path).")
-            _uiState.update {
-                it.copy(
-                    pendingGoogleConsentAccountId = null,
-                    isLoadingAccountAction = false
+        Timber.tag(TAG)
+            .d("handleAuthenticationResult in ViewModel. Provider: $providerType, ResultCode: $resultCode, Data: $data")
+        viewModelScope.launch {
+            try {
+                defaultAccountRepository.handleAuthenticationResult(
+                    providerType,
+                    resultCode,
+                    data,
+                    activity
                 )
+            } catch (e: Exception) {
+                Timber.tag(TAG).e(e, "Error handling authentication result for $providerType")
+                _uiState.update {
+                    it.copy(
+                        isLoadingAccountAction = false,
+                        toastMessage = "Error processing sign-in: ${e.localizedMessage}"
+                    )
+                }
             }
-            _googleConsentIntentSender.value = null
         }
     }
 
-    fun clearGoogleConsentIntentSender() {
-        Log.d(TAG, "clearGoogleConsentIntentSender() called")
-        _googleConsentIntentSender.value = null
-        _uiState.update { it.copy(pendingGoogleConsentAccountId = null) }
+    fun signOutAndRemoveAccount(account: Account) {
+        Timber.tag(TAG).i("signOutAndRemoveAccount called for account: ${account.username}")
+        _uiState.update { it.copy(isLoadingAccountAction = true) }
+        viewModelScope.launch {
+            try {
+                defaultAccountRepository.signOut(account)
+            } catch (e: Exception) {
+                Timber.tag(TAG).e(e, "Error signing out account ${account.username}")
+                _uiState.update { it.copy(toastMessage = "Error signing out: ${e.localizedMessage}") }
+            } finally {
+                _uiState.update { it.copy(isLoadingAccountAction = false) }
+            }
+        }
     }
 
     fun toastMessageShown() {
-        if (_uiState.value.toastMessage != null) {
-            Log.d(TAG, "Toast message shown, clearing UI state message.")
-            _uiState.update { it.copy(toastMessage = null) }
-            accountRepository.clearAccountActionMessage()
-        }
+        _uiState.update { it.copy(toastMessage = null) }
     }
 
     private fun tryEmitToastMessage(message: String?) {
@@ -506,7 +420,9 @@ class MainViewModel @Inject constructor(
 
     private fun selectDefaultFolderIfNeeded(currentState: MainScreenState) {
         Log.d(TAG_DEBUG_DEFAULT_SELECT, "Checking if default folder selection is needed...")
-        if (currentState.authState is AuthState.Initialized &&
+        if (currentState.authState !is AuthState.SignedOut &&
+            currentState.authState !is AuthState.AuthError &&
+            currentState.authState !is AuthState.Initializing &&
             currentState.accounts.isNotEmpty() &&
             currentState.selectedFolder == null &&
             !currentState.isAnyFolderLoading
@@ -514,40 +430,36 @@ class MainViewModel @Inject constructor(
             Log.d(TAG_DEBUG_DEFAULT_SELECT, "Attempting default folder selection...")
             var folderToSelect: MailFolder? = null
             var accountForFolder: Account? = null
-            for (account in currentState.accounts) {
-                val folderState = currentState.foldersByAccountId[account.id]
-                if (folderState is FolderFetchState.Success) {
-                    val inbox = folderState.folders.find { folder: MailFolder ->
-                        folder.displayName.equals("Inbox", ignoreCase = true)
+
+            val accountToConsider = currentState.accounts.firstOrNull()
+
+            if (accountToConsider != null) {
+                val folderState = currentState.foldersByAccountId[accountToConsider.id]
+                if (folderState is FolderFetchState.Success && folderState.folders.isNotEmpty()) {
+                    folderToSelect = folderState.folders.find { folder ->
+                        folder.isInboxFolder()
                     }
-                    if (inbox != null) {
-                        folderToSelect = inbox; accountForFolder = account
+                    if (folderToSelect == null) {
+                        folderToSelect = folderState.folders.first()
                         Log.d(
                             TAG_DEBUG_DEFAULT_SELECT,
-                            "Found Inbox in account ${account.username}"
+                            "Inbox not found in account ${accountToConsider.username}, defaulting to first folder '${folderToSelect.displayName}'."
                         )
-                        break
-                    }
-                }
-            }
-            if (folderToSelect == null) {
-                Log.d(
-                    TAG_DEBUG_DEFAULT_SELECT,
-                    "Inbox not found, checking for first available folder."
-                )
-                for (account in currentState.accounts) {
-                    val folderState = currentState.foldersByAccountId[account.id]
-                    if (folderState is FolderFetchState.Success && folderState.folders.isNotEmpty()) {
-                        folderToSelect = folderState.folders.firstOrNull(); accountForFolder =
-                            account
+                    } else {
                         Log.d(
                             TAG_DEBUG_DEFAULT_SELECT,
-                            "Found first folder '${folderToSelect?.displayName}' in account ${account.username}"
+                            "Found Inbox in account ${accountToConsider.username}."
                         )
-                        break
                     }
+                    accountForFolder = accountToConsider
+                } else {
+                    Log.d(
+                        TAG_DEBUG_DEFAULT_SELECT,
+                        "No folders or not in Success state for account ${accountToConsider.username}. State: $folderState"
+                    )
                 }
             }
+
             if (folderToSelect != null && accountForFolder != null) {
                 Log.i(
                     TAG_DEBUG_DEFAULT_SELECT,
@@ -559,10 +471,12 @@ class MainViewModel @Inject constructor(
                     TAG_DEBUG_DEFAULT_SELECT,
                     "No suitable default folder found after checking states."
                 )
-                viewModelScope.launch { messageRepository.setTargetFolder(null, null) }
             }
         } else {
-            Log.d(TAG_DEBUG_DEFAULT_SELECT, "Default folder selection skipped.")
+            Log.d(
+                TAG_DEBUG_DEFAULT_SELECT,
+                "Default folder selection skipped. AuthState: ${currentState.authState}, Accounts: ${currentState.accounts.size}, SelectedFolder: ${currentState.selectedFolder}, AnyFolderLoading: ${currentState.isAnyFolderLoading}"
+            )
         }
     }
 
@@ -576,14 +490,12 @@ class MainViewModel @Inject constructor(
         val isSameFolderAndAccount =
             folder.id == _uiState.value.selectedFolder?.id && accountId == _uiState.value.selectedFolderAccountId
 
-        // Check if data for the *current* view mode is already loaded or loading for this folder
         if (isSameFolderAndAccount) {
             if (_uiState.value.currentViewMode == ViewMode.THREADS && _uiState.value.threadDataState !is ThreadDataState.Initial) {
                 Log.d(
                     TAG,
                     "Folder ${folder.displayName} already selected for THREADS view and data exists/loading. Skipping full re-fetch."
                 )
-                // Update selected folder state, but don't re-fetch
                 _uiState.update {
                     it.copy(
                         selectedFolder = folder,
@@ -597,7 +509,6 @@ class MainViewModel @Inject constructor(
                     TAG,
                     "Folder ${folder.displayName} already selected for MESSAGES view and data exists/loading. Skipping full re-fetch."
                 )
-                // Update selected folder state, but don't re-fetch
                 _uiState.update {
                     it.copy(
                         selectedFolder = folder,
@@ -611,28 +522,26 @@ class MainViewModel @Inject constructor(
         _uiState.update { it.copy(selectedFolder = folder, selectedFolderAccountId = accountId) }
 
         viewModelScope.launch {
-            // The logic here should correctly use the _uiState.value.currentViewMode which is now updated by observeUserPreferences
             if (_uiState.value.currentViewMode == ViewMode.THREADS) {
                 Log.d(
                     TAG,
                     "selectFolder: Current view mode is THREADS. Clearing message state, setting target for threads."
                 )
-                // Clear the other view's data and trigger fetch for the current view.
-                if (_uiState.value.messageDataState !is MessageDataState.Initial) { // Only reset if not already initial
-                    messageRepository.setTargetFolder(null, null) // Reset message repo
+                if (_uiState.value.messageDataState !is MessageDataState.Initial) {
+                    messageRepository.setTargetFolder(null, null)
                 }
                 threadRepository.setTargetFolderForThreads(account, folder)
-            } else { // ViewMode.MESSAGES
+            } else {
                 Log.d(
                     TAG,
                     "selectFolder: Current view mode is MESSAGES. Clearing thread state, setting target for messages."
                 )
-                if (_uiState.value.threadDataState !is ThreadDataState.Initial) { // Only reset if not already initial
+                if (_uiState.value.threadDataState !is ThreadDataState.Initial) {
                     threadRepository.setTargetFolderForThreads(
                         null,
                         null,
                         null
-                    ) // Reset thread repo
+                    )
                 }
                 messageRepository.setTargetFolder(account, folder)
             }
@@ -657,18 +566,33 @@ class MainViewModel @Inject constructor(
             return
         }
 
+        val account = _uiState.value.accounts.find { it.id == currentSelectedAccountId }
+        if (account == null) {
+            Log.e(
+                TAG,
+                "Refresh current view: selected account ID $currentSelectedAccountId not found in accounts list."
+            )
+            tryEmitToastMessage("Error: Selected account not found.")
+            return
+        }
+
         if (_uiState.value.currentViewMode == ViewMode.THREADS) {
             Log.d(
                 TAG,
                 "Requesting thread refresh via ThreadRepository for folder: ${currentSelectedFolder.displayName}"
             )
-            viewModelScope.launch { threadRepository.refreshThreads(activity) }
+            viewModelScope.launch {
+                threadRepository.setTargetFolderForThreads(account, currentSelectedFolder, activity)
+            }
+
         } else {
             Log.d(
                 TAG,
                 "Requesting message refresh via MessageRepository for folder: ${currentSelectedFolder.displayName}"
             )
-            viewModelScope.launch { messageRepository.refreshMessages(activity) }
+            viewModelScope.launch {
+                messageRepository.setTargetFolder(account, currentSelectedFolder)
+            }
         }
     }
 
@@ -682,51 +606,17 @@ class MainViewModel @Inject constructor(
                 capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
     }
 
-    // REMOVE THE OLD toggleViewMode()
-    /*
-    fun toggleViewMode() {
-        val newMode =
-            if (_uiState.value.currentViewMode == ViewMode.THREADS) ViewMode.MESSAGES else ViewMode.THREADS
-        Log.i(TAG, "Toggling view mode from ${_uiState.value.currentViewMode} to: $newMode")
-        _uiState.update {
-            it.copy(
-                currentViewMode = newMode,
-                messageDataState = if (newMode == ViewMode.THREADS) MessageDataState.Initial else it.messageDataState,
-                threadDataState = if (newMode == ViewMode.MESSAGES) ThreadDataState.Initial else it.threadDataState
-            )
-        }
-        _uiState.value.selectedFolder?.let { folder ->
-            _uiState.value.accounts.find { it.id == _uiState.value.selectedFolderAccountId }
-                ?.let { account ->
-                    Log.d(
-                        TAG,
-                        "Re-selecting folder ${folder.displayName} for new view mode $newMode"
-                    )
-                    selectFolder(folder, account)
-                }
-        } ?: Log.d(
-            TAG,
-            "No folder selected, view mode toggled but no data fetch triggered for folder."
-        )
-    }
-    */
-
-    // ADD THE NEW setViewModePreference FUNCTION
     fun setViewModePreference(newMode: ViewMode) {
         Log.i(TAG, "setViewModePreference called with new mode: $newMode")
         if (_uiState.value.currentViewMode == newMode) {
             Log.d(TAG, "setViewModePreference: View mode is already $newMode. No change.")
-            return // No change
+            return
         }
 
         viewModelScope.launch {
             userPreferencesRepository.updateMailViewMode(newMode)
-            // userPreferencesFlow in observeUserPreferences will automatically update _uiState.value.currentViewMode
-            // and trigger re-selection of folder if needed.
-            // We also explicitly reset the *other* view's data here to ensure a clean switch.
             _uiState.update { currentState ->
                 currentState.copy(
-                    // currentViewMode will be updated by the flow, but ensure other data states are reset
                     messageDataState = if (newMode == ViewMode.THREADS && currentState.messageDataState !is MessageDataState.Initial) {
                         Log.d(
                             TAG,
@@ -747,10 +637,76 @@ class MainViewModel @Inject constructor(
                     }
                 )
             }
-            // The flow collector in observeUserPreferences should handle calling selectFolder.
-            // If a folder is selected, it will be re-selected for the new mode.
-            // If no folder is selected, nothing extra needs to happen here regarding data fetching.
         }
+    }
+
+    fun getSelectedAccount(): Account? {
+        val selectedAccountId = _uiState.value.selectedFolderAccountId
+        if (selectedAccountId != null) {
+            return _uiState.value.accounts.find { it.id == selectedAccountId }
+        }
+        return null
+    }
+
+    fun refreshFoldersForAccount(accountId: String) {
+        Log.w(TAG, "refreshFoldersForAccount($accountId) - Not yet fully implemented from merge.")
+    }
+
+    fun refreshCurrentFolderMessages() {
+        Log.w(TAG, "refreshCurrentFolderMessages() - Not yet fully implemented from merge.")
+    }
+
+    fun refreshCurrentFolderThreads() {
+        Log.w(TAG, "refreshCurrentFolderThreads() - Not yet fully implemented from merge.")
+    }
+
+    fun toggleViewMode() {
+        Log.w(TAG, "toggleViewMode() called - Deprecated, use setViewModePreference.")
+        val newMode =
+            if (_uiState.value.currentViewMode == ViewMode.THREADS) ViewMode.MESSAGES else ViewMode.THREADS
+        setViewModePreference(newMode)
+    }
+
+    fun markMessageAsRead(messageId: String, folderId: String, accountId: String) {
+        Log.w(TAG, "markMessageAsRead - Not yet fully implemented.")
+    }
+
+    fun markMessageAsUnread(messageId: String, folderId: String, accountId: String) {
+        Log.w(TAG, "markMessageAsUnread - Not yet fully implemented.")
+    }
+
+    fun deleteMessage(messageId: String, folderId: String, accountId: String) {
+        Log.w(TAG, "deleteMessage - Not yet fully implemented.")
+    }
+
+    fun moveMessage(
+        messageId: String,
+        currentFolderId: String,
+        targetFolderId: String,
+        accountId: String
+    ) {
+        Log.w(TAG, "moveMessage - Not yet fully implemented.")
+    }
+
+    fun markThreadAsRead(threadId: String, folderId: String, accountId: String) {
+        Log.w(TAG, "markThreadAsRead - Not yet fully implemented.")
+    }
+
+    fun markThreadAsUnread(threadId: String, folderId: String, accountId: String) {
+        Log.w(TAG, "markThreadAsUnread - Not yet fully implemented.")
+    }
+
+    fun deleteThread(threadId: String, folderId: String, accountId: String) {
+        Log.w(TAG, "deleteThread - Not yet fully implemented.")
+    }
+
+    fun moveThread(
+        threadId: String,
+        currentFolderId: String,
+        targetFolderId: String,
+        accountId: String
+    ) {
+        Log.w(TAG, "moveThread - Not yet fully implemented.")
     }
 
     override fun onCleared() {
@@ -758,3 +714,10 @@ class MainViewModel @Inject constructor(
         Log.d(TAG, "ViewModel Cleared.")
     }
 }
+
+fun MailFolder.isInboxFolder(): Boolean {
+    return this.type == WellKnownFolderType.INBOX ||
+            this.displayName.equals("Inbox", ignoreCase = true) ||
+            this.displayName.equals("Caixa de Entrada", ignoreCase = true)
+}
+

@@ -12,7 +12,6 @@ import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.ActivityResultLauncher
-import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Box
@@ -29,7 +28,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -48,15 +46,14 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch
+import net.melisma.core_data.model.Account
 import net.melisma.core_data.model.AuthState
-import net.melisma.core_data.model.ThreadDataState
 import net.melisma.mail.ui.MailDrawerContent
 import net.melisma.mail.ui.MailTopAppBar
 import net.melisma.mail.ui.MessageListContent
 import net.melisma.mail.ui.ThreadListContent
 import net.melisma.mail.ui.settings.SettingsScreen
 import net.melisma.mail.ui.theme.MailTheme
-import net.openid.appauth.AuthorizationException
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
@@ -65,8 +62,6 @@ class MainActivity : ComponentActivity() {
     private val TAG = "MainActivity_AppAuth"
 
     private lateinit var appAuthLauncher: ActivityResultLauncher<Intent>
-    private lateinit var legacyGoogleConsentLauncher: ActivityResultLauncher<IntentSenderRequest>
-
 
     override fun onCreate(savedInstanceState: Bundle?) {
         Log.d(TAG, "onCreate() called")
@@ -77,67 +72,7 @@ class MainActivity : ComponentActivity() {
             ActivityResultContracts.StartActivityForResult()
         ) { result ->
             Log.i(TAG, "appAuthLauncher: Result received. ResultCode: ${result.resultCode}")
-            if (result.resultCode == RESULT_OK) {
-                result.data?.let { intent ->
-                    Log.d(
-                        TAG,
-                        "appAuthLauncher: RESULT_OK, intent data is present. Finalizing AppAuth."
-                    )
-                    viewModel.finalizeGoogleAppAuth(intent)
-                } ?: run {
-                    Log.e(
-                        TAG,
-                        "appAuthLauncher: RESULT_OK, but intent data is NULL. This is unexpected for AppAuth success."
-                    )
-                    viewModel.handleGoogleAppAuthError("Authorization successful, but data missing.")
-                }
-            } else {
-                val exception = AuthorizationException.fromIntent(result.data)
-                Log.w(
-                    TAG,
-                    "appAuthLauncher: AppAuth flow did not return RESULT_OK. ResultCode: ${result.resultCode}, Error: ${exception?.toJsonString() ?: "No exception data"}"
-                )
-                viewModel.handleGoogleAppAuthError(
-                    exception?.errorDescription ?: exception?.error
-                    ?: "Authorization cancelled or failed by user."
-                )
-            }
-        }
-
-        Log.d(TAG, "Setting up legacyGoogleConsentLauncher for IntentSender results")
-        legacyGoogleConsentLauncher = registerForActivityResult(
-            ActivityResultContracts.StartIntentSenderForResult()
-        ) { result ->
-            Log.d(
-                TAG,
-                "legacyGoogleConsentLauncher: Result received, resultCode: ${result.resultCode}"
-            )
-            if (result.resultCode == RESULT_OK) {
-                Log.d(
-                    TAG,
-                    "legacyGoogleConsentLauncher: RESULT_OK. Current UI State Accounts: ${viewModel.uiState.value.accounts.joinToString { it.username }}"
-                )
-                val account = viewModel.uiState.value.accounts.firstOrNull {
-                    it.providerType == "GOOGLE" && viewModel.isAccountPendingGoogleConsent(it.id)
-                }
-                if (account != null) {
-                    Log.d(
-                        TAG,
-                        "legacyGoogleConsentLauncher: Found Google account: ${account.username} marked as pending consent, finalizing scope consent (legacy path)."
-                    )
-                    viewModel.finalizeGoogleScopeConsent(account, result.data, this)
-                } else {
-                    Log.w(
-                        TAG,
-                        "legacyGoogleConsentLauncher: RESULT_OK but no Google account found pending consent for legacy finalizeGoogleScopeConsent."
-                    )
-                }
-            } else {
-                Log.w(
-                    TAG,
-                    "legacyGoogleConsentLauncher: Flow cancelled or failed. ResultCode: ${result.resultCode}"
-                )
-            }
+            viewModel.handleGoogleAppAuthResult(this, result.resultCode, result.data)
         }
 
         Log.d(TAG, "Setting up observation of appAuthIntentToLaunch flow from ViewModel")
@@ -151,36 +86,14 @@ class MainActivity : ComponentActivity() {
                     try {
                         Log.d(TAG, "Launching AppAuth Intent with appAuthLauncher.")
                         appAuthLauncher.launch(it)
-                        viewModel.clearAppAuthIntentToLaunch()
                     } catch (e: Exception) {
                         Log.e(TAG, "Error launching AppAuth Intent via appAuthLauncher", e)
-                        viewModel.handleGoogleAppAuthError("Failed to launch Google authorization: ${e.message}")
-                    }
-                }
-            }
-        }
-
-        Log.d(TAG, "Setting up observation of legacy googleConsentIntentSender flow")
-        lifecycleScope.launch {
-            viewModel.googleConsentIntentSender.collect { intentSender ->
-                if (intentSender != null) {
-                    Log.i(
-                        TAG,
-                        "Received IntentSender for legacy Google consent, launching with legacyGoogleConsentLauncher."
-                    )
-                    try {
-                        val request = IntentSenderRequest.Builder(intentSender).build()
-                        Log.d(TAG, "Launching legacy Google consent activity (IntentSender).")
-                        legacyGoogleConsentLauncher.launch(request)
-                        viewModel.clearGoogleConsentIntentSender()
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Error launching legacy Google consent IntentSender", e)
+                        val errorPrefix = getString(R.string.error_google_signin_failed_generic)
                         Toast.makeText(
                             this@MainActivity,
-                            "Error launching Google consent: ${e.message}",
+                            "$errorPrefix: ${e.localizedMessage}",
                             Toast.LENGTH_LONG
                         ).show()
-                        viewModel.clearGoogleConsentIntentSender()
                     }
                 }
             }
@@ -210,7 +123,7 @@ class MainActivity : ComponentActivity() {
                         )
                     } else {
                         Log.e(TAG, "Error: Context is not an Activity in Settings path")
-                        ErrorDisplay("Critical Error: Cannot get Activity context.")
+                        ErrorDisplay(stringResource(R.string.error_critical_no_activity_context))
                     }
                 } else {
                     Log.d(TAG, "Showing MainApp")
@@ -227,31 +140,32 @@ class MainActivity : ComponentActivity() {
                         )
                     } else {
                         Log.e(TAG, "Error: Context is not an Activity in MainApp path")
-                        ErrorDisplay("Critical Error: Cannot get Activity context.")
+                        ErrorDisplay(stringResource(R.string.error_critical_no_activity_context))
                     }
                 }
             }
         }
     }
 
-    // Corrected onNewIntent signature to match ComponentActivity
-    override fun onNewIntent(intent: Intent) { // <<<< CORRECTED to non-nullable Intent
+    override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        // intent is non-nullable here, so no need for ?.let if directly accessing
         Log.i(
             TAG,
             "onNewIntent: Intent received. Action: ${intent.action}, Data: ${intent.dataString}, Flags: ${intent.flags}"
         )
+    }
 
-        // If AppAuth redirects here directly (e.g., due to launchMode="singleTop" for MainActivity
-        // AND RedirectUriReceiverActivity is configured to forward or not used),
-        // you might need to handle it.
-        // Example:
-        // if (intent.action == Intent.ACTION_VIEW && intent.dataString?.startsWith(YOUR_APP_SCHEME) == true) {
-        //     viewModel.handleAppAuthRedirect(intent) // This would require a new method in ViewModel
-        // }
-        // For now, the primary redirect handling is assumed to be via the ActivityResultLauncher
-        // for the AppAuth intent launched from onCreate's collectors.
+    @Composable
+    fun ErrorDisplay(message: String) {
+        Box(modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp), contentAlignment = Alignment.Center) {
+            Text(
+                text = message,
+                style = MaterialTheme.typography.headlineSmall,
+                textAlign = TextAlign.Center
+            )
+        }
     }
 }
 
@@ -322,71 +236,47 @@ fun MainApp(
                     is AuthState.Initializing -> {
                         LoadingIndicator(statusText = stringResource(R.string.status_initializing_auth))
                     }
-
-                    is AuthState.InitializationError -> {
-                        AuthInitErrorContent(errorState = currentAuthState)
+                    is AuthState.AuthError -> {
+                        AuthErrorContent(errorState = currentAuthState)
                     }
 
-                    is AuthState.Initialized -> {
-                        when {
-                            state.isLoadingAccountAction -> {
-                                LoadingIndicator(statusText = stringResource(R.string.status_authenticating))
-                            }
-                            state.accounts.isEmpty() -> {
-                                SignedOutContent(
-                                    onAddAccountClick = onNavigateToSettings,
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                            }
-                            state.selectedFolder != null -> {
-                                val accountForMessages =
-                                    state.accounts.find { it.id == state.selectedFolderAccountId }
-                                val currentActivity = LocalActivity.current
+                    is AuthState.SignedOut -> {
+                        if (state.isLoadingAccountAction) {
+                            LoadingIndicator(statusText = stringResource(R.string.status_authenticating))
+                        } else {
+                            SignedOutContent(
+                                onAddAccountClick = onNavigateToSettings,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                    }
 
-                                PullToRefreshBox(
-                                    isRefreshing = if (state.currentViewMode == ViewMode.THREADS) {
-                                        state.threadDataState is ThreadDataState.Loading && state.threads.isNullOrEmpty()
-                                    } else {
-                                        state.isMessageLoading
-                                    },
-                                    onRefresh = { viewModel.refreshCurrentView(currentActivity) },
-                                    modifier = Modifier.fillMaxSize()
-                                ) {
-                                    when (state.currentViewMode) {
-                                        ViewMode.THREADS -> {
-                                            ThreadListContent(
-                                                threadDataState = state.threadDataState,
-                                                accountContext = accountForMessages,
-                                                onThreadClick = { threadId ->
-                                                    showToast(context, "Thread ID: $threadId clicked (Detail view TBD)")
-                                                }
-                                            )
-                                        }
-                                        ViewMode.MESSAGES -> {
-                                            MessageListContent(
-                                                messageDataState = state.messageDataState,
-                                                accountContext = accountForMessages,
-                                                onMessageClick = { messageId ->
-                                                    showToast(context, "Message ID: $messageId clicked (Detail view TBD)")
-                                                }
-                                            )
-                                        }
-                                    }
-                                }
+                    is AuthState.SignedInWithMicrosoft,
+                    is AuthState.SignedInWithGoogle,
+                    is AuthState.SignedInBoth -> {
+                        if (state.isLoadingAccountAction && state.selectedFolder == null) {
+                            LoadingIndicator(statusText = stringResource(R.string.status_loading_accounts))
+                        } else if (state.accounts.isEmpty() && !state.isLoadingAccountAction) {
+                            SignedOutContent(
+                                onAddAccountClick = onNavigateToSettings,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        } else if (state.selectedFolder != null) {
+                            val accountForMessages =
+                                state.accounts.find { it.id == state.selectedFolderAccountId }
+                            val currentActivity = LocalActivity.current
+                            if (currentActivity != null) {
+                                MailContentWrapper(
+                                    viewModel = viewModel,
+                                    state = state,
+                                    activity = currentActivity,
+                                    accountContext = accountForMessages
+                                )
+                            } else {
+                                LoadingIndicator(statusText = "Waiting for activity...")
                             }
-                            else -> {
-                                Box(
-                                    modifier = Modifier.fillMaxSize(),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        stringResource(R.string.prompt_select_folder),
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        textAlign = TextAlign.Center,
-                                        modifier = Modifier.padding(16.dp)
-                                    )
-                                }
-                            }
+                        } else {
+                            NoFolderSelectedContent(onDrawerOpen = { scope.launch { drawerState.open() } })
                         }
                     }
                 }
@@ -394,7 +284,6 @@ fun MainApp(
         }
     }
 }
-
 
 @Composable
 private fun LoadingIndicator(statusText: String?) {
@@ -410,27 +299,20 @@ private fun LoadingIndicator(statusText: String?) {
 }
 
 @Composable
-private fun AuthInitErrorContent(errorState: AuthState.InitializationError) {
-    Box(modifier = Modifier
-        .fillMaxSize()
-        .padding(16.dp), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-                stringResource(R.string.error_auth_init_failed),
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.error,
-                textAlign = TextAlign.Center
-            )
-            Spacer(Modifier.height(8.dp))
-            val errorText =
-                errorState.error?.message ?: stringResource(id = R.string.error_unknown_occurred)
-            Text(
-                errorText,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.error,
-                textAlign = TextAlign.Center
-            )
-        }
+private fun AuthErrorContent(errorState: AuthState.AuthError) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center
+    ) {
+        Text(
+            stringResource(R.string.title_authentication_error),
+            style = MaterialTheme.typography.headlineMedium
+        )
+        Spacer(Modifier.height(8.dp))
+        Text(errorState.message)
     }
 }
 
@@ -460,15 +342,58 @@ private fun SignedOutContent(onAddAccountClick: () -> Unit, modifier: Modifier =
 }
 
 @Composable
-private fun ErrorDisplay(message: String) {
+fun NoFolderSelectedContent(onDrawerOpen: () -> Unit) {
     Box(modifier = Modifier
         .fillMaxSize()
         .padding(16.dp), contentAlignment = Alignment.Center) {
         Text(
-            text = message,
-            color = MaterialTheme.colorScheme.error,
+            stringResource(R.string.prompt_select_folder),
+            style = MaterialTheme.typography.bodyLarge,
             textAlign = TextAlign.Center
         )
+    }
+}
+
+@Composable
+fun MailContentWrapper(
+    viewModel: MainViewModel,
+    state: MainScreenState,
+    activity: Activity,
+    accountContext: Account?
+) {
+    val TAG_MAIL_CONTENT = "MailContentWrapper"
+    when (state.currentViewMode) {
+        ViewMode.THREADS -> {
+            Log.d(TAG_MAIL_CONTENT, "Displaying ThreadListContent")
+            ThreadListContent(
+                threadDataState = state.threadDataState,
+                accountContext = accountContext,
+                onThreadClick = { threadId ->
+                    Log.d(
+                        TAG_MAIL_CONTENT,
+                        "Thread clicked: $threadId - Navigation to thread detail not implemented yet."
+                    )
+                    // TODO: Navigate to thread detail screen
+                    // viewModel.selectThread(threadId)
+                }
+            )
+        }
+
+        ViewMode.MESSAGES -> {
+            Log.d(TAG_MAIL_CONTENT, "Displaying MessageListContent")
+            MessageListContent(
+                messageDataState = state.messageDataState,
+                accountContext = accountContext,
+                onMessageClick = { messageId ->
+                    Log.d(
+                        TAG_MAIL_CONTENT,
+                        "Message clicked: $messageId - Navigation to message detail not implemented yet."
+                    )
+                    // TODO: Navigate to message detail screen
+                    // viewModel.selectMessage(messageId)
+                }
+            )
+        }
     }
 }
 

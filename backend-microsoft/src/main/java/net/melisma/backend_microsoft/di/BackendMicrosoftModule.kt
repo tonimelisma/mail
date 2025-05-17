@@ -17,13 +17,14 @@ import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.logging.LogLevel
 import io.ktor.client.plugins.logging.Logging
 import io.ktor.serialization.kotlinx.json.json
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.serialization.json.Json
 import net.melisma.backend_microsoft.GraphApiHelper
 import net.melisma.backend_microsoft.auth.MicrosoftAuthManager
 import net.melisma.backend_microsoft.auth.MicrosoftKtorTokenProvider
-import net.melisma.backend_microsoft.auth.MicrosoftTokenPersistenceService
 import net.melisma.backend_microsoft.errors.MicrosoftErrorMapper
 import net.melisma.core_data.datasource.MailApiService
+import net.melisma.core_data.di.ApplicationScope
 import net.melisma.core_data.di.AuthConfigProvider
 import net.melisma.core_data.errors.ErrorMapperService
 import java.util.concurrent.TimeUnit
@@ -52,10 +53,13 @@ object BackendMicrosoftModule { // Changed to object module as it now only conta
     fun provideMicrosoftAuthManager(
         @ApplicationContext context: Context,
         authConfigProvider: AuthConfigProvider,
-        tokenPersistenceService: MicrosoftTokenPersistenceService
+        @ApplicationScope externalScope: CoroutineScope
     ): MicrosoftAuthManager {
-        Log.d("BackendMSModule", "Providing MicrosoftAuthManager with TokenPersistenceService")
-        return MicrosoftAuthManager(context, authConfigProvider, tokenPersistenceService)
+        Log.d(
+            "BackendMSModule",
+            "Providing MicrosoftAuthManager with ApplicationScope CoroutineScope"
+        )
+        return MicrosoftAuthManager(context, authConfigProvider, externalScope)
     }
 
     @Provides

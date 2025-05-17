@@ -1,13 +1,9 @@
 package net.melisma.backend_google.errors
 
 import android.util.Log
-import androidx.credentials.exceptions.GetCredentialCancellationException // Corrected import
-import androidx.credentials.exceptions.GetCredentialException
-import androidx.credentials.exceptions.NoCredentialException
-// Removed UserCancellationException as it's not the correct one from androidx.credentials
-import com.google.android.gms.common.api.ApiException
-import com.google.android.libraries.identity.googleid.GoogleIdTokenParsingException
+import com.auth0.android.jwt.DecodeException // For ID token parsing errors from AppAuthHelperService
 import net.melisma.core_data.errors.ErrorMapperService
+import net.openid.appauth.AuthorizationException // Key exception from AppAuth
 import java.io.IOException
 import javax.inject.Inject
 
@@ -22,20 +18,24 @@ class GoogleErrorMapper @Inject constructor() : ErrorMapperService {
             exception
         )
         return when (exception) {
-            is ApiException -> {
+            is AuthorizationException -> {
                 Log.e(
                     TAG,
-                    "Google API operation failed (ApiException): Status Code ${exception.statusCode}",
+                    "AppAuth AuthorizationException (Network/API related): Type: ${exception.type}, Code: ${exception.code}, Desc: ${exception.errorDescription}",
                     exception
                 )
-                "A Google service error occurred (Code: ${exception.statusCode}). Please check your connection or try again."
+                if (exception.code == AuthorizationException.GeneralErrors.NETWORK_ERROR.code ||
+                    exception.code == AuthorizationException.GeneralErrors.SERVER_ERROR.code
+                ) {
+                    "Network error during Google operation. Please check your connection or try again. (AppAuth Code: ${exception.code})"
+                } else {
+                    "A Google service error occurred during authentication. (AppAuth Code: ${exception.code})"
+                }
             }
-
             is IOException -> {
                 Log.e(TAG, "Network or I/O error during Google operation.", exception)
                 "Network error. Please check your internet connection and try again."
             }
-
             else -> {
                 Log.e(TAG, "Unknown Google Network/API error: ${exception?.message}", exception)
                 "An unknown network or Google service error occurred. Please try again."
@@ -50,57 +50,48 @@ class GoogleErrorMapper @Inject constructor() : ErrorMapperService {
             exception
         )
         return when (exception) {
-            is GetCredentialCancellationException -> { // Corrected Exception Type
-                Log.d(TAG, "Authentication cancelled by user (GetCredentialCancellationException).")
-                "Sign-in cancelled by user."
-            }
-
-            is NoCredentialException -> {
-                Log.d(TAG, "No credentials available for authentication (NoCredentialException).")
-                "No Google accounts found on this device to sign in. Please add an account to your device or try another method."
-            }
-
-            is GetCredentialException -> {
+            is AuthorizationException -> {
                 Log.e(
                     TAG,
-                    "Google Sign-In failed (GetCredentialException): ${exception.type} - ${exception.message}",
+                    "Google AppAuth AuthorizationException: Type: ${exception.type}, Code: ${exception.code}, Desc: ${exception.errorDescription}",
                     exception
                 )
-                "Google Sign-In failed. Please try again. (Error: ${exception.type})"
-            }
+                when (exception.code) {
+                    AuthorizationException.GeneralErrors.USER_CANCELED_AUTH_FLOW.code ->
+                        "Sign-in cancelled by user."
 
-            is GoogleIdTokenParsingException -> {
-                Log.e(TAG, "Failed to parse Google ID token.", exception)
-                "An error occurred while processing your Google Sign-In. Please try again."
-            }
+                    AuthorizationException.GeneralErrors.PROGRAM_CANCELED_AUTH_FLOW.code ->
+                        "Sign-in process was cancelled."
 
-            is IllegalStateException -> {
-                if (exception.message?.contains("PendingIntent missing") == true ||
-                    exception.message?.contains("Access token is null") == true ||
-                    exception.message?.contains("Unexpected credential type") == true ||
-                    exception.message?.contains("Consent still required") == true
-                ) {
-                    Log.e(
-                        TAG,
-                        "Google Auth Flow IllegalStateException: ${exception.message}",
-                        exception
-                    )
-                    "An internal error occurred with Google Sign-In. Please try again. (${exception.message})"
-                } else {
-                    Log.e(TAG, "An unexpected auth state occurred: ${exception.message}", exception)
-                    "An unexpected authentication error occurred. Please try again later."
+                    AuthorizationException.TokenRequestErrors.INVALID_GRANT.code ->
+                        "Authentication failed. Your session might have expired or been revoked. Please try signing in again."
+
+                    AuthorizationException.TokenRequestErrors.INVALID_CLIENT.code,
+                    AuthorizationException.TokenRequestErrors.INVALID_REQUEST.code,
+                    AuthorizationException.TokenRequestErrors.INVALID_SCOPE.code,
+                    AuthorizationException.TokenRequestErrors.UNAUTHORIZED_CLIENT.code,
+                    AuthorizationException.TokenRequestErrors.UNSUPPORTED_GRANT_TYPE.code ->
+                        "Authentication configuration error. Please contact support if this persists. (Error: ${exception.errorDescription ?: exception.code})"
+
+                    AuthorizationException.GeneralErrors.NETWORK_ERROR.code ->
+                        "Network error during sign-in. Please check your connection."
+
+                    AuthorizationException.GeneralErrors.SERVER_ERROR.code ->
+                        "Google server error during sign-in. Please try again later."
+
+                    else ->
+                        "An authentication error occurred with Google. (AppAuth: ${exception.errorDescription ?: exception.code})"
                 }
             }
 
-            is ApiException -> { // Catching ApiException here too if it's auth related
-                Log.e(
-                    TAG,
-                    "Google Auth operation failed (ApiException): Status Code ${exception.statusCode}",
-                    exception
-                )
-                "A Google authentication error occurred (Code: ${exception.statusCode}). Please try again."
+            is DecodeException -> {
+                Log.e(TAG, "Failed to decode or parse ID token.", exception)
+                "An error occurred while processing your Google Sign-In data. Please try again."
             }
-
+            is IllegalStateException -> {
+                Log.e(TAG, "An unexpected auth state occurred: ${exception.message}", exception)
+                "An unexpected authentication error occurred. Please try again later."
+            }
             else -> {
                 Log.e(TAG, "Unknown Google Auth error: ${exception?.message}", exception)
                 "An unknown authentication error occurred with Google. Please try again."

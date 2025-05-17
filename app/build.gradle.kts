@@ -75,9 +75,8 @@ dependencies {
     implementation(libs.microsoft.msal)
 
     // --- AppAuth ---
-    // Explicitly add AppAuth to the app module to ensure direct access to its classes like AuthorizationException
-    implementation(libs.appauth) // <<<< ADDED/ENSURED THIS LINE
-    implementation(libs.androidx.browser) // For CustomTabs with AppAuth, often used together
+    implementation(libs.appauth)
+    implementation(libs.androidx.browser)
 
     // --- AndroidX Core & Lifecycle ---
     implementation(libs.androidx.core.ktx)
@@ -127,4 +126,10 @@ dependencies {
     androidTestImplementation(libs.androidx.ui.test.junit4)
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
+
+    implementation(libs.androidx.navigation.compose)
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation("com.jakewharton.timber:timber:5.0.1")
+
+    // Hilt Navigation Compose
 }

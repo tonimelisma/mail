@@ -1,9 +1,13 @@
 package net.melisma.backend_google.di
 
+// Added imports for Context, AccountManager and @ApplicationContext
+import android.accounts.AccountManager
+import android.content.Context
 import android.util.Log
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
+import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import dagger.multibindings.IntoMap
 import dagger.multibindings.StringKey
@@ -83,12 +87,13 @@ object BackendGoogleModule {
                 bearer {
                     loadTokens {
                         // This lambda IS a suspend context
-                        googleKtorTokenProvider.loadBearerTokens()
+                        googleKtorTokenProvider.getBearerTokens()
                     }
 
-                    refreshTokens { // oldTokens: BearerTokens? -> // Ktor provides oldTokens as this.oldTokens implicitly
-                        // This lambda IS a suspend context
-                        googleKtorTokenProvider.refreshBearerTokens(this.oldTokens)
+                    refreshTokens {
+                        // This would be called by Ktor if a request with tokens from loadTokens fails (e.g., 401)
+                        googleKtorTokenProvider.getBearerTokens()
+                        // Alternatively, a more specific refresh-only method could be exposed by the provider
                     }
 
                     // Optional: Only send tokens for Gmail API calls
@@ -128,5 +133,20 @@ object BackendGoogleModule {
     ): ErrorMapperService {
         Log.i("BackendGoogleModule", "Providing ErrorMapperService for 'GOOGLE' key via @Provides")
         return googleErrorMapper
+    }
+
+    // New @Provides methods for Context and AccountManager
+    @Provides
+    @Singleton
+    fun provideApplicationContext(@ApplicationContext context: Context): Context {
+        Log.d("BackendGoogleModule", "Providing ApplicationContext")
+        return context
+    }
+
+    @Provides
+    @Singleton
+    fun provideAccountManager(@ApplicationContext context: Context): AccountManager { // Ensure @ApplicationContext if directly using it here for safety
+        Log.d("BackendGoogleModule", "Providing AccountManager")
+        return AccountManager.get(context)
     }
 }

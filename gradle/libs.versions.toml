@@ -45,6 +45,8 @@ browserCustomTabs = "1.8.0" # Latest stable version as of May 2025
 
 ksp = "2.0.0-1.0.22" # Ensured KSP version for Kotlin 2.0.0
 datastorePreferences = "1.1.1" # <-- ADDED DATASTORE VERSION
+timber = "5.0.1" # Added Timber version
+navigationCompose = "2.8.0-beta05" # Added Navigation Compose version
 
 [libraries]
 kotlin-stdlib = { group = "org.jetbrains.kotlin", name = "kotlin-stdlib", version.ref = "kotlin" }
@@ -90,6 +92,7 @@ androidx-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-toolin
 androidx-material3 = { group = "androidx.compose.material3", name = "material3" }
 androidx-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" } # Removed version.ref, should come from BOM or define version
 material = { group = "com.google.android.material", name = "material", version.ref = "material" }
+androidx-navigation-compose = { group = "androidx.navigation", name = "navigation-compose", version.ref = "navigationCompose" } # Added Navigation Compose library
 
 microsoft-msal = { group = "com.microsoft.identity.client", name = "msal", version.ref = "msal" }
 
@@ -114,6 +117,8 @@ turbine = { group = "app.cash.turbine", name = "turbine", version.ref = "turbine
 
 # DataStore Preferences
 androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastorePreferences" } # <-- ADDED DATASTORE LIBRARY
+
+timber = { group = "com.jakewharton.timber", name = "timber", version.ref = "timber" } # Added Timber library alias
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

@@ -1,80 +1,55 @@
 package net.melisma.core_data.repository
 
 import android.app.Activity
+import android.content.Intent
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import net.melisma.core_data.model.Account
-import net.melisma.core_data.model.AuthState
 
-/**
- * Interface defining the contract for managing user accounts and the overall authentication state.
- * This abstracts the underlying authentication mechanism (e.g., MSAL, Google Sign-In)
- * and provides a consistent API for the ViewModel layer.
- */
 interface AccountRepository {
+    fun getAccounts(): Flow<List<Account>>
+    fun getActiveAccount(providerType: String): Flow<Account?> // Or a single active overall
+    val overallApplicationAuthState: StateFlow<OverallApplicationAuthState>
 
     /**
-     * A [StateFlow] emitting the current overall authentication system state
-     * ([AuthState]: Initializing, Initialized, Error). Useful for showing global loading/error states.
-     */
-    val authState: StateFlow<AuthState>
-
-    /**
-     * A [StateFlow] emitting the current list of authenticated user accounts ([Account]).
-     * The list updates automatically when accounts are added or removed.
-     */
-    val accounts: StateFlow<List<Account>>
-
-    /**
-     * A [StateFlow] indicating whether an account operation (add/remove) is currently in progress.
-     * Useful for disabling buttons or showing loading indicators in the UI during these operations.
-     */
-    val isLoadingAccountAction: StateFlow<Boolean>
-
-    /**
-     * A [Flow] emitting single-event messages related to account operations
-     * (e.g., success/error/cancellation messages for add/remove actions).
-     * Designed to be collected for showing transient UI feedback like Toasts or Snackbars.
-     * Emits null when no message is pending.
-     */
-    val accountActionMessage: Flow<String?>
-
-    // Google-specific functionality has been moved to a separate capability interface
-
-    /**
-     * Initiates the flow to add a new account interactively via the underlying auth provider.
-     * The result (success, error, cancellation) will be communicated via [accountActionMessage],
-     * and the account list ([accounts]) and auth state ([authState]) will update via their respective flows.
+     * Initiates an authentication request for the given provider type.
      *
-     * @param activity The current [Activity] context, required by most auth SDKs to start the interactive flow.
-     * @param scopes The list of permission scopes required for the account being added (e.g., "Mail.Read").
-     */
-    suspend fun addAccount(activity: Activity, scopes: List<String>)
-
-    /**
-     * Initiates the flow to add a new account of the specified provider type interactively.
-     * The result (success, error, cancellation) will be communicated via [accountActionMessage],
-     * and the account list ([accounts]) and auth state ([authState]) will update via their respective flows.
+     * For providers like Google (AppAuth), this Flow is expected to emit an [Intent]
+     * that the caller (typically UI) should launch via `startActivityForResult`.
+     * The result of this Intent should then be passed to `handleAuthenticationResult`.
      *
-     * @param activity The current [Activity] context, required by most auth SDKs to start the interactive flow.
-     * @param scopes The list of permission scopes required for the account being added (e.g., "Mail.Read").
-     * @param providerType The type of provider (e.g., "MS" for Microsoft, "GOOGLE" for Google).
-     */
-    suspend fun addAccount(activity: Activity, scopes: List<String>, providerType: String)
-
-    /**
-     * Initiates the removal of the specified account from the application and the underlying auth provider.
-     * The result (success, error) will be communicated via [accountActionMessage],
-     * and the account list ([accounts]) will update via its flow.
+     * For providers like Microsoft (MSAL 6.0+), which manage their own UI (e.g., BrowserTabActivity)
+     * internally, this Flow will likely emit `null`. The authentication process is managed
+     * internally by the repository implementation, and its outcome (success, error, cancellation)
+     * will be reflected through updates to the accounts list (`getAccounts()`) and potentially
+     * action messages (`observeActionMessages()`). The provided [activity] is used by the
+     * implementation to launch the provider's UI.
      *
-     * @param account The [Account] object representing the account to remove.
+     * @param providerType The type of account provider (e.g., Account.PROVIDER_TYPE_MS).
+     * @param activity The current Activity context, crucial for providers that need to launch UI.
+     * @return A Flow that may emit an Intent to be launched, or null if the provider handles UI internally.
      */
-    suspend fun removeAccount(account: Account)
+    fun getAuthenticationIntentRequest(providerType: String, activity: Activity): Flow<Intent?>
+    suspend fun handleAuthenticationResult(
+        providerType: String,
+        resultCode: Int, // e.g. Activity.RESULT_OK
+        data: Intent?,
+        activity: Activity // For context if needed by implementation
+    )
 
-    /**
-     * Clears any pending message that might have been emitted by [accountActionMessage].
-     * This should typically be called by the UI layer after displaying the message to the user,
-     * preventing the same message from being shown again on configuration changes.
-     */
-    fun clearAccountActionMessage()
+    suspend fun signOut(account: Account)
+
+    fun observeActionMessages(): Flow<String?>
+    fun clearActionMessage()
+
+    suspend fun markAccountForReauthentication(accountId: String, providerType: String)
+    // ... other necessary generic account methods
+}
+
+enum class OverallApplicationAuthState {
+    UNKNOWN, // Initial state, or state cannot be determined
+    NO_ACCOUNTS_CONFIGURED, // No accounts have been added to the app yet
+    AT_LEAST_ONE_ACCOUNT_AUTHENTICATED, // At least one account is signed in and has valid tokens
+    ALL_ACCOUNTS_NEED_REAUTHENTICATION, // All configured accounts require re-authentication
+    PARTIAL_ACCOUNTS_NEED_REAUTHENTICATION // Some accounts are fine, others need re-authentication
 }

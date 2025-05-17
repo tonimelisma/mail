@@ -70,6 +70,9 @@ dependencies {
     implementation(libs.androidx.datastore.preferences) // Assuming alias is androidx-datastore-preferences
     implementation(libs.androidx.lifecycle.runtime.ktx) // Assuming alias is androidx-lifecycle-runtime-ktx
 
+    // Logging
+    implementation(libs.timber) // Added Timber for logging
+
     // Hilt
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)

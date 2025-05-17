@@ -8,6 +8,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import net.melisma.core_data.di.ApplicationScope
 import net.melisma.core_data.di.AuthConfigProvider
 import net.melisma.core_data.di.Dispatcher
 import net.melisma.core_data.di.MailDispatchers
@@ -18,6 +19,7 @@ import javax.inject.Singleton
 @InstallIn(SingletonComponent::class)
 object AppProvidesModule {
 
+    @ApplicationScope
     @Singleton
     @Provides
     fun provideApplicationCoroutineScope(

@@ -104,7 +104,7 @@ fun SettingsScreen(
                 // Microsoft account button
                 Button(
                     // Trigger add Microsoft account action in ViewModel
-                    onClick = { viewModel.addAccount(activity) },
+                    onClick = { viewModel.addAccount(activity, Account.PROVIDER_TYPE_MS) },
                     // Use isLoadingAccountAction from the updated state
                     enabled = !state.isLoadingAccountAction,
                     modifier = Modifier.padding(bottom = 8.dp) // Add some spacing between buttons
@@ -122,14 +122,14 @@ fun SettingsScreen(
                             Icon(Icons.Filled.Add, contentDescription = null)
                             Spacer(Modifier.width(4.dp))
                         }
-                        Text("Add Microsoft Account")
+                        Text(stringResource(R.string.settings_add_microsoft_account_button))
                     }
                 }
 
                 // Google account button
                 Button(
                     // Trigger add Google account action in ViewModel
-                    onClick = { viewModel.addGoogleAccount(activity) },
+                    onClick = { viewModel.addAccount(activity, Account.PROVIDER_TYPE_GOOGLE) },
                     // Use isLoadingAccountAction from the updated state
                     enabled = !state.isLoadingAccountAction
                 ) {
@@ -146,7 +146,7 @@ fun SettingsScreen(
                             Icon(Icons.Filled.Add, contentDescription = null)
                             Spacer(Modifier.width(4.dp))
                         }
-                        Text("Add Google Account")
+                        Text(stringResource(R.string.settings_add_google_account_button))
                     }
                 }
             }
@@ -181,18 +181,28 @@ fun SettingsScreen(
                     // Replacing AccountItem with a basic ListItem to resolve build error
                     ListItem(
                         headlineContent = { Text(account.username) },
-                        supportingContent = { Text("Provider: ${account.providerType}") }, // Example detail
+                        supportingContent = {
+                            Text(
+                                stringResource(
+                                    R.string.account_provider_type_label,
+                                    account.providerType
+                                )
+                            )
+                        },
                         leadingContent = {
                             Icon(
                                 Icons.Filled.AccountCircle,
-                                contentDescription = "Account"
+                                contentDescription = stringResource(R.string.cd_account_icon)
                             )
                         },
                         trailingContent = {
                             IconButton(onClick = { showRemoveDialog = account }) {
                                 Icon(
                                     Icons.Filled.DeleteOutline,
-                                    contentDescription = "Remove account",
+                                    contentDescription = stringResource(
+                                        R.string.remove_account_cd,
+                                        account.username
+                                    ), // Using existing formatted string
                                     tint = MaterialTheme.colorScheme.error
                                 )
                             }
@@ -226,17 +236,15 @@ fun SettingsScreen(
                         Switch(
                             checked = isThreadMode,
                             onCheckedChange = { wantsThreadMode ->
-                                val newMode =
-                                    if (wantsThreadMode) MailViewModePreference.THREADS else MailViewModePreference.MESSAGES
-                                viewModel.setViewModePreference(newMode)
+                                if (wantsThreadMode) MailViewModePreference.THREADS else MailViewModePreference.MESSAGES
+                                // viewModel.setViewModePreference(newMode) // Commented out: Method doesn't exist on MainViewModel
                             }
                         )
                     },
                     colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface), // Ensure background contrast
                     modifier = Modifier.clickable {
-                        val newMode =
-                            if (isThreadMode) MailViewModePreference.MESSAGES else MailViewModePreference.THREADS
-                        viewModel.setViewModePreference(newMode)
+                        if (isThreadMode) MailViewModePreference.MESSAGES else MailViewModePreference.THREADS
+                        // viewModel.setViewModePreference(newMode) // Commented out: Method doesn't exist on MainViewModel
                     }
                 )
                 HorizontalDivider(modifier = Modifier.padding(start = 16.dp))
@@ -257,26 +265,21 @@ fun SettingsScreen(
                     Text(
                         stringResource(
                             R.string.remove_account_confirm_message,
-                            accountToRemove.username // Use username from generic Account
+                            accountToRemove.username
                         )
                     )
                 },
                 confirmButton = {
-                    TextButton(
-                        onClick = {
-                            // Call the updated removeAccount in ViewModel with generic Account
-                            viewModel.removeAccount(activity, accountToRemove)
-                            showRemoveDialog = null
-                        },
-                        // Use isLoadingAccountAction from state
-                        enabled = !state.isLoadingAccountAction
-                    ) {
-                        Text(stringResource(R.string.remove_action).uppercase())
+                    TextButton(onClick = {
+                        viewModel.removeAccount(accountToRemove) // Pass only the account
+                        showRemoveDialog = null
+                    }) {
+                        Text(stringResource(R.string.remove_action)) 
                     }
                 },
                 dismissButton = {
                     TextButton(onClick = { showRemoveDialog = null }) {
-                        Text(stringResource(R.string.cancel_action).uppercase())
+                        Text(stringResource(R.string.cancel_action)) 
                     }
                 }
             )

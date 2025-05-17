@@ -7,13 +7,16 @@ import io.ktor.client.plugins.auth.providers.BearerTokens
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import net.melisma.core_data.model.Account
+import net.melisma.core_data.repository.AccountRepository
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
 class MicrosoftKtorTokenProvider @Inject constructor(
     private val microsoftAuthManager: MicrosoftAuthManager,
-    private val activeAccountHolder: ActiveMicrosoftAccountHolder
+    private val activeAccountHolder: ActiveMicrosoftAccountHolder,
+    private val accountRepository: AccountRepository
 ) {
     private val TAG = "MicrosoftKtorTokenProv"
     private val refreshMutex = Mutex()
@@ -152,8 +155,13 @@ class MicrosoftKtorTokenProvider @Inject constructor(
                         "MicrosoftKtorTokenProvider: MSAL UI required for ${msalAccount.username}. " +
                                 "Cannot silently acquire/refresh token."
                     )
-                    // Signal Ktor that refresh failed and interaction is needed.
-                    // App should have a mechanism to catch this and trigger interactive sign-in.
+                    // Signal re-authentication needed
+                    msalAccount.id?.let { accountId ->
+                        accountRepository.markAccountForReauthentication(
+                            accountId,
+                            Account.PROVIDER_TYPE_MS
+                        )
+                    } ?: Log.e(TAG, "Cannot mark for re-auth, MSAL account ID is null.")
                     null
                 }
 
@@ -163,6 +171,19 @@ class MicrosoftKtorTokenProvider @Inject constructor(
                         "MicrosoftKtorTokenProvider: MSAL Error acquiring token for ${msalAccount.username}",
                         acquireTokenResult.exception
                     )
+                    // Check if it's an MsalUiRequiredException wrapped in Error result
+                    if (acquireTokenResult.exception is MsalUiRequiredException) {
+                        Log.w(
+                            TAG,
+                            "MSAL Error was MsalUiRequiredException for ${msalAccount.username}"
+                        )
+                        msalAccount.id?.let { accountId ->
+                            accountRepository.markAccountForReauthentication(
+                                accountId,
+                                Account.PROVIDER_TYPE_MS
+                            )
+                        } ?: Log.e(TAG, "Cannot mark for re-auth, MSAL account ID is null.")
+                    }
                     Log.e(
                         TAG,
                         "MicrosoftKtorTokenProvider: Error details: ${acquireTokenResult.exception.message}"
@@ -185,6 +206,16 @@ class MicrosoftKtorTokenProvider @Inject constructor(
                         "Cannot silently acquire/refresh token.",
                 e
             )
+            // Signal re-authentication needed
+            msalAccount.id?.let { accountId ->
+                accountRepository.markAccountForReauthentication(
+                    accountId,
+                    Account.PROVIDER_TYPE_MS
+                )
+            } ?: Log.e(
+                TAG,
+                "Cannot mark for re-auth from MsalUiRequiredException, MSAL account ID is null."
+            )
             Log.w(TAG, "MicrosoftKtorTokenProvider: Error details: ${e.message}")
             null
         } catch (e: Exception) {
@@ -201,19 +232,27 @@ class MicrosoftKtorTokenProvider @Inject constructor(
         }
     }
 
-    private fun findMsalAccount(accountId: String): IAccount? {
-        Log.d(TAG, "MicrosoftKtorTokenProvider: findMsalAccount called for accountId: $accountId")
-        val account = microsoftAuthManager.accounts.find { it.id == accountId }
+    private suspend fun findMsalAccount(accountId: String): IAccount? {
+        Log.d(
+            TAG,
+            "MicrosoftKtorTokenProvider: findMsalAccount (new suspend version) called for accountId: $accountId"
+        )
+        val account = try {
+            microsoftAuthManager.getAccountById(accountId).firstOrNull()
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception while calling microsoftAuthManager.getAccountById($accountId)", e)
+            null
+        }
+
         if (account != null) {
             Log.d(
                 TAG,
-                "MicrosoftKtorTokenProvider: Found MSAL account with username: ${account.username}"
+                "MicrosoftKtorTokenProvider: Found MSAL account with username: ${account.username} using new Flow method."
             )
         } else {
-            Log.w(TAG, "MicrosoftKtorTokenProvider: No MSAL account found with ID: $accountId")
-            Log.d(
+            Log.w(
                 TAG,
-                "MicrosoftKtorTokenProvider: Available accounts: ${microsoftAuthManager.accounts.map { it.username }}"
+                "MicrosoftKtorTokenProvider: No MSAL account found with ID: $accountId using new Flow method."
             )
         }
         return account

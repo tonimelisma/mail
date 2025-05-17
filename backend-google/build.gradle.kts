@@ -1,4 +1,5 @@
 // File: backend-google/build.gradle.kts
+// Adding a newline to try and force a Gradle sync
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
@@ -16,12 +17,6 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles("consumer-rules.pro")
 
-        // *********************************************************************
-        // This is the CRITICAL CHANGE.
-        // Use your actual Android OAuth 2.0 Client ID from your android.json
-        // or Google Cloud Console.
-        // This ID is specifically for the AppAuth flow.
-        // *********************************************************************
         buildConfigField(
             "String",
             "GOOGLE_ANDROID_CLIENT_ID",
@@ -59,10 +54,6 @@ dependencies {
     implementation(project(":core-data"))
 
     // --- Google Identity, Auth, and Credential Manager ---
-    implementation(libs.google.play.services.auth) // For com.google.android.gms.auth.api.identity.*
-    implementation(libs.androidx.credentials)
-    implementation(libs.androidx.credentials.play.services.auth)
-    implementation(libs.google.id) // For com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
     implementation(libs.appauth) // For OpenID AppAuth OAuth 2.0 implementation
     implementation(libs.androidx.browser) // For CustomTabs to improve OAuth UI experience
 
@@ -83,7 +74,7 @@ dependencies {
 
     // --- Coroutines ---
     implementation(libs.kotlinx.coroutines.core)
-    implementation(libs.kotlinx.coroutines.play.services) // For Task.await()
+    implementation(libs.kotlinx.coroutines.play.services) // For Task.await() if still needed elsewhere, review
 
     // --- Unit Testing ---
     testImplementation(libs.junit)
@@ -97,4 +88,14 @@ dependencies {
     // --- Instrumented Testing ---
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
+
+    // For JWT decoding
+    implementation("com.auth0.android:jwtdecode:2.0.2") // Or latest stable version
+
+    // AndroidX KTX Libraries
+    implementation(libs.androidx.core.ktx) // General utilities
+    implementation(libs.androidx.activity.ktx) // For ActivityResultLauncher related utilities if needed by helpers
+
+    // Logging
+    implementation(libs.timber) // Added Timber for logging
 }

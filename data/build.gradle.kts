@@ -70,6 +70,7 @@ dependencies {
     testImplementation(libs.mockk.agent)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.turbine)
+    implementation("com.jakewharton.timber:timber:5.0.1")
 
     // --- Instrumented Testing ---
     androidTestImplementation(libs.androidx.junit)

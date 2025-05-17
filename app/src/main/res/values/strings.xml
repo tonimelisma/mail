@@ -65,4 +65,20 @@
     <string name="settings_manage_accounts_header">Manage Accounts</string>
     <string name="settings_add_account_button">Add Another Account</string>
 
+    <!-- Strings added for MainActivity and general status -->
+    <string name="error_google_signin_failed_generic">Failed to start Google sign-in</string>
+    <string name="status_loading_accounts">Loading accounts…</string>
+    <string name="status_waiting_for_activity">Waiting for activity…</string>
+    <string name="error_critical_no_activity_context">Critical Error: Cannot get Activity context.</string>
+
+    <!-- Strings added for SettingsScreen -->
+    <string name="settings_add_microsoft_account_button">Add Microsoft Account</string>
+    <string name="settings_add_google_account_button">Add Google Account</string>
+    <string name="account_provider_type_label">Provider: %1$s</string>
+    <string name="cd_account_icon">Account icon</string>
+    <!-- cd_remove_account_button is already fine, using R.string.remove_account_cd if needed for specificity or use a generic one -->
+
+    <string name="signin_with_microsoft_button">Sign In with Microsoft</string>
+    <string name="title_authentication_error">Authentication Error</string>
+
 </resources>

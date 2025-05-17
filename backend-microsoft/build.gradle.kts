@@ -61,6 +61,9 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.kotlinx.coroutines.core)
 
+    // Logging
+    implementation(libs.timber)
+
     // --- Ktor Client Dependencies ---
     implementation(libs.ktor.client.core)
     implementation(libs.ktor.client.okhttp)
