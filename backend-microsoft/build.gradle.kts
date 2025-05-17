@@ -3,8 +3,8 @@
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
-    alias(libs.plugins.kotlin.ksp)
     alias(libs.plugins.hilt.gradle)
+    alias(libs.plugins.kotlin.ksp)
     alias(libs.plugins.kotlin.serialization)
 }
 
@@ -59,7 +59,6 @@ dependencies {
 
     // --- AndroidX & Kotlin ---
     implementation(libs.androidx.core.ktx)
-    implementation(libs.kotlinx.coroutines.core)
 
     // Logging
     implementation(libs.timber)

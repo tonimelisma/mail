@@ -22,7 +22,11 @@ android {
 
     buildTypes {
         debug {
-            buildConfigField "String", "REDIRECT_URI_APP_AUTH", "\"net.melisma.mail.debug:/oauth2redirect\"" // Placeholder - Ensure this matches your debug OAuth client config
+            buildConfigField(
+                "String",
+                "REDIRECT_URI_APP_AUTH",
+                "\"net.melisma.mail.debug:/oauth2redirect\""
+            )
         }
         release {
             isMinifyEnabled = false
@@ -30,7 +34,11 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            buildConfigField "String", "REDIRECT_URI_APP_AUTH", "\"net.melisma.mail:/oauth2redirect\"" // Placeholder - Ensure this matches your release OAuth client config
+            buildConfigField(
+                "String",
+                "REDIRECT_URI_APP_AUTH",
+                "\"net.melisma.mail:/oauth2redirect\""
+            )
         }
     }
     compileOptions {
@@ -39,6 +47,9 @@ android {
     }
     kotlinOptions {
         jvmTarget = "17"
+    }
+    buildFeatures {
+        buildConfig = true
     }
 }
 
