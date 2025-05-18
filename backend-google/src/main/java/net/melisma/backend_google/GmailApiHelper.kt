@@ -31,11 +31,9 @@ import net.melisma.backend_google.model.MessagePart
 import net.melisma.backend_google.model.MessagePartHeader
 import net.melisma.core_data.datasource.MailApiService
 import net.melisma.core_data.errors.ErrorMapperService
-import net.melisma.core_data.model.Account
 import net.melisma.core_data.model.MailFolder
 import net.melisma.core_data.model.Message
 import net.melisma.core_data.model.WellKnownFolderType
-import net.melisma.core_data.repository.AccountRepository
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -45,8 +43,7 @@ import javax.inject.Singleton
 @Singleton
 class GmailApiHelper @Inject constructor(
     @GoogleHttpClient private val httpClient: HttpClient,
-    private val errorMapper: ErrorMapperService,
-    private val accountRepository: AccountRepository
+    private val errorMapper: ErrorMapperService
 ) : MailApiService {
     private val TAG = "GmailApiHelper" // Consistent TAG
     private val BASE_URL = "https://gmail.googleapis.com/gmail/v1/users/me"
@@ -117,14 +114,6 @@ class GmailApiHelper @Inject constructor(
                 "Google account ${e.accountId} needs re-authentication during getMailFolders.",
                 e
             )
-            try {
-                accountRepository.markAccountForReauthentication(
-                    e.accountId,
-                    Account.PROVIDER_TYPE_GOOGLE
-                )
-            } catch (markEx: Exception) {
-                Log.e(TAG, "Failed to mark account ${e.accountId} for re-authentication", markEx)
-            }
             val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
             Result.failure(Exception("Re-authentication required: ${mappedDetails.message}", e))
         } catch (e: Exception) {
@@ -307,14 +296,6 @@ class GmailApiHelper @Inject constructor(
                 "Google account ${e.accountId} needs re-authentication during getMessagesForFolder (folder: $folderId).",
                 e
             )
-            try {
-                accountRepository.markAccountForReauthentication(
-                    e.accountId,
-                    Account.PROVIDER_TYPE_GOOGLE
-                )
-            } catch (markEx: Exception) {
-                Log.e(TAG, "Failed to mark account ${e.accountId} for re-authentication", markEx)
-            }
             val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
             Result.failure(Exception("Re-authentication required: ${mappedDetails.message}", e))
         } catch (e: Exception) {
@@ -580,14 +561,6 @@ class GmailApiHelper @Inject constructor(
                 "Google account ${e.accountId} needs re-authentication during markMessageRead (message: $messageId).",
                 e
             )
-            try {
-                accountRepository.markAccountForReauthentication(
-                    e.accountId,
-                    Account.PROVIDER_TYPE_GOOGLE
-                )
-            } catch (markEx: Exception) {
-                Log.e(TAG, "Failed to mark account ${e.accountId} for re-authentication", markEx)
-            }
             val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
             Result.failure(Exception("Re-authentication required: ${mappedDetails.message}", e))
         } catch (e: Exception) {
@@ -619,14 +592,6 @@ class GmailApiHelper @Inject constructor(
                 "Google account ${e.accountId} needs re-authentication during deleteMessage (message: $messageId).",
                 e
             )
-            try {
-                accountRepository.markAccountForReauthentication(
-                    e.accountId,
-                    Account.PROVIDER_TYPE_GOOGLE
-                )
-            } catch (markEx: Exception) {
-                Log.e(TAG, "Failed to mark account ${e.accountId} for re-authentication", markEx)
-            }
             val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
             Result.failure(Exception("Re-authentication required: ${mappedDetails.message}", e))
         } catch (e: Exception) {
@@ -754,14 +719,6 @@ class GmailApiHelper @Inject constructor(
                 "Google account ${e.accountId} needs re-authentication during moveMessage (message: $messageId).",
                 e
             )
-            try {
-                accountRepository.markAccountForReauthentication(
-                    e.accountId,
-                    Account.PROVIDER_TYPE_GOOGLE
-                )
-            } catch (markEx: Exception) {
-                Log.e(TAG, "Failed to mark account ${e.accountId} for re-authentication", markEx)
-            }
             val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
             Result.failure(Exception("Re-authentication required: ${mappedDetails.message}", e))
         } catch (e: Exception) {
@@ -796,14 +753,6 @@ class GmailApiHelper @Inject constructor(
                 "Google account ${e.accountId} needs re-authentication during getMessagesForThread (thread: $threadId).",
                 e
             )
-            try {
-                accountRepository.markAccountForReauthentication(
-                    e.accountId,
-                    Account.PROVIDER_TYPE_GOOGLE
-                )
-            } catch (markEx: Exception) {
-                Log.e(TAG, "Failed to mark account ${e.accountId} for re-authentication", markEx)
-            }
             val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
             Result.failure(Exception("Re-authentication required: ${mappedDetails.message}", e))
         } catch (e: Exception) {

@@ -16,7 +16,7 @@ import io.ktor.client.statement.bodyAsText
 import io.ktor.http.Parameters
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.suspendCancellableCoroutine
-import net.melisma.backend_google.di.GoogleHttpClient
+import net.melisma.backend_google.di.UnauthenticatedGoogleHttpClient
 import net.openid.appauth.AuthState
 import net.openid.appauth.AuthorizationException
 import net.openid.appauth.AuthorizationRequest
@@ -43,10 +43,12 @@ data class ParsedIdTokenInfo(
 @Singleton
 class AppAuthHelperService @Inject constructor(
     private val context: Context,
-    @GoogleHttpClient private val httpClient: HttpClient // Injected HttpClient
+    @UnauthenticatedGoogleHttpClient private val httpClient: HttpClient // Changed to use UnauthenticatedGoogleHttpClient
 ) {
 
-    private var authService: AuthorizationService = AuthorizationService(context)
+    private val authService: AuthorizationService by lazy {
+        AuthorizationService(context)
+    }
 
     companion object {
         const val GOOGLE_AUTH_REQUEST_CODE = 1000
@@ -246,8 +248,8 @@ class AppAuthHelperService @Inject constructor(
                 })
             continuation.invokeOnCancellation {
                 Timber.w("Token refresh coroutine cancelled.")
+            }
         }
-    }
 
     // This data class might be an issue if another class outside this package tries to refer to it
     // as AppAuthHelperService.GoogleTokenData. It's not used by the current version of

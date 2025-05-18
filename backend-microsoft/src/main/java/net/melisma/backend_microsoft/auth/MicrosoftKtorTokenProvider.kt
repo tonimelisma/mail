@@ -162,7 +162,10 @@ class MicrosoftKtorTokenProvider @Inject constructor(
                             accountId,
                             Account.PROVIDER_TYPE_MS
                         )
-                    } ?: Log.e(TAG, "Cannot mark for re-auth, MSAL account ID is null.")
+                        // Log.w(TAG, "MsalUiRequiredException for $accountId. Token acquisition requires user interaction.")
+                        // Potentially signal this upstream for UI handling if Ktor client consumers can act on it
+                        // For now, returning null will cause the API call to fail, and the UI should handle general API errors.
+                    }
                     null
                 }
 
@@ -183,7 +186,10 @@ class MicrosoftKtorTokenProvider @Inject constructor(
                                 accountId,
                                 Account.PROVIDER_TYPE_MS
                             )
-                        } ?: Log.e(TAG, "Cannot mark for re-auth, MSAL account ID is null.")
+                            // Log.w(TAG, "MsalUiRequiredException for $accountId. Token acquisition requires user interaction.")
+                            // Potentially signal this upstream for UI handling if Ktor client consumers can act on it
+                            // For now, returning null will cause the API call to fail, and the UI should handle general API errors.
+                        }
                     }
                     Log.e(
                         TAG,
@@ -213,10 +219,10 @@ class MicrosoftKtorTokenProvider @Inject constructor(
                     accountId,
                     Account.PROVIDER_TYPE_MS
                 )
-            } ?: Log.e(
-                TAG,
-                "Cannot mark for re-auth from MsalUiRequiredException, MSAL account ID is null."
-            )
+                // Log.w(TAG, "MsalUiRequiredException for $accountId. Token acquisition requires user interaction.")
+                // Potentially signal this upstream for UI handling if Ktor client consumers can act on it
+                // For now, returning null will cause the API call to fail, and the UI should handle general API errors.
+            }
             Log.w(TAG, "MicrosoftKtorTokenProvider: Error details: ${e.message}")
             null
         } catch (e: Exception) {

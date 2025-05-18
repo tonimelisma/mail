@@ -37,6 +37,10 @@ import javax.inject.Singleton
 @Retention(AnnotationRetention.BINARY)
 annotation class GoogleHttpClient
 
+@Qualifier
+@Retention(AnnotationRetention.BINARY)
+annotation class UnauthenticatedGoogleHttpClient
+
 @Module
 @InstallIn(SingletonComponent::class)
 object BackendGoogleModule {
@@ -99,6 +103,37 @@ object BackendGoogleModule {
                     // Optional: Only send tokens for Gmail API calls
                     sendWithoutRequest { request ->
                         request.url.host == "gmail.googleapis.com" || request.url.host == "www.googleapis.com"
+                    }
+                }
+            }
+        }
+    }
+
+    @Provides
+    @Singleton
+    @UnauthenticatedGoogleHttpClient
+    fun provideUnauthenticatedGoogleHttpClient(json: Json): HttpClient {
+        Log.d("BackendGoogleModule", "Providing Unauthenticated Google HTTPClient")
+        return HttpClient(OkHttp) {
+            engine {
+                config {
+                    connectTimeout(30, TimeUnit.SECONDS)
+                    readTimeout(30, TimeUnit.SECONDS)
+                }
+            }
+            install(ContentNegotiation) {
+                json(json)
+            }
+            defaultRequest {
+                header(HttpHeaders.Accept, ContentType.Application.Json)
+            }
+            // Optional: Logging, but no Auth plugin
+            install(Logging) {
+                level = LogLevel.INFO
+                logger = object : io.ktor.client.plugins.logging.Logger {
+                    override fun log(message: String) {
+                        val firstLine = message.lines().firstOrNull { it.isNotBlank() } ?: message
+                        Log.d("KtorUnauthGoogleClient", firstLine)
                     }
                 }
             }
