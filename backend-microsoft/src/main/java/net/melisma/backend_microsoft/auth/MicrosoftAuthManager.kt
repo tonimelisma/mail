@@ -1,7 +1,14 @@
 // File: backend-microsoft/src/main/java/net/melisma/backend_microsoft/auth/MicrosoftAuthManager.kt
 package net.melisma.backend_microsoft.auth
 
-import android.accounts.AccountManager
+// import android.accounts.AccountManager // No longer directly used here
+// import kotlinx.coroutines.Dispatchers // Not used directly
+// import net.melisma.core_data.security.SecureEncryptionService // No longer directly used here
+
+// New imports for PersistenceResult
+// import net.melisma.backend_microsoft.common.PersistenceResult // Old import
+
+// Model imports
 import android.app.Activity
 import android.content.Context
 import com.microsoft.identity.client.AcquireTokenParameters
@@ -19,8 +26,6 @@ import com.microsoft.identity.client.exception.MsalUiRequiredException
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -31,42 +36,28 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
+import net.melisma.backend_microsoft.model.ManagedMicrosoftAccount
+import net.melisma.core_data.common.PersistenceResult
 import net.melisma.core_data.di.ApplicationScope
 import net.melisma.core_data.di.AuthConfigProvider
 import net.melisma.core_data.di.Dispatcher
 import net.melisma.core_data.di.MailDispatchers
-import net.melisma.core_data.security.SecureEncryptionService
 import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.resumeWithException
 
-// Constants moved from MicrosoftTokenPersistenceService
-private const val ACCOUNT_TYPE_MICROSOFT = "net.melisma.mail.MICROSOFT"
-private const val KEY_ACCESS_TOKEN = "msAccessToken"
-private const val KEY_ID_TOKEN = "msIdToken"
-private const val KEY_ACCOUNT_ID_MSAL = "msalAccountId"
-private const val KEY_USERNAME = "msUsername"
-private const val KEY_TENANT_ID = "msTenantId"
-private const val KEY_SCOPES = "msScopes"
-private const val KEY_EXPIRES_ON_TIMESTAMP = "msExpiresOnTimestamp"
-private const val KEY_DISPLAY_NAME = "msDisplayName"
+// import com.microsoft.identity.client.IAccount // IAccount is used directly in ManagedMicrosoftAccount
 
-// Data class moved from MicrosoftTokenPersistenceService (or defined here if not accessible)
-// Assuming it's better to have it here or as a top-level class in this package.
-// For simplicity, placing it here for now. If it needs to be public for MicrosoftAccountRepository,
-// it should be a top-level public class in this package.
-data class PersistedMicrosoftAccount(
-    val accountManagerName: String, // This will be IAccount.getId()
-    val msalAccountId: String, // IAccount.getId() - can be derived from accountManagerName
-    val username: String?, // Email/UPN
-    val displayName: String?,
-    val tenantId: String?
-)
+// Constants for AccountManager keys are now in MicrosoftTokenPersistenceService
 
-// Sealed Result Classes
+// PersistedMicrosoftAccount data class is now in net.melisma.backend_microsoft.model package
+
+// Sealed Result Classes - These remain as they define the API of this manager
+// ... (AddAccountResult, RemoveAccountResult, AcquireTokenResult, AuthenticationResultWrapper, SignOutResultWrapper) ...
+// Retaining existing sealed classes
 sealed class AddAccountResult {
-    data class Success(val account: IAccount) : AddAccountResult()
+    data class Success(val managedAccount: ManagedMicrosoftAccount) : AddAccountResult()
     data class Error(val exception: MsalException) : AddAccountResult()
     object Cancelled : AddAccountResult()
     object NotInitialized : AddAccountResult()
@@ -88,7 +79,6 @@ sealed class AcquireTokenResult {
     object UiRequired : AcquireTokenResult()
 }
 
-// Listener Interface
 interface AuthStateListener {
     fun onAuthStateChanged(
         isInitialized: Boolean,
@@ -98,7 +88,10 @@ interface AuthStateListener {
 }
 
 sealed class AuthenticationResultWrapper {
-    data class Success(val account: IAccount, val authenticationResult: IAuthenticationResult) :
+    data class Success(
+        val managedAccount: ManagedMicrosoftAccount,
+        val authenticationResult: IAuthenticationResult
+    ) :
         AuthenticationResultWrapper()
 
     data class Error(val exception: MsalException, val isUiRequired: Boolean = false) :
@@ -112,31 +105,43 @@ sealed class SignOutResultWrapper {
     data class Error(val exception: MsalException) : SignOutResultWrapper()
 }
 
+
 @Singleton
 class MicrosoftAuthManager @Inject constructor(
     @ApplicationContext private val context: Context,
     private val authConfigProvider: AuthConfigProvider,
     @ApplicationScope private val externalScope: CoroutineScope,
-    private val secureEncryptionService: SecureEncryptionService,
+    // private val secureEncryptionService: SecureEncryptionService, // Injected into persistence service
+    private val tokenPersistenceService: MicrosoftTokenPersistenceService, // New service
+    private val activeMicrosoftAccountHolder: ActiveMicrosoftAccountHolder, // New injection
     @Dispatcher(MailDispatchers.IO) private val ioDispatcher: CoroutineDispatcher
 ) {
     private val TAG = "MicrosoftAuthManager"
-    private val PERSISTENCE_TAG = "MsAuthManagerPersist"
+
+    // private val PERSISTENCE_TAG = "MsAuthManagerPersist" // Moved to persistence service
     private var mMultipleAccountApp: IMultipleAccountPublicClientApplication? = null
     private val _isMsalInitialized = MutableStateFlow(false)
     val isMsalInitialized: StateFlow<Boolean> = _isMsalInitialized.asStateFlow()
     private var initializationException: MsalException? = null
 
-    // Initialize AccountManager
-    private val accountManager: AccountManager by lazy { AccountManager.get(context) }
+    // private val accountManager: AccountManager by lazy { AccountManager.get(context) } // Moved to persistence service
 
     companion object {
-        val MICROSOFT_SCOPES = listOf("User.Read", "Mail.Read", "offline_access")
+        // Scopes remain relevant for this manager's API
+        val MICROSOFT_SCOPES = listOf(
+            "User.Read",
+            "Mail.Read",
+            "offline_access",
+            "Mail.Send",
+            "Calendars.ReadWrite",
+            "Contacts.ReadWrite"
+        )
+
     }
 
     init {
         Timber.tag(TAG).d("MicrosoftAuthManager created. Initialization will be triggered.")
-        initializeMsalClient() 
+        initializeMsalClient()
     }
 
     private fun initializeMsalClient() {
@@ -229,25 +234,38 @@ class MicrosoftAuthManager @Inject constructor(
                             authenticationResult.account.id?.take(5)
                         }..."
                     )
-                    // Persist account info to AccountManager
-                    externalScope.launch {
-                        val saved = saveAccountInfoToAccountManager(authenticationResult)
-                        if (saved) {
-                            Timber.tag(PERSISTENCE_TAG)
-                                .i("Account info saved to AccountManager for ${authenticationResult.account.username}")
-                        } else {
-                            Timber.tag(PERSISTENCE_TAG)
-                                .e("Failed to save account info to AccountManager for ${authenticationResult.account.username}")
+                    externalScope.launch(ioDispatcher) { // Ensure persistence is on IO dispatcher
+                        val displayNameFromClaims =
+                            authenticationResult.account.claims?.get("name") as? String
+                        val saveResult = tokenPersistenceService.saveAccountInfo(
+                            msalAccount = authenticationResult.account,
+                            authResult = authenticationResult,
+                            displayNameFromClaims = displayNameFromClaims
+                        )
+                        if (saveResult is PersistenceResult.Success) {
+                            Timber.tag(TAG)
+                                .i("Account info saved via TokenPersistenceService for ${authenticationResult.account.username}")
+                            authenticationResult.account.id?.let {
+                                activeMicrosoftAccountHolder.setActiveMicrosoftAccountId(it)
+                            }
+                        } else if (saveResult is PersistenceResult.Failure) {
+                            Timber.tag(TAG)
+                                .e("Failed to save account info via TokenPersistenceService for ${authenticationResult.account.username}: ${saveResult.errorType} - ${saveResult.message}")
+                            // Optional: Decide if this should change the overall trySend result to an error for the UI
+                            // For now, MSAL auth was successful, so we proceed with success, but log persistence error.
                         }
                     }
 
-                    trySend(
-                        AuthenticationResultWrapper.Success(
-                            authenticationResult.account,
-                            authenticationResult
+                    externalScope.launch {
+                        val managedAccount = enrichIAccount(authenticationResult.account)
+                        trySend(
+                            AuthenticationResultWrapper.Success(
+                                managedAccount,
+                                authenticationResult
+                            )
                         )
-                    )
-                    close()
+                        close()
+                    }
                 }
 
                 override fun onError(exception: MsalException) {
@@ -268,38 +286,8 @@ class MicrosoftAuthManager @Inject constructor(
                 }
             })
             .build()
-
-        try {
-            Timber.tag(TAG).d("signInInteractive: Calling MSAL currentApp.acquireToken().")
-            currentApp.acquireToken(acquireTokenParameters)
-        } catch (e: MsalException) {
-            Timber.tag(TAG).e(
-                e,
-                "signInInteractive: MsalException during acquireToken call itself (rare for interactive)."
-            )
-            trySend(AuthenticationResultWrapper.Error(e, e is MsalUiRequiredException))
-            close()
-        } catch (e: Exception) {
-            Timber.tag(TAG).e(
-                e,
-                "signInInteractive: Generic Exception during acquireToken call itself (rare for interactive)."
-            )
-            trySend(
-                AuthenticationResultWrapper.Error(
-                    MsalClientException(
-                        MsalClientException.UNKNOWN_ERROR,
-                        "Generic exception: ${e.message}",
-                        e
-                    )
-                )
-            )
-            close()
-        }
-
-        awaitClose {
-            Timber.tag(TAG).d("signInInteractive callbackFlow closed for scopes: $scopes")
-        }
-    }
+        currentApp.acquireToken(acquireTokenParameters)
+    }.flowOn(ioDispatcher) // Execute the MSAL call itself on IO dispatcher if appropriate (MSAL might manage its own threads)
 
     fun acquireTokenSilent(
         account: IAccount,
@@ -309,7 +297,7 @@ class MicrosoftAuthManager @Inject constructor(
             .d("acquireTokenSilent: called for account: ${account.username}, scopes: $scopes")
         val currentApp = mMultipleAccountApp
         if (currentApp == null || !_isMsalInitialized.value) {
-            Timber.tag(TAG).w("acquireTokenSilent: MSAL client not initialized or app is null.")
+            Timber.tag(TAG).w("acquireTokenSilent: MSAL client not initialized.")
             trySend(
                 AuthenticationResultWrapper.Error(
                     MsalClientException(
@@ -323,31 +311,35 @@ class MicrosoftAuthManager @Inject constructor(
         }
 
         val authority = currentApp.configuration.defaultAuthority.authorityURL.toString()
-        Timber.tag(TAG)
-            .d("acquireTokenSilent: Using authority: $authority for account ${account.username}")
+        Timber.tag(TAG).d("Using authority: $authority for silent token acquisition.")
 
         val silentTokenParameters = AcquireTokenSilentParameters.Builder()
             .forAccount(account)
-            .fromAuthority(authority) // It is important to provide authority for silent calls
+            .fromAuthority(authority) // It's good practice to specify authority
             .withScopes(scopes)
             .withCallback(object : SilentAuthenticationCallback {
                 override fun onSuccess(authenticationResult: IAuthenticationResult) {
                     Timber.tag(TAG)
-                        .i("acquireTokenSilent: Success. Account: ${authenticationResult.account.username}, Token Expires: ${authenticationResult.expiresOn}")
-                    trySend(
-                        AuthenticationResultWrapper.Success(
-                            authenticationResult.account,
-                            authenticationResult
+                        .i("acquireTokenSilent: Success for account ${authenticationResult.account.username}")
+                    // Optionally update persisted tokens here if we decide to cache them
+                    // externalScope.launch(ioDispatcher) {
+                    // tokenPersistenceService.updatePersistedTokens(authenticationResult.account.id, authenticationResult.accessToken, authenticationResult.idToken)
+                    // }
+                    externalScope.launch {
+                        val managedAccount = enrichIAccount(authenticationResult.account)
+                        trySend(
+                            AuthenticationResultWrapper.Success(
+                                managedAccount,
+                                authenticationResult
+                            )
                         )
-                    )
-                    close()
+                        close()
+                    }
                 }
 
                 override fun onError(exception: MsalException) {
-                    Timber.tag(TAG).e(
-                        exception,
-                        "acquireTokenSilent: Error for account ${account.username}. ErrorCode: ${exception.errorCode}"
-                    )
+                    Timber.tag(TAG)
+                        .e(exception, "acquireTokenSilent: Error for account ${account.username}")
                     trySend(
                         AuthenticationResultWrapper.Error(
                             exception,
@@ -358,125 +350,20 @@ class MicrosoftAuthManager @Inject constructor(
                 }
             })
             .build()
+        currentApp.acquireTokenSilentAsync(silentTokenParameters)
+    }.flowOn(ioDispatcher)
 
-        try {
-            Timber.tag(TAG)
-                .d("acquireTokenSilent: Calling MSAL currentApp.acquireTokenSilentAsync().")
-            currentApp.acquireTokenSilentAsync(silentTokenParameters)
-        } catch (e: MsalException) {
-            Timber.tag(TAG).e(
-                e,
-                "acquireTokenSilent: MsalException during acquireTokenSilentAsync call itself for account ${account.username}."
-            )
-            trySend(AuthenticationResultWrapper.Error(e, e is MsalUiRequiredException))
-            close()
-        } catch (e: Exception) {
-            Timber.tag(TAG).e(
-                e,
-                "acquireTokenSilent: Generic Exception during acquireTokenSilentAsync call itself for account ${account.username}."
-            )
-            trySend(
-                AuthenticationResultWrapper.Error(
-                    MsalClientException(
-                        MsalClientException.UNKNOWN_ERROR,
-                        "Generic exception: ${e.message}",
-                        e
-                    )
-                )
-            )
-            close()
-        }
-        awaitClose {
-            Timber.tag(TAG)
-                .d("acquireTokenSilent callbackFlow closed for account: ${account.username}, scopes: $scopes")
-        }
-    }
-
-    fun getAccounts(): Flow<List<IAccount>> = callbackFlow {
-        val currentApp = mMultipleAccountApp
-        if (currentApp == null || !_isMsalInitialized.value) {
-            Timber.tag(TAG).w("getAccounts: MSAL not initialized or app instance is null.")
-            trySend(emptyList()) 
-            close()
-            return@callbackFlow
-        }
-
-        Timber.tag(TAG)
-            .d("getAccounts: Calling MSAL getAccounts (via IPublicClientApplication.LoadAccountsCallback).")
-        currentApp.getAccounts(object : IPublicClientApplication.LoadAccountsCallback {
-            override fun onTaskCompleted(result: List<IAccount>?) {
-                val accounts = result ?: emptyList()
-                Timber.tag(TAG).i("getAccounts: Success, loaded ${accounts.size} accounts.")
-                trySend(accounts)
-                close()
-            }
-
-            override fun onError(exception: MsalException) {
-                Timber.tag(TAG).e(exception, "getAccounts: Error loading accounts.")
-                trySend(emptyList()) // Or handle error differently, e.g., emit exception
-                close()
-            }
-        })
-        awaitClose { Timber.tag(TAG).d("getAccounts callbackFlow closed.") }
-    }
-
-    fun getAccount(accountId: String): Flow<IAccount?> = callbackFlow {
-        val currentApp = mMultipleAccountApp
-        if (currentApp == null || !_isMsalInitialized.value) {
-            Timber.tag(TAG)
-                .w("getAccount for $accountId: MSAL not initialized or app instance is null.")
-            trySend(null)
-            close()
-            return@callbackFlow
-        }
-
-        Timber.tag(TAG)
-            .d("getAccount: Calling getAccount for ID (obfuscated): ${accountId.take(5)}...")
-        currentApp.getAccount(
-            accountId,
-            object : IMultipleAccountPublicClientApplication.GetAccountCallback {
-            override fun onTaskCompleted(result: IAccount?) {
-                if (result != null) {
-                    Timber.tag(TAG).i("getAccount: Success, found account ${result.username}")
-                } else {
-                    Timber.tag(TAG)
-                        .i("getAccount: Account with ID ${accountId.take(5)}... not found.")
-                }
-                trySend(result)
-                close()
-            }
-
-            override fun onError(exception: MsalException) {
-                Timber.tag(TAG).e(
-                    exception,
-                    "getAccount: Error for ID ${accountId.take(5)}... (${exception.errorCode})"
-                )
-                trySend(null) // Send null on error as per Flow<IAccount?>
-                close()
-            }
-        })
-        awaitClose {
-            Timber.tag(TAG).d("getAccount callbackFlow closed for ID ${accountId.take(5)}...")
-        }
-    }
-
-    fun getAccountById(accountId: String): Flow<IAccount?> = flow {
-        Timber.tag(TAG)
-            .d("getAccountById: Attempting to get account for ID (synchronous MSAL call): $accountId")
-        val account = mMultipleAccountApp?.getAccount(accountId)
-        emit(account)
-    }.flowOn(Dispatchers.IO)
 
     fun signOut(account: IAccount): Flow<SignOutResultWrapper> = callbackFlow {
+        Timber.tag(TAG).i("signOut called for account: ${account.username}")
         val currentApp = mMultipleAccountApp
         if (currentApp == null || !_isMsalInitialized.value) {
-            Timber.tag(TAG)
-                .w("signOut for ${account.username}: MSAL not initialized or app instance is null.")
+            Timber.tag(TAG).w("signOut: MSAL client not initialized.")
             trySend(
                 SignOutResultWrapper.Error(
                     MsalClientException(
                         MsalClientException.INVALID_PARAMETER,
-                        "MSAL client not initialized or instance is null."
+                        "MSAL client not initialized."
                     )
                 )
             )
@@ -484,224 +371,124 @@ class MicrosoftAuthManager @Inject constructor(
             return@callbackFlow
         }
 
-        Timber.tag(TAG)
-            .d("signOut: Calling removeAccount for ${account.username} (ID: ${account.id}).")
         currentApp.removeAccount(
             account,
             object : IMultipleAccountPublicClientApplication.RemoveAccountCallback {
                 override fun onRemoved() {
-                    Timber.tag(TAG)
-                        .i("signOut: Success, account ${account.username} removed from MSAL.")
-
-                    // Remove account from AccountManager
-                    externalScope.launch {
+                    Timber.tag(TAG).i("MSAL account removed successfully: ${account.username}")
+                    externalScope.launch(ioDispatcher) {
                         account.id?.let { accountId ->
-                            val deleted = deleteAccountFromAccountManager(accountId)
-                            if (deleted) {
-                                Timber.tag(PERSISTENCE_TAG)
-                                    .i("Account info deleted from AccountManager for ${account.username}")
-                            } else {
-                                Timber.tag(PERSISTENCE_TAG)
-                                    .w("Failed to delete account info from AccountManager for ${account.username}")
+                            val clearResult = tokenPersistenceService.clearAccountData(
+                                accountId,
+                                removeAccountFromManager = true
+                            )
+                            if (clearResult is PersistenceResult.Success) {
+                                Timber.tag(TAG)
+                                    .i("Account data cleared from persistence for ${account.username}")
+                                if (activeMicrosoftAccountHolder.getActiveMicrosoftAccountIdValue() == accountId) {
+                                    activeMicrosoftAccountHolder.setActiveMicrosoftAccountId(null)
+                                }
+                            } else if (clearResult is PersistenceResult.Failure) {
+                                Timber.tag(TAG)
+                                    .e("Failed to clear account data from persistence for ${account.username}: ${clearResult.errorType} - ${clearResult.message}")
+                                // MSAL removal succeeded, so this is a lingering persistence issue.
+                                // The overall signOut for MSAL is still considered success from MSAL's perspective.
                             }
-                        } ?: Timber.tag(PERSISTENCE_TAG)
-                            .w("Account ID was null, cannot delete from AccountManager for ${account.username}")
+                        }
                     }
                     trySend(SignOutResultWrapper.Success)
                     close()
                 }
 
                 override fun onError(exception: MsalException) {
-                    Timber.tag(TAG).e(
-                        exception,
-                        "signOut: Error removing account ${account.username} from MSAL."
-                    )
+                    Timber.tag(TAG)
+                        .e(exception, "MSAL account removal error for ${account.username}")
                     trySend(SignOutResultWrapper.Error(exception))
                     close()
                 }
             })
-        awaitClose {
-            Timber.tag(TAG).d("signOut callbackFlow closed for account ${account.username}")
+    }.flowOn(ioDispatcher)
+
+
+    fun getAccount(accountManagerName: String): Flow<ManagedMicrosoftAccount?> =
+        flow { // accountManagerName is IAccount.id
+            Timber.tag(TAG).d("getAccount called for ID: $accountManagerName")
+            val currentApp = mMultipleAccountApp
+            if (currentApp == null || !_isMsalInitialized.value) {
+                Timber.tag(TAG).w("getAccount: MSAL client not initialized.")
+                emit(null)
+                return@flow
         }
-    }
-
-    // --- Start of methods moved/adapted from MicrosoftTokenPersistenceService ---
-
-    private suspend fun saveAccountInfoToAccountManager(
-        authResult: IAuthenticationResult
-    ): Boolean = withContext(ioDispatcher) {
-        val account = authResult.account
-        val accountManagerName =
-            account.id // Use IAccount.getId() as the unique name for AccountManager
-        val msalAccountId = account.id
-        val username = account.username
-        val tenantId = account.tenantId
-        val claims = account.claims
-        val displayName = claims?.get("name") as? String ?: username // Fallback to username
-
-        Timber.tag(PERSISTENCE_TAG)
-            .d("saveAccountInfoToAccountManager called for MSAL Account ID: ${msalAccountId?.take(10)}..., Username: $username")
-
-        if (accountManagerName.isNullOrBlank()) { // Check for null or blank
-            Timber.tag(PERSISTENCE_TAG)
-                .e("Cannot save account: MSAL Account ID (IAccount.getId()) is blank.")
-            return@withContext false
-        }
-
-        val amAccount = android.accounts.Account(accountManagerName, ACCOUNT_TYPE_MICROSOFT)
-        val accountAdded = accountManager.addAccountExplicitly(amAccount, null, null)
-
-        if (accountAdded) {
-            Timber.tag(PERSISTENCE_TAG)
-                .i("New Microsoft account added to AccountManager: $accountManagerName")
-        } else {
-            Timber.tag(PERSISTENCE_TAG)
-                .d("Microsoft account $accountManagerName already exists, updating data.")
-        }
-
-        try {
-            // Encrypt and store Access Token
-            authResult.accessToken?.let {
-                secureEncryptionService.encrypt(it)?.let { encrypted ->
-                    accountManager.setUserData(amAccount, KEY_ACCESS_TOKEN, encrypted)
-                    Timber.tag(PERSISTENCE_TAG).d("Access token stored for $accountManagerName.")
-                } ?: Timber.tag(PERSISTENCE_TAG)
-                    .e("Failed to encrypt access token for $accountManagerName.")
-            }
-
-            // Encrypt and store ID Token (if available from IAccount)
-            account.idToken?.let {
-                secureEncryptionService.encrypt(it)?.let { encrypted ->
-                    accountManager.setUserData(amAccount, KEY_ID_TOKEN, encrypted)
-                    Timber.tag(PERSISTENCE_TAG).d("ID token stored for $accountManagerName.")
-                } ?: Timber.tag(PERSISTENCE_TAG)
-                    .e("Failed to encrypt ID token for $accountManagerName.")
-            }
-
-            // Store non-sensitive IAccount identifiers needed by MSAL to find the account
-            accountManager.setUserData(
-                amAccount,
-                KEY_ACCOUNT_ID_MSAL,
-                msalAccountId
-            )
-            accountManager.setUserData(amAccount, KEY_USERNAME, username)
-            accountManager.setUserData(amAccount, KEY_TENANT_ID, tenantId)
-
-            authResult.scope?.joinToString(" ")?.let {
-                accountManager.setUserData(amAccount, KEY_SCOPES, it)
-            }
-            authResult.expiresOn?.time?.let {
-                accountManager.setUserData(amAccount, KEY_EXPIRES_ON_TIMESTAMP, it.toString())
-            }
-            displayName?.let { accountManager.setUserData(amAccount, KEY_DISPLAY_NAME, it) }
-
-            Timber.tag(PERSISTENCE_TAG)
-                .i("MSAL account info saved successfully to AccountManager for: $accountManagerName")
-            return@withContext true
-        } catch (e: Exception) {
-            Timber.tag(PERSISTENCE_TAG).e(
-                e,
-                "Error saving MSAL account info to AccountManager for $accountManagerName"
-            )
-            if (accountAdded) { // Rollback if it was a new add
-                Timber.tag(PERSISTENCE_TAG).w(
-                    "Removing partially added MSAL account $accountManagerName from AccountManager due to save failure."
-                )
-                // accountManager.removeAccount(amAccount, null, null, null) -> This is deprecated
-                // Use removeAccountExplicitly for consistency if available, or the modern equivalent.
-                // For now, using the deprecated one as per original code context if that was it.
-                // However, if addAccountExplicitly was used, removeAccountExplicitly is better.
-                accountManager.removeAccountExplicitly(amAccount) // Use this as we used addAccountExplicitly
-            }
-            return@withContext false
-        }
-    }
-
-    private suspend fun deleteAccountFromAccountManager(accountManagerName: String): Boolean =
-        withContext(ioDispatcher) {
-            val amAccounts = accountManager.getAccountsByType(ACCOUNT_TYPE_MICROSOFT)
-            val amAccount = amAccounts.find { it.name == accountManagerName } ?: run {
-                Timber.tag(PERSISTENCE_TAG).w(
-                    "Microsoft account not found in AccountManager for deletion: $accountManagerName"
-                )
-                return@withContext false
-            }
-
-            val removedSuccessfully = accountManager.removeAccountExplicitly(amAccount)
-
-            if (removedSuccessfully) {
-                Timber.tag(PERSISTENCE_TAG)
-                    .i("Microsoft account removed from AccountManager: $accountManagerName")
-                return@withContext true
-            } else {
-                Timber.tag(PERSISTENCE_TAG).e(
-                    "Failed to remove Microsoft account from AccountManager: $accountManagerName"
-                )
-                return@withContext false
-            }
-        }
-
-    suspend fun getPersistedAccountData(accountManagerName: String): PersistedMicrosoftAccount? =
-        withContext(ioDispatcher) {
-            val amAccounts = accountManager.getAccountsByType(ACCOUNT_TYPE_MICROSOFT)
-            val amAccount =
-                amAccounts.find { it.name == accountManagerName } ?: run {
-                    Timber.tag(PERSISTENCE_TAG)
-                        .w("AccountManager: No account found for name $accountManagerName during getPersistedAccountData")
-                    return@withContext null
-                }
-
-
-            val msalAccountId = accountManager.getUserData(amAccount, KEY_ACCOUNT_ID_MSAL)
-                ?: run {
-                    Timber.tag(PERSISTENCE_TAG)
-                        .w("AccountManager: msalAccountId is null for ${amAccount.name}, cannot construct PersistedMicrosoftAccount.")
-                    return@withContext null
-                }
-            val username = accountManager.getUserData(amAccount, KEY_USERNAME)
-            val tenantId = accountManager.getUserData(amAccount, KEY_TENANT_ID)
-            val displayName = accountManager.getUserData(amAccount, KEY_DISPLAY_NAME)
-
-            return@withContext PersistedMicrosoftAccount(
-                accountManagerName = amAccount.name,
-                msalAccountId = msalAccountId,
-                username = username,
-                displayName = displayName,
-                tenantId = tenantId
-            )
-        }
-
-    suspend fun getAccessTokenFromAccountManager(accountManagerName: String): String? =
-        withContext(ioDispatcher) {
-            val amAccounts = accountManager.getAccountsByType(ACCOUNT_TYPE_MICROSOFT)
-            val amAccount =
-                amAccounts.find { it.name == accountManagerName } ?: return@withContext null
-
-            val encryptedToken =
-                accountManager.getUserData(amAccount, KEY_ACCESS_TOKEN) ?: return@withContext null
-            return@withContext secureEncryptionService.decrypt(encryptedToken)
-        }
-
-    suspend fun getAllPersistedMicrosoftAccounts(): List<PersistedMicrosoftAccount> =
-        withContext(ioDispatcher) {
-            val amAccounts = accountManager.getAccountsByType(ACCOUNT_TYPE_MICROSOFT)
-            return@withContext amAccounts.mapNotNull { amAccount ->
-                val msalAccountId = accountManager.getUserData(amAccount, KEY_ACCOUNT_ID_MSAL)
-                if (msalAccountId.isNullOrBlank()) {
-                    Timber.tag(PERSISTENCE_TAG)
-                        .w("Skipping account ${amAccount.name} due to missing or blank MSAL account ID.")
-                    null
+            try {
+                // This call might involve IO, ensure it's on the correct dispatcher
+                val iAccount =
+                    withContext(ioDispatcher) { currentApp.getAccount(accountManagerName) }
+                if (iAccount != null) {
+                    emit(enrichIAccount(iAccount))
                 } else {
-                    PersistedMicrosoftAccount(
-                        accountManagerName = amAccount.name,
-                        msalAccountId = msalAccountId,
-                        username = accountManager.getUserData(amAccount, KEY_USERNAME),
-                        displayName = accountManager.getUserData(amAccount, KEY_DISPLAY_NAME),
-                        tenantId = accountManager.getUserData(amAccount, KEY_TENANT_ID)
-                    )
+                    emit(null)
                 }
+            } catch (e: MsalException) {
+                Timber.tag(TAG).e(e, "Error getting account $accountManagerName from MSAL")
+                emit(null)
+            } catch (e: Exception) { // Catching InterruptedException explicitly if needed.
+                Timber.tag(TAG).e(e, "Generic error getting account $accountManagerName from MSAL")
+                emit(null)
+        }
+        } // No specific flowOn needed here as withContext handles dispatcher for getAccount
+
+
+    fun getAccounts(): Flow<List<ManagedMicrosoftAccount>> = flow {
+        Timber.tag(TAG).d("getAccounts called")
+        val currentApp = mMultipleAccountApp
+        if (currentApp == null || !_isMsalInitialized.value) {
+            Timber.tag(TAG).w("getAccounts: MSAL client not initialized.")
+            emit(emptyList<ManagedMicrosoftAccount>())
+            return@flow
+        }
+        try {
+            // This call might involve IO
+            val iAccounts = withContext(ioDispatcher) { currentApp.accounts }
+            Timber.tag(TAG).d("MSAL returned ${iAccounts.size} accounts.")
+            val managedAccounts = iAccounts.map { enrichIAccount(it) } // Enrich each account
+            emit(managedAccounts)
+        } catch (e: MsalException) {
+            Timber.tag(TAG).e(e, "Error getting accounts from MSAL")
+            emit(emptyList<ManagedMicrosoftAccount>())
+        } catch (e: Exception) {
+            Timber.tag(TAG).e(e, "Generic error getting accounts from MSAL")
+            emit(emptyList<ManagedMicrosoftAccount>())
+        }
+    } // No specific flowOn needed here
+
+    private suspend fun enrichIAccount(iAccount: IAccount): ManagedMicrosoftAccount {
+        val persistedResult =
+            tokenPersistenceService.getPersistedAccount(iAccount.id!!) // Assuming id is non-null for an active IAccount
+        val (displayName, tenantId) = when (persistedResult) {
+            is PersistenceResult.Success -> {
+                val persistedData = persistedResult.data
+                (persistedData.displayName ?: iAccount.username) to persistedData.tenantId
+            }
+
+            is PersistenceResult.Failure -> {
+                Timber.tag(TAG)
+                    .w("Failed to get persisted data for ${iAccount.id} during enrichment: ${persistedResult.errorType} - ${persistedResult.message}. Using IAccount defaults.")
+                (iAccount.username) to iAccount.tenantId // Fallback to IAccount data
             }
         }
+        return ManagedMicrosoftAccount(
+            iAccount = iAccount,
+            displayName = displayName,
+            tenantId = tenantId
+        )
+    }
 
-    // --- End of methods moved/adapted from MicrosoftTokenPersistenceService ---
+    // --- Removed persistence methods that are now in MicrosoftTokenPersistenceService ---
+    // - saveAccountInfoToAccountManager
+    // - getPersistedAccountData
+    // - getAllPersistedMicrosoftAccounts
+    // - getPersistedAccessToken
+    // - getPersistedIdToken
+    // - deleteAccountFromAccountManager
+    // - loadPersistedAccount (if it existed as a separate public method)
 }

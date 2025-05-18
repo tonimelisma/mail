@@ -1,564 +1,634 @@
-# Melisma Mail - Comprehensive Project Guide
+# Melisma Mail - Architectural Design & Developer Guide
 
-**Version:** 1.9 (Consolidated and Updated - Reflecting Harmonization Plan Implementation and Future
-Work)
+**Version:** 2.0 (Comprehensive Rewrite)
+**Date:** May 13, 2025
 
-## 1. Project Overview
+## 1. Introduction & Project Vision
 
-Melisma Mail is an Android email client aiming to provide a clean, native user experience similar to
-stock Pixel apps, using Material 3. It's being built as a potential replacement for default mail
-apps, supporting Microsoft Outlook and Google (Gmail) accounts.
+### 1.1. Overview
 
-The application follows a modular architecture utilizing Hilt for dependency injection and Jetpack
-Compose with ViewModels (MVVM pattern) for the UI layer. Key technologies include Kotlin,
-Coroutines, Flow, and Ktor for networking. For Google OAuth, it uses
-`androidx.credentials.CredentialManager` for initial sign-in and **AppAuth for Android** for API
-authorization and token management.
+Melisma Mail is an Android email client designed to offer a clean, intuitive, and native user
+experience, adhering to Material 3 design principles. It aims to be a compelling alternative to
+default email applications, initially supporting Microsoft Outlook and Google (Gmail) accounts, with
+a focus on modern Android development practices.
 
-### 1.1. Current Status (As of May 12, 2025)
+### 1.2. Core Goals
 
-* **Microsoft Account Support:**
-    * Users can securely sign in and out using Microsoft accounts (MSAL). (Implemented)
-    * Users can fetch and view a list of their mail folders after signing in. (Implemented)
-    * Users can fetch and view a list of emails within a selected folder. (Implemented)
-* **Google Account Support (AppAuth Strategy for API Authorization):**
-    * Users can securely sign in using `androidx.credentials.CredentialManager` to obtain an ID
-      Token. (Implemented)
-    * The app uses AppAuth for Android to perform the OAuth 2.0 authorization code grant flow,
-      obtaining access and refresh tokens for Gmail API scopes. (Implemented)
-    * Tokens are securely stored in `AccountManager` using `SecureEncryptionService`. (Implemented)
-    * Users can fetch and view a list of their Gmail labels (folders). (Implemented)
-    * Users can fetch and view a list of emails within a selected Gmail label. (Implemented)
-* **Core Functionality:**
-    * Basic UI for displaying accounts, folders, and message lists is in place using Jetpack
-      Compose. (Implemented)
-  * Harmonized Conversation Views: Email threads in folder views are now consistently displayed with
-    participant summaries for both Google and Microsoft accounts, leveraging a unified threading
-    model. (Implemented)
-* **Identified Issues/Future Work (Action Items):**
-    * **Performance - Main Thread Jank:** Logcat indicates "Skipped frames," suggesting potential
-      main thread blocking during app startup or initial UI rendering. This needs investigation and
-      optimization. (Pending)
-    * **Performance - Paging for Email Lists:** For very long email lists, implementing Jetpack
-      Paging 3 is advisable to improve performance and memory usage. (Pending)
+* **User Experience:** Provide a seamless, performant, and visually appealing interface.
+* **Modern Android Practices:** Leverage Kotlin, Jetpack Compose, Coroutines, Flow, Hilt, and other
+  modern Android libraries and patterns.
+* **Security:** Ensure secure handling of user credentials and data, particularly OAuth tokens.
+* **Modularity:** Maintain a well-defined, modular codebase for better maintainability, scalability,
+  and testability.
 
-### 1.2. Setup & Build
+### 1.3. Key Technologies
 
-1.  **Clone the repository.**
-2.  **Open in Android Studio:** Use the latest stable version.
-3. **Sync Gradle:** Allow dependencies to sync. Ensure necessary Android SDK versions are installed.
-   This will include the `net.openid:appauth` library.
-4.  **Permissions:** The app requires `INTERNET` permission (declared in `AndroidManifest.xml`).
-5. **Build/Run:**
-    * Build: `./gradlew build`
-    * Install and run on connected device/emulator: `./gradlew installDebug` (or use Android
-      Studio's run configurations).
+* **UI:** Jetpack Compose
+* **Architecture:** MVVM (Model-View-ViewModel)
+* **Asynchronous Programming:** Kotlin Coroutines & Flow
+* **Dependency Injection:** Hilt
+* **Networking:** Ktor (with OkHttp engine)
+* **Authentication:**
+    * Google: AppAuth for Android (orchestrated by `GoogleAuthManager`) for OAuth 2.0 authorization
+      code flow and token management.
+    * Microsoft: MSAL (Microsoft Authentication Library) for Android.
+* **Security:** Android Keystore via a custom `SecureEncryptionService`.
 
-## 2. Requirements & Architecture
+## 2. Core Architectural Principles
 
-### 2.1. Core Principles
+### 2.1. Overall Architecture
 
-* **UI Layer:** Jetpack Compose, ViewModels (MVVM), StateFlow.
-* **Data Layer:** Repository pattern, Coroutines/Flow.
-* **Dependency Injection:** Hilt.
-* **Modularity:** See section 2.2.
-* **Google OAuth Strategy (Ideal):**
-    * **Primary API Authorization & Token Management:** **AppAuth for Android** library for the
-      complete OAuth 2.0 authorization code grant flow (PKCE, token exchange, refresh, revocation)
-      using an **Android Client ID**.
-* **Microsoft OAuth Strategy (Ideal):**
-    * **MSAL (Microsoft Authentication Library) for Android:** For all authentication,
-      authorization, and token management (interactive sign-in, silent token acquisition, refresh,
-      multi-account).
-* **Security**: Secure storage of OAuth tokens and sensitive data using Android Keystore via
-  `SecureEncryptionService`, integrated with `AccountManager`.
+Melisma Mail employs a layered architecture:
 
-### 2.2. Modules (Revised - Ideal Future State)
+* **UI Layer (`:app` module):** Responsible for presenting data to the user and handling user
+  interactions.
+* **Domain/Data Layer (`:data` and `:core-data` modules):** Contains business logic, repository
+  implementations, and data source definitions.
+* **Backend/Provider Layer (`:backend-google`, `:backend-microsoft` modules):** Handles all
+  provider-specific communication, including authentication and API interactions.
 
-* **:app**: Main application module.
-    * **Purpose**: UI (Jetpack Compose), ViewModels, and the `MailApplication` class. Handles
-      UI-specific logic, including launching AppAuth's authorization intent via
-      `ActivityResultLauncher` and passing necessary `Activity` contexts to repositories for
-      authentication operations.
-    * **Key Classes/Files**: `MainActivity.kt`, `MainViewModel.kt`, UI Composables.
+### 2.2. MVVM (Model-View-ViewModel)
 
-* **:core-data**: Defines core data interfaces, domain models, DI helpers, and shared services.
-    * **Purpose**: Provides abstractions for data handling and common utilities.
-  * **Key Classes/Files**: `AccountRepository.kt` (interface); `MailApiService.kt` (interface);
-    `Account.kt` (model, including `needsReauthentication` flag), `MailFolder.kt`, `Message.kt`;
-    `ErrorMapperService.kt` (interface); `SecureEncryptionService.kt`; `AuthConfigProvider.kt` (
-    interface for MSAL config); Hilt Qualifiers/Scopes.
+The UI layer utilizes the MVVM pattern.
 
-* **:data**: Implements repository interfaces from `:core-data`.
-    * **Purpose**: Orchestrates data operations, managing interactions with backend-specific
-      services and providing a unified data source to the app layer. Handles aggregation of data
-      from multiple accounts if necessary.
-    * **Key Classes/Files**: `DefaultAccountRepository.kt` (manages Google accounts, delegates to
-      `MicrosoftAccountRepository` for MS), `MicrosoftAccountRepository.kt` (manages MS accounts);
-      DI modules.
+* **Views (Composables):** Observe state changes from ViewModels and render the UI. They delegate
+  user actions to ViewModels.
+* **ViewModels:** Prepare and manage UI-related data (state) for the Views. They interact with
+  repositories to fetch and manipulate data, and contain UI logic. They expose state using
+  `kotlinx.coroutines.flow.StateFlow`.
+* **Models:** Represent the data structures (e.g., `Account`, `Message`, `MailFolder`).
 
-* **:backend-microsoft**: Handles Microsoft/Outlook specific logic.
-    * **Purpose**: Authentication (MSAL) and API interaction (Microsoft Graph) for Microsoft
-      accounts.
-    * **Key Classes/Files**:
-        * `MicrosoftAuthManager.kt`: Core MSAL wrapper (using
-          `IMultipleAccountPublicClientApplication`) for interactive sign-in, silent token
-          acquisition, account management, and sign-out. Initialized with configuration from
-          `AuthConfigProvider`.
-        * `MicrosoftTokenPersistenceService.kt`: Securely stores Microsoft account identifiers and
-          encrypted access/ID tokens in `AccountManager` (MSAL manages its own refresh token).
-        * `MicrosoftKtorTokenProvider.kt`: Provides Bearer tokens to Ktor by calling
-          `MicrosoftAuthManager` for silent token acquisition. Returns a placeholder (e.g., account
-          ID) for `BearerTokens.refreshToken`. Handles `MsalUiRequiredException` by signaling the
-          need for re-authentication.
-        * `GraphApiHelper.kt`: Implements `MailApiService` for Microsoft Graph using an auth-enabled
+### 2.3. Repository Pattern
+
+Repositories abstract data sources. ViewModels interact with repository interfaces defined in
+`:core-data`. Implementations in the `:data` module coordinate data from different sources (network,
+future local cache).
+
+### 2.4. Modularity
+
+The application is divided into functionally distinct modules to promote separation of concerns,
+reusability, and faster build times. (See Section 3 for module details).
+
+### 2.5. Dependency Injection (Hilt)
+
+Hilt is used for managing dependencies throughout the application, simplifying DI and improving
+testability. Key Hilt scopes (e.g., `@Singleton`, `@ViewModelScoped`) are utilized.
+
+### 2.6. Asynchronous Operations
+
+Kotlin Coroutines and Flow are used extensively for managing background tasks, network requests, and
+reactive data streams, ensuring a non-blocking UI.
+
+### 2.7. Security
+
+* **Token Storage:** OAuth tokens and other sensitive data are encrypted using
+  `SecureEncryptionService` (which internally uses Android Keystore) before being stored in
+  `AccountManager`.
+* **Communication:** HTTPS is used for all network communication.
+* **Provider Libraries:** MSAL and AppAuth are industry-standard libraries for handling OAuth 2.0
+  flows securely.
+
+## 3. Module Architecture Deep Dive
+
+This section details the purpose, key components, and interactions within each module.
+
+### 3.1. `:app` Module
+
+* **Purpose & Scope:** The main application module, responsible for the user interface and user
+  experience. It orchestrates UI navigation and presents data obtained from the data layer.
+* **Key Components & Classes:**
+    * `MainActivity.kt`: The primary entry point of the application. Hosts Jetpack Compose UI
+      content and handles `ActivityResultLauncher` callbacks for authentication flows (e.g., from
+      AppAuth).
+    * `MainViewModel.kt`: The central ViewModel for the main screen. It collects data from various
+      repositories (`AccountRepository`, `FolderRepository`, `MessageRepository`,
+      `ThreadRepository`), manages UI state (`MainScreenState`), and handles user interactions by
+      delegating to repositories. It also manages the launching of authentication `Intent`s.
+    * `MailApplication.kt`: The `Application` class, typically used for Hilt setup and other
+      application-level initializations.
+    * **UI Composables (various files/packages):**
+        * `MainApp.kt`: Sets up the main navigation and screen structure.
+        * Screens (e.g., `HomeScreen.kt`, `SettingsScreen.kt`): Define the layout and behavior of
+          different parts of the UI.
+        * Component Composables (e.g., `MessageListItem.kt`, `FolderListItem.kt`): Reusable UI
+          elements.
+    * `di/AppProvidesModule.kt`: Provides application-level dependencies, such as the
+      `ApplicationCoroutineScope` and `AuthConfigProvider` (for MSAL config).
+* **Data Flow:**
+    * ViewModels observe `StateFlow`s exposed by repositories.
+    * UI Composables observe `StateFlow`s exposed by ViewModels.
+    * User actions in Composables trigger methods in ViewModels, which in turn call methods in
+      repositories.
+    * For authentication, `MainViewModel` initiates flows in `AccountRepository` and handles
+      `Intent`s for UI actions like launching an AppAuth Custom Tab.
+* **Specific Patterns/Strategies:**
+    * Unidirectional Data Flow (UDF) with `StateFlow` for managing UI state.
+    * Jetpack Navigation for Compose to handle screen transitions.
+
+### 3.2. `:core-data` Module
+
+* **Purpose & Scope:** Defines the contracts (interfaces) and core data models for the entire
+  application. It acts as the "single source of truth" for data structures and repository
+  interfaces, ensuring decoupling between the UI layer and specific data implementations.
+* **Key Components & Classes:**
+    * **Repository Interfaces:**
+        * `AccountRepository.kt`: Defines operations related to account management, authentication (
+          sign-in, sign-out, handling auth results), and observing account states.
+        * `FolderRepository.kt`: Defines operations for fetching and managing mail folders.
+        * `MessageRepository.kt`: Defines operations for fetching and managing individual messages.
+        * `ThreadRepository.kt`: Defines operations for fetching and managing message threads (
+          conversations).
+    * **Domain Models (e.g., in `model/` package):**
+        * `Account.kt`: Represents a user account (MS or Google), including ID, username, provider
+          type, and a `needsReauthentication` flag.
+        * `MailFolder.kt`: Represents a mail folder/label.
+        * `Message.kt`: Represents an individual email message.
+        * `MailThread.kt`: Represents a conversation thread, including a `participantsSummary`.
+        * `AuthResultModels.kt` (`GenericAuthResult`, `GenericSignOutResult`,
+          `GenericAuthErrorType`): Sealed classes defining the possible outcomes of authentication
+          operations. `GenericAuthResult.UiActionRequired` is crucial for intent-based auth flows.
+    * **Service Interfaces & Utilities:**
+        * `MailApiService.kt`: An abstraction for provider-specific mail operations (get folders,
+          messages, etc.). Implemented in backend modules.
+        * `ErrorMapperService.kt` & `MappedErrorDetails.kt`: Interface and model for structured
+          error mapping, allowing consistent error presentation.
+        * `SecureEncryptionService.kt`: Interface for encrypting/decrypting data, typically
+          implemented using Android Keystore.
+        * `AuthConfigProvider.kt`: Interface used by `:backend-microsoft` to get MSAL configuration
+          resource ID from the `:app` module, breaking a direct dependency.
+    * **DI Helpers (e.g., in `di/` package):**
+        * Hilt Qualifiers (e.g., `@MicrosoftRepo`, `@GoogleHttpClient`): Used to distinguish between
+          different implementations of the same interface.
+        * Custom Hilt Scopes (if any, e.g., `@ApplicationScope` for `CoroutineScope`).
+        * `MailDispatchers.kt`: Defines custom coroutine dispatchers.
+* **Data Flow:** This module primarily defines interfaces and models, so it doesn't have active data
+  flow itself but dictates how data should be structured and accessed.
+* **Specific Patterns/Strategies:**
+    * Interface Segregation: Clearly defined interfaces for repositories and services.
+    * Dependency Inversion: `:app` and `:data` depend on abstractions in `:core-data`, not concrete
+      implementations in backend modules directly.
+
+### 3.3. `:data` Module
+
+* **Purpose & Scope:** Implements the repository interfaces defined in `:core-data`. It orchestrates
+  data operations, acting as a bridge between the UI layer (ViewModels) and the backend-specific
+  services. It can aggregate data from multiple accounts or sources if needed.
+* **Key Components & Classes:**
+    * `DefaultAccountRepository.kt`: The primary implementation of `AccountRepository`.
+        * Manages Google account authentication flows using `AppAuthHelperService` and
+          `GoogleTokenPersistenceService`.
+        * Delegates Microsoft account operations to a `MicrosoftAccountRepository` instance (
+          injected with `@MicrosoftRepo` qualifier).
+        * Combines account lists from both providers.
+        * Uses `kotlinx.coroutines.channels.Channel` for handling asynchronous UI actions in
+          Google's AppAuth flow (e.g., emitting `GenericAuthResult.UiActionRequired` and receiving
+          the final result after the external activity completes).
+        * Maintains and exposes `OverallApplicationAuthState`.
+    * `MicrosoftAccountRepository` (from `:backend-microsoft` module): While
+      `DefaultAccountRepository` orchestrates overall account management, it **delegates
+      Microsoft-specific account operations** to an instance of `MicrosoftAccountRepository`. This
+      `MicrosoftAccountRepository` resides in the `:backend-microsoft` module (at
+      `net.melisma.backend_microsoft.repository.MicrosoftAccountRepository.kt`), implements the
+      `AccountRepository` interface for Microsoft accounts, and is injected into
+      `DefaultAccountRepository` using Hilt with the `@MicrosoftRepo` qualifier. It manages MS
+      accounts, interacts with `MicrosoftAuthManager` (MSAL wrapper) for authentication, and uses
+      `MicrosoftErrorMapper`.
+    * `DefaultFolderRepository.kt`: Implements `FolderRepository`. Uses Hilt multibindings to get a
+      map of `MailApiService` implementations (keyed by provider type) to fetch folders for the
+      active account(s).
+    * `DefaultMessageRepository.kt`: Implements `MessageRepository`, similarly using
+      `MailApiService` for data fetching.
+    * `DefaultThreadRepository.kt`: Implements `ThreadRepository`, responsible for fetching and
+      assembling `MailThread` objects for conversation views.
+    * **DI Modules (e.g., in `di/DataModule.kt`):**
+        * Binds repository interfaces (e.g., `AccountRepository`) to their default implementations (
+          e.g., `DefaultAccountRepository`).
+        * Provides `ErrorMapperService` instances from backend modules into a map for
+          `DefaultAccountRepository`.
+* **Data Flow:**
+    * ViewModels call methods on repository interfaces.
+    * `DefaultAccountRepository` coordinates with `:backend-google` services or delegates to
+      `MicrosoftAccountRepository`.
+    * Other `Default*Repository` classes use injected `MailApiService` implementations (from
+      `:backend-*` modules) to fetch data.
+    * Data is transformed into the domain models defined in `:core-data` and exposed via `Flow`s.
+* **Specific Patterns/Strategies:**
+    * Repository Pattern.
+    * Facade Pattern (`DefaultAccountRepository` acts as a facade for Google auth and delegates MS
+      auth).
+    * Strategy Pattern (using a map of `MailApiService` implementations).
+
+### 3.4. `:backend-microsoft` Module
+
+* **Purpose & Scope:** Handles all Microsoft/Outlook specific logic, including MSAL-based
+  authentication and Microsoft Graph API interactions.
+* **Key Components & Classes:**
+    * `MicrosoftAuthManager.kt`: The core MSAL wrapper.
+        * Manages `IMultipleAccountPublicClientApplication`.
+        * Handles interactive sign-in (`signInInteractive`), silent token acquisition (
+          `acquireTokenSilent`), and account removal (`signOut`).
+        * Uses `AuthenticationCallback` and `SilentAuthenticationCallback` to bridge MSAL's callback
+          system with Kotlin Flow (`callbackFlow`).
+        * Integrates logic from the former `MicrosoftTokenPersistenceService` to save/load MSAL
+          account identifiers and *non-critical* token information (like access token for quick
+          reference, though MSAL manages its own critical refresh tokens securely) to/from Android's
+          `AccountManager`, encrypting them with `SecureEncryptionService`.
+    * `MicrosoftKtorTokenProvider.kt`: Implements Ktor's `BearerTokenProvider`.
+        * Interacts with `MicrosoftAuthManager` to get an `IAccount` and then calls
+          `acquireTokenSilent` to obtain a valid access token.
+        * Crucially handles `MsalUiRequiredException` from `acquireTokenSilent` by signaling the
+          need for re-authentication (e.g., by returning null tokens, causing Ktor's auth to fail,
+          which then propagates). The `AccountRepository` layer would then typically mark the
+          account as `needsReauthentication`.
+        * Returns a placeholder (e.g., account ID) for `BearerTokens.refreshToken` since MSAL
+          manages its own refresh tokens.
+    * `GraphApiHelper.kt`: Implements `MailApiService` for Microsoft Graph.
+        * Uses a Ktor `HttpClient` configured with an `Auth` plugin that uses
+          `MicrosoftKtorTokenProvider`.
+        * Makes calls to Microsoft Graph API endpoints (e.g., `/me/mailFolders`, `/me/messages`).
+        * Updated to support true cross-folder threading for conversation views by querying
+          `/me/messages` filtered by `conversationId`.
+    * `MicrosoftErrorMapper.kt`: Implements `ErrorMapperService` to map MSAL exceptions and Graph
+      API errors to generic `MappedErrorDetails`.
+    * `ActiveMicrosoftAccountHolder.kt`: A simple class (likely `@Singleton`) holding the ID of the
+      currently active Microsoft account.
+    * `di/BackendMicrosoftModule.kt` (and `BackendMicrosoftBindsModule.kt`):
+        * Provides the Ktor `HttpClient` specifically for Microsoft Graph, configured with the
+          `Auth` plugin and `MicrosoftKtorTokenProvider`.
+        * Binds `MicrosoftAccountRepository` (located at
+          `net.melisma.backend_microsoft.repository.MicrosoftAccountRepository.kt`) as the
+          implementation of the `AccountRepository` interface for Microsoft accounts (e.g., using
+          `@MicrosoftRepo` qualifier to be injected into `:data`). It also provides other
+          dependencies required within the `:backend-microsoft` module.
+        * Provides `MicrosoftErrorMapper` for the `ErrorMapperService` map in `:data`.
+    * `MicrosoftAuthenticatorService.kt`, `MicrosoftStubAuthenticator.kt`: Standard Android
+      components required for integrating with `AccountManager` and defining a custom account type (
+      `net.melisma.mail.MICROSOFT`).
+* **Data Flow:**
+    * `MicrosoftAccountRepository` (or `DefaultAccountRepository` delegating to it) calls
+      `MicrosoftAuthManager` for auth operations.
+    * `GraphApiHelper` is called by repositories in `:data`. It uses its Ktor client, which triggers
+      `MicrosoftKtorTokenProvider` for tokens.
+    * Data from Graph API is mapped to `:core-data` models.
+* **Specific Patterns/Strategies:**
+    * MSAL for all Microsoft authentication.
+    * Ktor `Auth` plugin for automatic token injection and refresh attempts.
+    * `AccountManager` for persisting account identifiers.
+    * `GoogleAuthManager.kt`: Centralizes Google-specific authentication logic, including:
+        * Orchestrating `AppAuthHelperService` for authorization request creation and token
+          exchange/refresh.
+        * Managing `GoogleTokenPersistenceService` for storing and retrieving `AuthState` and user
+          information.
+        * Providing methods like `signInInteractive(activity, loginHint): Intent`,
+          `handleAuthorizationResponse(...): Flow<GoogleSignInResult>`,
+          `getAccount(accountId): Flow<ManagedGoogleAccount?>`,
+          `getAccounts(): Flow<List<ManagedGoogleAccount>>`,
+          `signOut(managedAccount): Flow<GoogleSignOutResult>`,
+          `getFreshAccessToken(accountId): GoogleGetTokenResult`, and
+          `requestReauthentication(accountId): PersistenceResult<Unit>`.
+        * Updating `ActiveGoogleAccountHolder`.
+    * `GoogleKtorTokenProvider.kt`: Implements Ktor's `BearerTokenProvider`.
+
+### 3.5. `:backend-google` Module
+
+* **Purpose & Scope:** Handles all Google/Gmail specific logic, including AppAuth-based API
+  authorization and Gmail API interactions.
+* **Key Components & Classes:**
+    * `AppAuthHelperService.kt`: Encapsulates all interactions with the AppAuth for Android library.
+        * Builds `AuthorizationRequest` objects (using Android Client ID, redirect URI, PKCE).
+        * Provides an `Intent` (`createAuthorizationRequestIntent`) for launching the authorization
+          flow (Google's consent screen via Custom Tabs).
+        * Exchanges authorization codes for `TokenResponse` (access, refresh, ID tokens) via
+          `exchangeAuthorizationCode`.
+        * Refreshes access tokens using stored refresh tokens (`refreshAccessToken`).
+        * Revokes tokens (`revokeToken`) using Google's revocation endpoint via an unauthenticated
           Ktor client.
-        * `MicrosoftAuthenticatorService.kt`, `MicrosoftStubAuthenticator.kt`: For `AccountManager`
-          integration.
-        * `MicrosoftErrorMapper.kt`; `ActiveMicrosoftAccountHolder.kt`; DI module (
-          `BackendMicrosoftModule.kt` - configures Ktor client with `Auth` plugin).
+    * `GoogleTokenPersistenceService.kt`: Manages the secure storage of Google's `AuthState` (which
+      includes access, refresh, and ID tokens).
+        * Uses `AccountManager` to store the encrypted JSON representation of the `AuthState`.
+        * Uses `SecureEncryptionService` (from `:core-data`) for encryption/decryption.
+    * `GoogleKtorTokenProvider.kt`: Implements Ktor's `BearerTokenProvider`.
+        * Retrieves the encrypted `AuthState` from `GoogleTokenPersistenceService`.
+        * If the access token is expired (`AuthState.needsTokenRefresh`), it calls
+          `appAuthHelperService.refreshAccessToken()`.
+        * If refresh fails due to `invalid_grant` (an `AuthorizationException` type), it clears the
+          invalid `AuthState` from persistence and signals the need for re-authentication (e.g., by
+          throwing `GoogleNeedsReauthenticationException` or returning null tokens).
+        * Returns a placeholder for `BearerTokens.refreshToken` as the full `AuthState` is managed
+          separately.
+    * `GmailApiHelper.kt`: Implements `MailApiService` for the Gmail API.
+        * Uses a Ktor `HttpClient` configured with an `Auth` plugin that uses
+          `GoogleKtorTokenProvider`.
+        * Makes calls to Gmail API endpoints (e.g., `/users/me/labels`, `/users/me/messages`).
+        * Handles `GoogleNeedsReauthenticationException` potentially thrown by the Ktor client (if
+          the token provider signals it), mapping it to a `Result.failure`.
+    * `GoogleErrorMapper.kt`: Implements `ErrorMapperService` to map AppAuth exceptions (
+      `AuthorizationException`), token parsing errors (`DecodeException`), and Gmail API errors to
+      generic `MappedErrorDetails`.
+    * `ActiveGoogleAccountHolder.kt`: A simple class (likely `@Singleton`) holding the ID of the
+      currently active Google account.
+    * `di/BackendGoogleModule.kt` (and `BackendGoogleBindsModule.kt`):
+        * Provides the Ktor `HttpClient` specifically for Gmail API, configured with the `Auth`
+          plugin and `GoogleKtorTokenProvider`.
+        * Provides an unauthenticated Ktor client for `AppAuthHelperService`'s `revokeToken` method.
+        * Provides dependencies like `AppAuthHelperService`, `GoogleTokenPersistenceService`.
+        * Provides `GoogleErrorMapper` for the `ErrorMapperService` map in `:data`.
+    * `GoogleAuthenticatorService.kt`, `GoogleStubAuthenticator.kt`: Standard Android components for
+      `AccountManager` integration and defining the custom account type (`net.melisma.mail.GOOGLE`).
+* **Data Flow:**
+    * `DefaultAccountRepository` calls `AppAuthHelperService` (for auth intents and token exchange)
+      and `GoogleTokenPersistenceService` (to save/load `AuthState`).
+    * `GmailApiHelper` is called by repositories in `:data`. It uses its Ktor client, which triggers
+      `GoogleKtorTokenProvider` for tokens. `GoogleKtorTokenProvider` in turn uses
+      `GoogleTokenPersistenceService` and `AppAuthHelperService` (for refresh).
+    * Data from Gmail API is mapped to `:core-data` models.
+* **Specific Patterns/Strategies:**
+    * AppAuth for Android for Google OAuth 2.0 API authorization and token management, orchestrated
+      by `GoogleAuthManager`.
+    * Ktor `Auth` plugin for token injection and refresh, using `GoogleKtorTokenProvider`.
+    * `AccountManager` for persisting the entire `AuthState` (via `GoogleTokenPersistenceService`).
 
-* **:backend-google**: Handles Google/Gmail specific logic.
-    * **Purpose**: Authentication (AppAuth for API tokens) and API interaction (Gmail API) for
-      Google accounts.
-    * **Key Classes/Files**:
-        * `AppAuthHelperService.kt`: Encapsulates AppAuth library interactions (building
-          authorization requests with PKCE using Android Client ID, performing token exchange, token
-          refresh, and token revocation).
-        * `GoogleTokenPersistenceService.kt`: Securely stores the complete, encrypted AppAuth
-          `AuthState` (access, refresh, ID tokens) in `AccountManager`.
-        * `GoogleKtorTokenProvider.kt`: Provides Bearer tokens to Ktor. Loads `AuthState` from
-          `GoogleTokenPersistenceService`, handles silent refresh using `AppAuthHelperService` and
-          the stored refresh token. Returns a placeholder (e.g., account ID) for
-          `BearerTokens.refreshToken`. Handles `invalid_grant` during refresh by clearing the
-          invalid `AuthState` and signaling the need for re-authentication.
-        * `GmailApiHelper.kt`: Implements `MailApiService` for Gmail using an auth-enabled Ktor
-          client.
-        * `GoogleAuthenticatorService.kt`, `GoogleStubAuthenticator.kt`: For `AccountManager`
-          integration.
-        * `GoogleErrorMapper.kt`; `ActiveGoogleAccountHolder.kt`; DI module (
-          `BackendGoogleModule.kt` - configures Ktor client with `Auth` plugin).
+## 4. Detailed Authentication & Authorization Flows
 
-### 2.3. Prioritized Requirements Backlog (Epics & Status)
+This section provides a step-by-step walkthrough of the authentication and authorization processes
+for each provider.
 
-The application development follows a prioritized backlog of features grouped into Epics.
+### 4.1. Google OAuth Flow (AppAuth Orchestrated by GoogleAuthManager)
 
----
-**EPIC 1: Core Mail Viewing** (Highest Priority)
+1. **Sign-In Initiation (UI -> ViewModel -> `DefaultAccountRepository` -> `GoogleAuthManager`)**:
+    * User initiates Google sign-in.
+    * ViewModel calls `AccountRepository.signIn("GOOGLE", activity, loginHint)`.
+    * `DefaultAccountRepository` calls `googleAuthManager.signInInteractive(activity, loginHint)`.
+    * `GoogleAuthManager`:
+        * Calls `appAuthHelperService.createAuthorizationRequest()` using the **Android Client ID**,
+          redirect URI, and scopes.
+        * `appAuthHelperService.getAuthorizationIntent()` returns an `Intent`.
+        * `GoogleAuthManager` (via `signInInteractive`) returns this `Intent`.
+        * `DefaultAccountRepository` receives the `Intent` and emits
+          `GenericAuthResult.UiActionRequired(intent)` via its `googleAuthResultChannel`.
 
-* **Requirement 1.1 (View Message List):** As a user, I want to see a list of emails within a
-  selected folder. **(Implemented for MS & Google)**
-    * *Future Enhancement:* Implement Jetpack Paging 3 for very long email lists. **(Pending)**
-* **Requirement 1.2 (View Single Message):** As a user, I want to tap on an email in the list to
-  view its full content. **(Pending - UI/Navigation only)**
-* **Requirement 1.3 (Folder Navigation):** As a user, I want to navigate between different mail
-  folders. **(Implemented for MS & Google)**
-* **Requirement 1.4 (Unified Inbox - UI/UX):** As a user, I want an option to view emails from all
-  my accounts in a single combined inbox view. **(Pending)**
-* **Requirement 1.5 (Conversation View - UI/UX):** As a user, I want emails belonging to the same
-  thread to be grouped. **(Done for folder views)**
-    * *Note:* Folder views now group messages by conversation and display participant summaries for
-      both Google and Microsoft accounts, as per the May 2025 harmonization plan.
+2. **Authorization Grant (AppAuth UI Flow)**:
+    * The `:app` module's `MainActivity` receives `UiActionRequired` and launches the `Intent`.
+    * AppAuth library opens a Custom Tab to Google's authorization endpoint.
+    * User authenticates and grants permissions.
+    * Google redirects to the app's redirect URI.
 
----
-**EPIC 2: Basic Mail Actions** (High Priority)
-
-* **Requirement 2.1 (Mark Read/Unread):** As a user, I want to mark messages as read or unread. **(
-  Implemented for Gmail, Pending for MS Graph API)**
-* **Requirement 2.2 (Delete Message):** As a user, I want to delete one or more messages. **(
-  Implemented for Gmail, Pending for MS Graph API)**
-* **Requirement 2.3 (Archive Message):** As a user, I want to archive one or more messages. (This
-  often means moving to an "Archive" folder or removing "Inbox" label for Gmail). **(Gmail:
-  moveMessage can handle this, MS: Pending)**
-* **Requirement 2.4 (Customizable Swipe Actions - UI/UX):** As a user, I want to configure actions
-  for swipes on the message list. **(Pending)**
-
----
-**EPIC 3: Composing & Sending** (Medium-High Priority)
-
-* **Requirement 3.1 (Compose New Email):** As a user, I want to initiate composing a new email. **(
-  Pending)**
-* **Requirement 3.2 (Send Email):** As a user, I want to send the composed email. **(Pending)**
-* **Requirement 3.3 (Reply/Reply-All/Forward):** As a user, I want to reply, reply-all, or forward a
-  received message. **(Pending)**
-* **Requirement 3.4 (Signature Management):** As a user, I want to define and manage email
-  signatures. **(Pending)**
-
----
-**EPIC 4: Attachments** (Higher Priority)
-
-* **Requirement 4.1 (View Attachments):** As a user, I want to see a list of attachments within a
-  received email. **(Pending)**
-* **Requirement 4.2 (Preview Attachments):** As a user, I want to preview common attachment types. *
-  *(Pending)**
-* **Requirement 4.3 (Save Attachments):** As a user, I want to save attachments from an email. **(
-  Pending)**
-* **Requirement 4.4 (Share Attachments):** As a user, I want to share attachments directly from an
-  email. **(Pending)**
-* **Requirement 4.5 (Attach Files):** As a user, I want to easily attach files when composing an
-  email. **(Pending)**
-
----
-**EPIC 5: Account & App Foundation** (Underpins everything)
-
-* Authentication & Core:
-    * **Requirement 5.1 (Authentication - Functional):** As a user, I want to securely sign in and
-      out of my supported email accounts (Microsoft Outlook: **Implemented**, Google Gmail: *
-      *Implemented** using AppAuth for API authorization).
-    * **Requirement 5.2 (Basic Error Handling - Functional):** As a user, I want to see clear
-      messages if actions fail. (Partially Implemented - `ErrorMapperService` exists, UI toasts
-      shown).
-* User Experience:
-    * **Requirement 5.3 (Visual Polish - Non-Functional):** The app should adhere to Material 3
-      guidelines. (Partially Implemented - Basic M3 theme in place).
-    * **Requirement 5.4 (Performance - Non-Functional):** UI interactions should feel smooth and
-      responsive. (Partially Implemented - Core architecture is good, but **jank observed during
-      startup/initial load needs addressing - Pending**).
-    * **Requirement 5.5 (Theming - UI/UX):** As a user, I want the app to support Light and Dark
-      themes. **(Implemented - Dynamic Color also supported)**.
-* Offline & Sync:
-    * **Requirement 5.6 (Data Caching - Non-Functional):** The app should cache data locally (e.g.,
-      using Room database) to improve performance and enable offline access. **(Pending - Currently
-      data is fetched on demand and held in memory by repositories/ViewModel state).**
-    * **Requirement 5.7 (Background Sync - Functional):** As a user, I want the app to periodically
-      check for new emails. **(Pending)**
-* Notifications:
-    * **Requirement 5.8 (Push Notifications - Functional):** As a user, I want to receive
-      notifications for new emails. **(Pending)**
-    * **Requirement 5.9 (Actionable Notifications - Functional):** As a user, I want to perform
-      quick actions from an email notification. **(Pending)**
-* Analytics & Logging:
-    * **Requirement 5.10 (Local Error Logging - Non-Functional):** The app must log critical errors
-      locally. (Partially Implemented - Android Logcat used extensively. SLF4J present but not
-      configured with a provider.)
-    * **Requirement 5.11 (Log Export - Functional):** As a user/developer, I want a way to export
-      local error logs. **(Pending)**
-    * **Requirement 5.12 (Usage Metrics - Non-Functional):** The app should gather anonymized basic
-      usage metrics locally. **(Pending)**
-* **Requirement 5.13 (New Device Account Restoration - Google):** As a user, I want an easy way to
-  restore my Google account linkage when setting up Melisma Mail on a new Android device (via
-  Credential Manager's Restore Credentials feature). **(Pending - Requires testing and potential
-  explicit handling)**.
-
----
-**EPIC 6: Advanced Mail Organization** (Medium Priority)
-
-* **Requirement 6.1 (Move Message):** As a user, I want to move messages between folders. **(
-  Implemented for Gmail, Pending for MS Graph API)**
-* **Requirement 6.2 (Advanced Search Filters):** As a user, I want to search my emails using
-  advanced filters. **(Pending)**
-* **Requirement 6.3 (Junk/Spam Management):** As a user, I want basic controls to mark emails as
-  junk/spam. **(Pending - Though underlying APIs for moving to Spam folder exist for Gmail)**.
-* **Requirement 6.4 (Folder Management):** As a user, I want to create, rename, and delete custom
-  mail folders. **(Pending)**
-* **Requirement 6.5 (Unsubscribe Suggestions):** As a user, I want the app to suggest an easy
-  unsubscribe option. **(Pending)**
-* **Requirement 6.6 (Handling Multiple Credential Types - Future):** As a user, I want the app to
-  securely manage different types of credentials if other protocols beyond Google OAuth & MSAL are
-  supported in the future (e.g., passkeys for other services, IMAP username/password). **(Future
-  Consideration)**
-
----
-**EPIC 7: Settings & Configuration** (Medium Priority)
-
-* **Requirement 7.1 (Basic Settings):** As a user, I want access to basic settings (e.g., account
-  management, theme). **(Partially Implemented - Account management UI via SettingsScreen)**.
-
----
-**EPIC 8: Integrations** (Lower Priority)
-
-* **Requirement 8.1 (Calendar Integration):** As a user, I want to quickly create calendar events
-  from email content. **(Pending)**
-* **Requirement 8.2 (Task Integration):** As a user, I want to create tasks based on email content.
-  **(Pending)**
-* **Requirement 8.3 (Contact Integration):** As a user, I want to easily save email senders as
-  device contacts. **(Pending)**
-
----
-**EPIC 9: Google Account Integration** (Largely Implemented - Core functionality)
-
-* **Requirement 9.1 (Google Authentication & API Authorization):** As a user, I want to securely
-  sign in to my Google account (initial auth via `CredentialManager`) and authorize the app to
-  access Gmail APIs (via AppAuth flow, handling consent for necessary permissions, and obtaining
-  access/refresh tokens). **(Implemented)**
-* **Requirement 9.2 (View Google Folders/Labels):** As a user, I want to see the list of
-  folders/labels for my Google account. **(Implemented)**
-* **Requirement 9.3 (View Google Message List):** As a user, I want to see the list of emails within
-  a selected Google folder/label. **(Implemented)**
-* **Requirement 9.4 (View Single Google Message):** As a user, I want to view the full content of an
-  email from my Google account. **(Pending - UI/Navigation part)**
-* *(Mirroring other Epics for Google)* Basic Actions (Mark Read/Unread, Delete, Move: **Partially
-  Implemented**), Attachments (**Pending**), Composing/Sending (**Pending**), etc., for the Google
-  account, using tokens obtained via AppAuth.
-
----
-
-### 2.4. Authentication Flow Details (Ideal Future State)
-
-This section outlines the ideal, end-to-end authentication flows.
-
-#### 2.4.1 Google Authentication Flow (AppAuth)
-
-1. **Login Initiation (UI -> ViewModel -> `DefaultAccountRepository`)**:
-    * User action triggers ViewModel, which calls
-      `AccountRepository.getAuthenticationIntentRequest("GOOGLE", activity)`.
-    * `DefaultAccountRepository` uses `AppAuthHelperService` to build an `AuthorizationRequest` (
-      Android Client ID, redirect URI, scopes: `openid`, `email`, `profile`, `offline_access`).
-    * `AppAuthHelperService` creates an `Intent` for Google's auth screen.
-    * ViewModel launches this `Intent` via `ActivityResultLauncher`.
-
-2. **User Authentication & Grant (Google UI)**:
-    * User authenticates and grants permissions. Google redirects to app's
-      `RedirectUriReceiverActivity` with an authorization code.
-
-3. **Token Exchange & Persistence (Activity
-   Result -> `DefaultAccountRepository` -> `AppAuthHelperService` ->`GoogleTokenPersistenceService`)
-   **:
-    * Activity receives result, passes it to
-      `AccountRepository.handleAuthenticationResult("GOOGLE", ...)`.
+3. **Token Exchange & Persistence (Redirect
+   Activity -> `DefaultAccountRepository` -> `GoogleAuthManager` -> Services)**:
+    * Redirect `Activity` calls
+      `AccountRepository.handleAuthenticationResult("GOOGLE", resultCode, dataIntent)`.
     * `DefaultAccountRepository` calls
-      `appAuthHelperService.exchangeAuthorizationCode(authResponse)` (suspend function).
-        * `AppAuthHelperService` exchanges the code for `TokenResponse` (access, refresh, ID
-          tokens).
-    * ID token is parsed for user info.
-    * `GoogleTokenPersistenceService.saveTokens(accountId, email, ..., tokenResponse)` encrypts and
-      stores the full `AuthState` in `AccountManager`.
-    * `ActiveGoogleAccountHolder` is updated. UI is notified.
+      `googleAuthManager.handleAuthorizationResponse(authResponse, authException)`.
+    * `GoogleAuthManager` (in `handleAuthorizationResponse`):
+        * Calls `appAuthHelperService.exchangeAuthorizationCode(authResponse)` for token exchange.
+        * Receives `TokenResponse`.
+        * Parses ID Token via `appAuthHelperService.parseIdToken()` for user details.
+        * Calls `googleTokenPersistenceService.saveTokens(...)` to store the `AuthState` (encrypted)
+          and user info in `AccountManager`.
+        * Updates `ActiveGoogleAccountHolder`.
+        * Emits `GoogleSignInResult.Success(managedAccount, authState)` or `Error/Cancelled`.
+    * `DefaultAccountRepository` collects this `GoogleSignInResult`, maps it to `GenericAuthResult`,
+      and sends it to `googleAuthResultChannel`.
 
-4. **Authenticated API Calls (Ktor + `GoogleKtorTokenProvider`)**:
-    * Ktor `Auth` plugin calls `GoogleKtorTokenProvider.getBearerTokens()`.
-    * Provider retrieves/decrypts `AuthState` via `GoogleTokenPersistenceService`.
-    * **Refresh:** If `AuthState.needsTokenRefresh` is true, provider uses
-      `AppAuthHelperService.refreshAccessToken()` with the stored refresh token.
-        * On success, updated `AuthState` is re-encrypted and saved.
-        * On `invalid_grant`, `AuthState` is cleared, and re-authentication is signaled (provider
-          returns null).
-    * Valid access token is returned to Ktor as `BearerTokens` (with a placeholder for
-      `refreshToken` field).
+4. **Authenticated API Calls (Ktor Client -> `GoogleKtorTokenProvider` -> `GoogleAuthManager` ->
+   Services)**:
+    * Ktor `Auth` plugin invokes `GoogleKtorTokenProvider.getBearerTokens()`.
+    * `GoogleKtorTokenProvider` calls `googleAuthManager.getFreshAccessToken(accountId)`.
+    * `GoogleAuthManager` (in `getFreshAccessToken`):
+        * Retrieves `AuthState` via `googleTokenPersistenceService.getAuthState(accountId)`.
+        * **Token Refresh:** If `AuthState.needsTokenRefresh`:
+            * Calls `appAuthHelperService.refreshAccessToken(authState)`.
+            * If successful, updates `AuthState` via
+              `googleTokenPersistenceService.updateAuthState(...)`.
+            * If refresh fails with `invalid_grant`, calls
+              `googleTokenPersistenceService.clearTokens(accountId, removeAccountFromManagerFlag = false)`
+              and returns `GoogleGetTokenResult.NeedsReauthentication`.
+        * Extracts access token from `AuthState` and returns
+          `GoogleGetTokenResult.Success(accessToken)`.
+    * `GoogleKtorTokenProvider` returns `BearerTokens` or handles `NeedsReauthentication` (e.g., by
+      throwing `GoogleNeedsReauthenticationException`).
 
-5. **Logout (UI ->ViewModel -> `DefaultAccountRepository` -> `AppAuthHelperService` ->
-   `GoogleTokenPersistenceService`)**:
+5. **Sign-Out (UI -> ViewModel -> `DefaultAccountRepository` -> `GoogleAuthManager` -> Services)**:
     * ViewModel calls `AccountRepository.signOut(googleAccount)`.
-    * `DefaultAccountRepository`:
-        * Retrieves `AuthState` via `GoogleTokenPersistenceService`.
-        * Calls `appAuthHelperService.revokeToken(refreshToken)` to revoke it on Google's server.
-        * Calls `googleTokenPersistenceService.clearTokens(accountId, removeAccount = true)` to
-          delete the `AccountManager` entry and encrypted `AuthState`.
-        * Updates active account status and UI.
+   * `DefaultAccountRepository` retrieves the `ManagedGoogleAccount` (e.g. via
+     `googleAuthManager.getAccount(account.id).firstOrNull()`) and then calls
+     `googleAuthManager.signOut(managedGoogleAccount)`.
+   * `GoogleAuthManager` (in `signOut`):
+       * Retrieves `AuthState` via `googleTokenPersistenceService.getAuthState()`.
+       * If refresh token exists, calls `appAuthHelperService.revokeToken(refreshToken)`.
+       * Calls
+         `googleTokenPersistenceService.clearTokens(accountId, removeAccountFromManagerFlag = true)`.
+       * Clears `ActiveGoogleAccountHolder` if it was the active account.
+       * Emits `GoogleSignOutResult.Success` or `Error`.
+   * `DefaultAccountRepository` collects `GoogleSignOutResult`, maps to `GenericSignOutResult`, and
+     emits.
 
-#### 2.4.2 Microsoft Authentication Flow (MSAL)
+### 4.2. Microsoft OAuth Flow (MSAL)
 
 1. **MSAL Initialization (`MicrosoftAuthManager`)**:
-    * `IMultipleAccountPublicClientApplication` is initialized with config from
-      `R.raw.auth_config_msal.json` (client ID, broker redirect URI, authority).
+    * On app startup (or when `MicrosoftAuthManager` is first created), it initializes
+      `IMultipleAccountPublicClientApplication` using the configuration from
+      `R.raw.auth_config_msal` (provided via `AuthConfigProvider`). This config includes client ID,
+      tenant ID, redirect URI (often a broker-compatible one), and authorities.
 
-2. **Login Initiation (UI ->
+2. **Sign-In Initiation (UI ->
    ViewModel -> `DefaultAccountRepository` -> `MicrosoftAccountRepository` ->`MicrosoftAuthManager`)
    **:
-    * User action triggers ViewModel, calls
-      `AccountRepository.getAuthenticationIntentRequest("MS", activity)`.
-    * `DefaultAccountRepository` delegates to `MicrosoftAccountRepository`.
+    * User initiates Microsoft sign-in.
+    * ViewModel calls `AccountRepository.signIn("MS", activity, loginHint)`.
+    * `DefaultAccountRepository` delegates to `MicrosoftAccountRepository` (the instance qualified
+      with `@MicrosoftRepo`).
     * `MicrosoftAccountRepository` calls `microsoftAuthManager.signInInteractive(activity, scopes)`.
-        * `MicrosoftAuthManager` uses MSAL to launch external UI (browser/broker). MSAL handles the
-          redirect internally.
-        * Results (success/error/cancel) are delivered to an `AuthenticationCallback` within
-          `signInInteractive`, which emits `AuthenticationResultWrapper` on a Flow.
-    * `MicrosoftAccountRepository` collects this Flow:
-        * On success (`IAuthenticationResult`): Calls
-          `MicrosoftTokenPersistenceService.saveAccountInfo(authResult)` to encrypt and store
-          access/ID tokens and account identifiers in `AccountManager` (MSAL manages refresh token).
-          Updates `ActiveMicrosoftAccountHolder`. Notifies UI.
-    * `getAuthenticationIntentRequest` for "MS" returns `flowOf(null)`.
+        * `MicrosoftAuthManager` builds `AcquireTokenParameters` and calls MSAL's `acquireToken()`
+          method.
+        * MSAL handles the UI flow, which might involve opening a browser, a Custom Tab, or
+          leveraging the Microsoft Authenticator app (broker) if installed. The redirect is handled
+          internally by MSAL or the broker.
+        * The result (`IAuthenticationResult`, `MsalException`, or cancellation) is delivered to the
+          `AuthenticationCallback` provided to `AcquireTokenParameters`.
+        * `MicrosoftAuthManager` wraps this result in an `AuthenticationResultWrapper` and emits it
+          on the `Flow` returned by `signInInteractive`.
+    * `MicrosoftAccountRepository` collects this `Flow`:
+        * On `AuthenticationResultWrapper.Success(iAccount, iAuthResult)`:
+            * It calls `microsoftAuthManager.saveAccountInfoToAccountManager(iAuthResult)` (which
+              was adapted from the old persistence service logic). This stores account identifiers (
+              like `IAccount.getId()`, username) and potentially the access/ID tokens (encrypted) in
+              Android's `AccountManager`. MSAL itself securely manages its refresh tokens, often
+              within the broker or its own encrypted storage.
+            * Updates `ActiveMicrosoftAccountHolder`.
+            * Returns `GenericAuthResult.Success(account)`.
+        * On `Error` or `Cancelled`, returns the corresponding `GenericAuthResult`.
 
-3. **Authenticated API Calls (Ktor + `MicrosoftKtorTokenProvider`)**:
-    * Ktor `Auth` plugin calls `MicrosoftKtorTokenProvider.loadBearerTokens()` or
-      `refreshBearerTokens()`.
-    * Provider gets active MSAL account ID, then retrieves the `IAccount` object via
-      `microsoftAuthManager.getAccount(accountId).firstOrNull()`.
-    * Calls `microsoftAuthManager.acquireTokenSilent(iAccount, scopes)`.
-        * MSAL attempts silent token acquisition (cache or internal refresh token via broker).
-          Results delivered to `SilentAuthenticationCallback`, emitted as
-          `AuthenticationResultWrapper` on a Flow.
-    * Provider collects this Flow:
-        * On success: Returns `BearerTokens` (access token + placeholder for refresh token).
-        * On `MsalUiRequiredException`: Signals re-authentication is needed (provider returns null).
-    * Valid access token is returned to Ktor.
+3. **Authenticated API Calls (Ktor Client -> `MicrosoftKtorTokenProvider`)**:
+    * When a Ktor client in `GraphApiHelper` needs to make an authenticated call:
+        * The Ktor `Auth` plugin invokes `MicrosoftKtorTokenProvider.getBearerTokens()`.
+        * `MicrosoftKtorTokenProvider` retrieves the active Microsoft account ID from
+          `ActiveMicrosoftAccountHolder`.
+        * It calls `microsoftAuthManager.getAccount(accountId)` to get the `IAccount` object.
+        * It then calls `microsoftAuthManager.acquireTokenSilent(iAccount, scopes)`.
+            * `MicrosoftAuthManager` builds `AcquireTokenSilentParameters` and calls MSAL's
+              `acquireTokenSilentAsync()`.
+            * MSAL attempts to get a token silently from its cache or by using its refresh token (
+              possibly via the broker).
+            * The result is delivered to a `SilentAuthenticationCallback` and emitted as an
+              `AuthenticationResultWrapper` on the `Flow`.
+        * `MicrosoftKtorTokenProvider` collects this `Flow`:
+            * On `AuthenticationResultWrapper.Success`, it extracts the access token and returns it
+              in `BearerTokens`. The `refreshToken` field in `BearerTokens` is a placeholder.
+            * If `acquireTokenSilent` results in an `MsalUiRequiredException` (wrapped in
+              `AuthenticationResultWrapper.Error`), this indicates silent renewal failed and
+              interactive sign-in is needed. The provider then signals this (e.g., returns null
+              tokens), and `AccountRepository` should mark the account with
+              `needsReauthentication = true`.
+        * A valid access token is returned to the Ktor `Auth` plugin.
 
-4. **Logout (UI ->ViewModel -> `DefaultAccountRepository` -> `MicrosoftAccountRepository` ->
-   `MicrosoftAuthManager` -> `MicrosoftTokenPersistenceService`)**:
+4. **Sign-Out (UI ->ViewModel -> `DefaultAccountRepository` -> `MicrosoftAccountRepository` ->
+   `MicrosoftAuthManager`)**:
+    * User initiates sign-out for a Microsoft account.
     * ViewModel calls `AccountRepository.signOut(microsoftAccount)`.
     * `DefaultAccountRepository` delegates to `MicrosoftAccountRepository`.
     * `MicrosoftAccountRepository`:
-        * Retrieves `IAccount` via `MicrosoftAuthManager`.
-        * Calls `microsoftAuthManager.signOut(iAccount)` (MSAL removes account from its
-          cache/broker).
-        * On successful MSAL sign-out, calls
-          `microsoftTokenPersistenceService.deleteAccount(iAccount.id)` to remove the
-          `AccountManager` entry and encrypted tokens.
-        * Updates active account status and UI.
+        * Gets the `IAccount` object corresponding to the `Account` model via
+          `MicrosoftAuthManager`.
+        * Calls `microsoftAuthManager.signOut(iAccount)`.
+            * `MicrosoftAuthManager` calls MSAL's `removeAccount()`. MSAL clears its cached tokens
+              for that account and signs the user out from the broker if applicable.
+            * On successful removal by MSAL, `MicrosoftAuthManager` also calls
+              `deleteAccountFromAccountManager(iAccount.getId())` to remove the persisted account
+              identifiers from Android's `AccountManager`.
+        * Clears `ActiveMicrosoftAccountHolder` if it was the active account.
+        * Emits `GenericSignOutResult.Success` or `Error`.
 
----
-**EPIC 6: Settings & Configuration** (Medium Priority)
+## 5. UI Architecture (MVVM & Jetpack Compose)
 
-* **Requirement 7.1 (Basic Settings):** As a user, I want access to basic settings (e.g., account
-  management, theme). **(Partially Implemented - Account management UI via SettingsScreen)**.
-
----
-
-### 2.4. Architectural Vision & Iterative Implementation (Revised May 12, 2025)
-
-* **Iterative Implementation:** The project follows an iterative approach, focusing on delivering
-  core value incrementally. The current focus is on stabilizing core viewing features for both
-  Microsoft and Google accounts and then proceeding with mail actions and composition.
-* **Core Architectural Refinements:**
-    * `ErrorMapperService` Interface in `:core-data` (`ErrorMapperService.kt`), with implementations
-      in `:backend-microsoft` (`MicrosoftErrorMapper.kt`) and `:backend-google` (
-      `GoogleErrorMapper.kt`).
-    * `MailApiService` Abstraction in `:core-data` (`MailApiService.kt`): Defines common mail
-      operations (e.g., `getMailFolders`, `getMessagesForFolder`) implemented by
-      `GraphApiHelper.kt` (for Microsoft) and `GmailApiHelper.kt` (for Google). Repositories in
-      `:data` (e.g., `DefaultFolderRepository.kt`, `DefaultMessageRepository.kt`) use this
-      abstraction via Hilt multibindings.
-* **Conversation View Harmonization:**
-    * `DefaultThreadRepository.kt` in `:data` is the central component for fetching and assembling
-      `MailThread` objects for all conversation-aware list views (e.g., Inbox, Sent).
-    * `MailThread.kt` model in `:core-data` is the primary data object for these lists, featuring a
-      `participantsSummary`.
-    * `GraphApiHelper.kt`'s `getMessagesForThread` method has been updated to query `/me/messages` (
-      filtered by `conversationId`), ensuring true cross-folder threading for Microsoft accounts.
-      `GmailApiHelper.kt` already supported this.
-    * The UI (`MainApp.kt` in `:app`) displays `ThreadListContent.kt` (which uses
-      `ThreadListItem.kt`) when the view mode is set to "Threads", correctly rendering participant
-      summaries.
-* **Authentication Layer:**
-    * **Microsoft:** Uses `MicrosoftAuthManager.kt` (MSAL wrapper) in `:backend-microsoft`. Token
-      storage and management are handled by MSAL's internal mechanisms. Ktor integration via
-      `MicrosoftKtorTokenProvider.kt`.
-    * **Google:**
-        * **Initial Sign-In (ID Token):** `GoogleAuthManager.kt` in `:backend-google` uses
-          `androidx.credentials.CredentialManager` with `GetSignInWithGoogleOption` (configured with
-          a Web Client ID:
-          `326576675855-6vc6rrjhijjfch6j6106sd5ui2htbh61.apps.googleusercontent.com`). This step
-          primarily identifies the user and obtains an ID Token.
-        * **API Authorization & Tokens (Access/Refresh):** The **AppAuth for Android library** flow
-          is managed by `AppAuthHelperService.kt` in `:backend-google`. It uses the **Android Client
-          ID** (from `BuildConfig.GOOGLE_ANDROID_CLIENT_ID` e.g.,
-          `326576675855-r404vqtrr8ohbpl7g6tianaekkt70igd.apps.googleusercontent.com`) and manages
-          the authorization code grant with PKCE. AppAuth handles launching the consent UI via
-          Custom Tabs.
-        * **Token Storage:** `GoogleTokenPersistenceService.kt` (in `:backend-google`) handles
-          encrypting (via `SecureEncryptionService.kt` from `:core-data`, which uses Android
-          Keystore) and storing AppAuth-obtained Google tokens (access, refresh, ID) into Android's
-          `AccountManager` under a custom account type (`net.melisma.mail.GOOGLE`).
-          `GoogleStubAuthenticator.kt` and `GoogleAuthenticatorService.kt` facilitate this
-          `AccountManager` integration.
-        * **Ktor Integration:** Ktor's `Auth` plugin is configured in `BackendGoogleModule.kt` to
-          use `GoogleKtorTokenProvider.kt`, which loads tokens from `GoogleTokenPersistenceService`
-          and refreshes them using `AppAuthHelperService`.
-* **Consent Handling for Google:** AppAuth's standard flow using Custom Tabs presents Google's
-  consent screen. `DefaultAccountRepository.kt` coordinates the overall flow: initial
-  `CredentialManager` sign-in, triggering the AppAuth flow (via an `Intent` emitted to the
-  `MainActivity`), and persisting tokens. The previous `GoogleAccountCapability` for `IntentSender`
-  appears to be a legacy path, with the AppAuth flow being the primary mechanism for API
-  authorization.
+* **Pattern:** MVVM is strictly followed in the `:app` module.
+* **ViewModels (`androidx.lifecycle.ViewModel`):**
+    * Located in `net.melisma.mail` package (e.g., `MainViewModel.kt`).
+    * Responsible for holding and managing UI-related state (`MainScreenState`).
+    * Expose state to Composables via `kotlinx.coroutines.flow.StateFlow`.
+    * Fetch data from Repositories (defined in `:core-data`, implemented in `:data`).
+    * Handle UI logic and user actions, delegating business logic to repositories.
+    * Scoped to the lifecycle of a Composable screen or navigation graph.
+* **Views (Jetpack Compose Composables):**
+    * Located in `net.melisma.mail.ui` sub-packages.
+    * Declarative UI defined using Kotlin functions.
+    * Observe `StateFlow` from ViewModels using `collectAsStateWithLifecycle()`.
+    * Stateless or stateful based on the complexity, with state often hoisted to the ViewModel or
+      parent Composables.
 * **State Management:**
-    * Repositories (`DefaultAccountRepository`, `DefaultFolderRepository`,
-      `DefaultMessageRepository`) expose data and loading states via Kotlin `StateFlow`.
-    * `MainViewModel.kt` collects these flows, combines them into `MainScreenState`, and exposes
-      this to the Compose UI (`MainActivity.kt`).
-    * `ActiveGoogleAccountHolder.kt` and `ActiveMicrosoftAccountHolder.kt` manage the currently
-      selected account ID for each provider in-memory. *Future Improvement: Persist this active
-      account state (e.g., via SharedPreferences) to restore across app sessions.*
-* **Performance Action Items:**
-    * **Address Main Thread Jank:** Investigate and resolve observed "Skipped frames" during app
-      startup/initial load using Android Studio Profiler.
-    * **Implement Paging:** For long lists of emails (Requirement 1.1), implement the Jetpack Paging
-      3 library to improve performance and memory efficiency.
-* **Local Caching Strategy (Future Enhancement):**
-    * While not yet implemented, a future enhancement will involve introducing a local database (
-      e.g., Room) as a single source of truth (Requirement 5.6). Repositories will synchronize
-      network data to the database, and ViewModels will observe data from the database, enabling
-      better offline support and faster initial loads.
+    * `MainScreenState` (or similar data classes) represents the complete state for a given screen.
+      It is immutable.
+    * ViewModels update state by creating new instances of the state data class using
+      `_uiState.update { currentState.copy(...) }`.
+* **Navigation:**
+    * Jetpack Navigation for Compose is used for navigating between different screens/Composables.
+* **Theming:**
+    * Material 3 theming is applied using `Theme.kt`, `Color.kt`, `Type.kt`. Dynamic Color is
+      supported.
 
-## 4. Test Strategy
+## 6. Test Strategy
 
-*(No significant changes from previous version, but tests for Google now cover CredentialManager for
-ID token, AppAuth flows for API tokens, AccountManager token storage, and Ktor refresh logic.)*
+### 6.1. Goals
 
-### 4.1. Goals
-* Verify correctness of individual components.
-* Prevent regressions.
-* Facilitate refactoring.
-* Validate interactions between components.
-* Improve code design towards testability.
+* Verify correctness of individual components (unit tests).
+* Ensure proper interaction between components (integration tests).
+* Prevent regressions during development and refactoring.
+* Improve overall code design by promoting testability.
 
-### 4.2. Scope (Phase 1: Unit & Integration on JVM)
+### 6.2. Scope
 
-* **In Scope:** Unit tests and JVM-based integration tests.
-* **Out of Scope (For Now):** UI/E2E tests, performance, security, usability testing (beyond initial
-  developer checks).
+* **Unit Tests:** Focus on ViewModels, Repositories, Mappers, API Helpers, Authentication
+  Components (`MicrosoftAuthManager`, `AppAuthHelperService`, Token Persistence services), and
+  utility classes.
+* **Integration Tests (JVM-based):** Verify interactions between collaborating components within a
+  module or across closely related modules (e.g., ViewModel with Repository, Repository with API
+  service and Error Mapper).
+* **UI/E2E Tests (Future):** While not the immediate focus, end-to-end tests using Jetpack Compose
+  testing APIs and Hilt will be essential for validating full user flows, including AppAuth's Custom
+  Tab interactions.
 
-### 4.3. Test Levels & Techniques
+### 6.3. Test Levels & Techniques
 
-* **Unit Tests:** MockK, `kotlinx-coroutines-test`, Turbine, JUnit. Focus on ViewModels (
-  `MainViewModelTest.kt`), Repositories (`DefaultAccountRepositoryTest.kt` - assumed), Mappers (
-  `GoogleErrorMapperTest.kt`), API Helpers (`GmailApiHelperTest.kt`, `GraphApiHelperTest.kt`),
-  Authentication components (`GoogleAuthManagerTest.kt` - assumed, `AppAuthHelperServiceTest.kt`),
-  Token Persistence services.
-* **Integration Tests (JVM):** Verify interaction between collaborating components (e.g.,
-  `DefaultAccountRepository` with `GoogleAuthManager` and `AppAuthHelperService`).
+* **Unit Tests:**
+    * **Tools:** JUnit 4/5, MockK (for mocking dependencies), `kotlinx-coroutines-test` (for testing
+      coroutines and Flow), Turbine (for testing `Flow` emissions).
+    * **Focus:** Isolate the class under test, mock its dependencies, and verify its logic, state
+      changes, and interactions with mocks.
+    * **Structure:** Typically follow AAA (Arrange, Act, Assert) pattern.
+* **Integration Tests (JVM):**
+    * **Tools:** JUnit 4/5, Hilt for providing real or partial implementations of dependencies where
+      appropriate (or MockK for external boundaries).
+    * **Focus:** Verify the contract between components. For example, ensure
+      `DefaultAccountRepository` correctly processes data from a mocked `AppAuthHelperService` and
+      `GoogleTokenPersistenceService`.
 
-### 4.4. Tooling & Libraries
+### 6.4. Key Areas for Testing
 
-* JUnit 4, MockK, `kotlinx-coroutines-test`, Turbine.
+* **Authentication Flows:** Success, error, and cancellation paths for both Google and Microsoft
+  sign-in/out, token refresh.
+* **Data Repositories:** Correct data fetching, mapping, caching (once implemented), and error
+  propagation.
+* **ViewModels:** State updates in response to repository emissions or user actions, correct
+  delegation to repositories.
+* **Error Mappers:** Accurate mapping of provider-specific exceptions to generic error models.
+* **API Helpers (`GraphApiHelper`, `GmailApiHelper`):** Correct request formation and response
+  parsing.
 
-### 4.5. Requirements & Best Practices
+### 6.5. Best Practices
 
-* AAA structure, isolation, readability, speed, reliability, good coverage.
+* Tests should be readable, maintainable, and fast.
+* Aim for good test coverage of business logic and critical paths.
+* Tests should be independent and not rely on the state of other tests.
 
-### 4.6. Future Testing Considerations
+## 7. Setup, Build, and Development Environment
 
-* UI/E2E Tests using Jetpack Compose testing APIs and Hilt, especially for the Custom Tab
-  interactions of AppAuth.
-* CI Integration.
-* Performance testing after addressing jank.
+### 7.1. Prerequisites
 
-## 5. Developer & AI Guidance
+* Latest stable version of Android Studio.
+* Android SDK (ensure appropriate API levels are installed as per `build.gradle.kts` files).
+* JDK (typically bundled with Android Studio).
 
-### 5.1. Key Architectural Patterns & Conventions
-* **Modular Architecture:** As described in section 2.2.
-* **MVVM with Jetpack Compose UI.**
-* **Repository Pattern.**
-* **Dependency Injection:** Hilt.
-* **Asynchronous Operations:** Kotlin Coroutines and Flow.
-* **Networking:** Ktor with OkHttp engine.
-* **Error Handling:** `ErrorMapperService` from `:core-data` (`GoogleErrorMapper.kt`,
-  `MicrosoftErrorMapper.kt`).
-* **Authentication:**
-    * Microsoft: `MicrosoftAuthManager.kt` (MSAL) in `:backend-microsoft`.
-    * Google:
-        * Initial Sign-In (ID Token): `GoogleAuthManager.kt` in `:backend-google` (using
-          `CredentialManager` with Web Client ID).
-        * API Authorization & Tokens (Access/Refresh): AppAuth for Android (via
-          `AppAuthHelperService.kt` in `:backend-google`, using Android Client ID).
-        * Token Storage: `GoogleTokenPersistenceService.kt` using `AccountManager` (with Keystore
-          encryption via `SecureEncryptionService.kt`).
-* **UI:** Material 3 (`Theme.kt`, `Color.kt`, `Type.kt`).
+### 7.2. Project Setup
 
-### 5.2. Build and Run Commands
-* **Build app:** `./gradlew build`
-* **Install and run (debug):** `./gradlew installDebug`
-* **Run all unit tests:** `./gradlew test`
-* **Clean build:** `./gradlew clean build`
+1. **Clone the repository.**
+2. **Open in Android Studio.**
+3. **Sync Gradle:** Allow Android Studio to download all dependencies and sync the project. This
+   will include libraries like MSAL, AppAuth, Ktor, Hilt, etc.
+4. **Configuration (Client IDs, etc.):**
+    * **Microsoft (MSAL):** Configuration is primarily in
+      `app/src/main/res/raw/auth_config_msal.json`. Ensure this file contains the correct
+      `client_id` and `redirect_uri` for your Azure AD app registration.
+    * **Google (AppAuth):**
+        * **Android Client ID (for AppAuth):** Used in `AppAuthHelperService.kt`. This ID is
+          obtained from Google Cloud Console for an "Android application" type OAuth client and is
+          linked to your app's package name and SHA-1 signing certificate fingerprint. It's often
+          provided via `BuildConfig`.
+        * **Redirect URI (for AppAuth):** Must be configured in `AndroidManifest.xml` (e.g., using a
+          custom scheme like `net.melisma.mail:/oauth2redirect`) and match the one registered in
+          Google Cloud Console for your Android Client ID.
+    * Ensure `buildConfigField` values for client IDs or redirect URIs in module-level
+      `build.gradle.kts` files are correctly set up if used.
 
-### 5.3. Current Development Focus
+### 7.3. Build Commands
 
-1. Complete core mail actions (Mark Read/Unread, Delete, Move) for Microsoft Graph API.
-2. Address performance jank observed during startup (Action Item).
-3. Begin implementation of "Compose New Email" (EPIC 3).
-4. Plan and implement Jetpack Paging 3 for message lists (Action Item).
-5. Plan and implement local database caching (Room).
+* **Build Project:** `./gradlew build` (or via Android Studio Build menu)
+* **Clean Project:** `./gradlew clean`
+* **Install Debug APK:** `./gradlew installDebug`
+* **Run Unit Tests (All Modules):** `./gradlew testDebugUnitTest` (or per module:
+  `./gradlew :<module-name>:testDebugUnitTest`)
+* **Run Android Instrumented Tests (All Modules):** `./gradlew connectedDebugAndroidTest` (requires
+  connected device/emulator)
 
----
+### 7.4. Development Guidance
 
-This consolidated document aims to be a central reference. It should be updated as the project evolves.
+* **Branching Strategy:** Follow a standard Git flow (e.g., feature branches off `develop`, merge
+  via PRs).
+* **Code Style:** Adhere to Kotlin coding conventions. Use Android Studio's formatter.
+* **Logging:** Use Timber for logging (`Timber.d()`, `Timber.e()`, etc.). Avoid raw
+  `android.util.Log`.
+* **Addressing `TODO`s:** Regularly review and address `TODO` comments. The `TODO.md` file tracks
+  larger outstanding refactoring items.
+
+This document provides a foundational understanding of the Melisma Mail application's architecture
+and development practices. It should be treated as a living document and updated as the project
+evolves. 

@@ -251,17 +251,6 @@ class AppAuthHelperService @Inject constructor(
             }
         }
 
-    // This data class might be an issue if another class outside this package tries to refer to it
-    // as AppAuthHelperService.GoogleTokenData. It's not used by the current version of
-    // GoogleTokenPersistenceService or GoogleKtorTokenProvider after recent refactors.
-    // Consider removing if truly unused.
-    data class GoogleTokenData(
-        val accessToken: String?,
-        val refreshToken: String?,
-        val idToken: String?,
-        val accessTokenExpirationTime: Long?
-    )
-
     fun dispose() {
         authService.dispose()
         Timber.d("AppAuthHelperService disposed.")

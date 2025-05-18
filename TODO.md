@@ -106,4 +106,35 @@ related to the recent authentication and data layer refactoring.
 - **Issue/Question:** Are there any other minor `TODO` comments left during the refactoring that are
   not covered by the major items above?
 - **Task/Consideration:** A general pass to find and address or re-evaluate any remaining minor
-  `TODOs`. 
+  `TODOs`.
+
+## 4. `androidx.credentials.CredentialManager` Cleanup
+
+- **Files:**
+  - `backend-google/build.gradle.kts` (test dependencies)
+  - `DESIGN2.md` (and potentially `DESIGN.MD` if it's still relevant)
+  - `backend-google/src/main/AndroidManifest.xml`
+  - Any other documentation or code comments mentioning its direct use for Google Sign-In.
+- **Context:** Previous design documents (`DESIGN2.md`, `DESIGN.md`) and some test configurations
+  suggested the use of `androidx.credentials.CredentialManager` for the initial Google Sign-In flow.
+- **Issue/Question:** Code investigation revealed that `CredentialManager` is not actively used in
+  the runtime application logic for Google Sign-In. Its presence is primarily limited to test
+  dependencies in `backend-google/build.gradle.kts` and mentions in documentation. The primary
+  Google authentication mechanism is AppAuth.
+- **Task/Consideration:**
+  - Verify if the `androidx.credentials` and `com.google.android.libraries.identity.googleid`
+    `testImplementation` dependencies in `backend-google/build.gradle.kts` are actively used by any
+    tests. If not, remove them. If they are used (e.g., for testing interactions with Android system
+    components), ensure comments clarify they are not part of the main application authentication
+    flow.
+  - Update all relevant design documents (especially `DESIGN2.md`, and `DESIGN.md` if still in use)
+    to accurately reflect that AppAuth is the mechanism for the Google OAuth flow. Remove mentions
+    of `CredentialManager` being used for initial Google Sign-In ID token retrieval in the
+    production code.
+  - Search the codebase for any other comments or configurations that imply `CredentialManager` has
+    an active role in Google sign-in and remove or clarify these references.
+  - Evaluate the necessity of the `android.permission.CREDENTIAL_MANAGER_SERVICE` permission in
+    `backend-google/src/main/AndroidManifest.xml`. If `CredentialManager` is confirmed to be unused
+    in the application's runtime, this permission might no longer be required. (Double-check if
+    AppAuth or other libraries might require it indirectly, although this specific permission is
+    typically for direct `CredentialManager` API usage). 

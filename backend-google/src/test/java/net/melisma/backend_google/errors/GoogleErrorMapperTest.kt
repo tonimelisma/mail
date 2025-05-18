@@ -1,7 +1,5 @@
 package net.melisma.backend_google.errors
 
-// Import androidx.credentials exceptions
-// Import a concrete subclass of GetCredentialException
 // Remove unused GoogleAuthenticationException if it's no longer directly mapped
 // import net.melisma.backend_google.auth.GoogleAuthenticationException
 import android.util.Log
