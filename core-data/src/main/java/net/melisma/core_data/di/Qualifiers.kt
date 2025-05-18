@@ -18,3 +18,11 @@ annotation class ApiHelperType(val value: String)
 @Qualifier
 @Retention(AnnotationRetention.BINARY)
 annotation class ErrorMapperType(val value: String)
+
+@Qualifier
+@Retention(AnnotationRetention.BINARY)
+annotation class MicrosoftRepo
+
+@Qualifier
+@Retention(AnnotationRetention.BINARY)
+annotation class GoogleRepo

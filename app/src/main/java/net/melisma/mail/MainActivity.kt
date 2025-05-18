@@ -8,7 +8,6 @@ import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.ActivityResultLauncher
@@ -47,7 +46,7 @@ import androidx.lifecycle.lifecycleScope
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.launch
 import net.melisma.core_data.model.Account
-import net.melisma.core_data.model.AuthState
+import net.melisma.core_data.repository.OverallApplicationAuthState
 import net.melisma.mail.ui.MailDrawerContent
 import net.melisma.mail.ui.MailTopAppBar
 import net.melisma.mail.ui.MessageListContent
@@ -67,33 +66,42 @@ class MainActivity : ComponentActivity() {
         Log.d(TAG, "onCreate() called")
         super.onCreate(savedInstanceState)
 
-        Log.d(TAG, "Setting up appAuthLauncher for AppAuth Intent results")
+        Log.d(TAG, "Setting up appAuthLauncher for AppAuth (Google) Intent results")
         appAuthLauncher = registerForActivityResult(
             ActivityResultContracts.StartActivityForResult()
         ) { result ->
-            Log.i(TAG, "appAuthLauncher: Result received. ResultCode: ${result.resultCode}")
-            viewModel.handleGoogleAppAuthResult(this, result.resultCode, result.data)
+            Log.i(
+                TAG,
+                "appAuthLauncher (Google): Result received. ResultCode: ${result.resultCode}"
+            )
+            viewModel.handleAuthenticationResult(
+                providerType = Account.PROVIDER_TYPE_GOOGLE,
+                resultCode = result.resultCode,
+                data = result.data
+            )
         }
 
-        Log.d(TAG, "Setting up observation of appAuthIntentToLaunch flow from ViewModel")
+        Log.d(TAG, "Setting up observation of pendingAuthIntent flow from ViewModel")
         lifecycleScope.launch {
-            viewModel.appAuthIntentToLaunch.collect { intent ->
+            viewModel.pendingAuthIntent.collect { intent ->
                 intent?.let {
                     Log.i(
                         TAG,
-                        "Received AppAuth Intent from ViewModel. Action: ${it.action}, Data: ${it.dataString}"
+                        "Received pending Intent from ViewModel. Action: ${it.action}, Data: ${it.dataString}"
                     )
                     try {
-                        Log.d(TAG, "Launching AppAuth Intent with appAuthLauncher.")
+                        Log.d(TAG, "Launching pending Intent with appAuthLauncher.")
                         appAuthLauncher.launch(it)
+                        viewModel.authIntentLaunched()
                     } catch (e: Exception) {
-                        Log.e(TAG, "Error launching AppAuth Intent via appAuthLauncher", e)
+                        Log.e(TAG, "Error launching pending Intent via appAuthLauncher", e)
                         val errorPrefix = getString(R.string.error_google_signin_failed_generic)
                         Toast.makeText(
                             this@MainActivity,
                             "$errorPrefix: ${e.localizedMessage}",
                             Toast.LENGTH_LONG
                         ).show()
+                        viewModel.authIntentLaunched()
                     }
                 }
             }
@@ -226,21 +234,18 @@ fun MainApp(
             floatingActionButton = { /* Placeholder */ }
         ) { innerPadding ->
             Box(modifier = Modifier.padding(innerPadding)) {
-                val currentAuthState = state.authState
+                val currentAuthState = state.overallApplicationAuthState
                 Log.d(
                     TAG_COMPOSABLE,
                     "MainApp content recomposing. AuthState: ${currentAuthState::class.simpleName}, isLoadingAccountAction: ${state.isLoadingAccountAction}, Accounts: ${state.accounts.size}, SelectedFolder: ${state.selectedFolder?.displayName}"
                 )
 
                 when (currentAuthState) {
-                    is AuthState.Initializing -> {
+                    OverallApplicationAuthState.UNKNOWN -> {
                         LoadingIndicator(statusText = stringResource(R.string.status_initializing_auth))
                     }
-                    is AuthState.AuthError -> {
-                        AuthErrorContent(errorState = currentAuthState)
-                    }
 
-                    is AuthState.SignedOut -> {
+                    OverallApplicationAuthState.NO_ACCOUNTS_CONFIGURED -> {
                         if (state.isLoadingAccountAction) {
                             LoadingIndicator(statusText = stringResource(R.string.status_authenticating))
                         } else {
@@ -251,10 +256,9 @@ fun MainApp(
                         }
                     }
 
-                    is AuthState.SignedInWithMicrosoft,
-                    is AuthState.SignedInWithGoogle,
-                    is AuthState.SignedInBoth -> {
-                        if (state.isLoadingAccountAction && state.selectedFolder == null) {
+                    OverallApplicationAuthState.AT_LEAST_ONE_ACCOUNT_AUTHENTICATED,
+                    OverallApplicationAuthState.PARTIAL_ACCOUNTS_NEED_REAUTHENTICATION -> {
+                        if (state.isLoadingAccountAction && state.selectedFolder == null && state.accounts.isNotEmpty()) {
                             LoadingIndicator(statusText = stringResource(R.string.status_loading_accounts))
                         } else if (state.accounts.isEmpty() && !state.isLoadingAccountAction) {
                             SignedOutContent(
@@ -264,20 +268,26 @@ fun MainApp(
                         } else if (state.selectedFolder != null) {
                             val accountForMessages =
                                 state.accounts.find { it.id == state.selectedFolderAccountId }
-                            val currentActivity = LocalActivity.current
-                            if (currentActivity != null) {
-                                MailContentWrapper(
-                                    viewModel = viewModel,
-                                    state = state,
-                                    activity = currentActivity,
-                                    accountContext = accountForMessages
-                                )
-                            } else {
-                                LoadingIndicator(statusText = "Waiting for activity...")
-                            }
+                            MailContentWrapper(
+                                viewModel = viewModel,
+                                state = state,
+                                activity = activity,
+                                accountContext = accountForMessages
+                            )
                         } else {
                             NoFolderSelectedContent(onDrawerOpen = { scope.launch { drawerState.open() } })
                         }
+                    }
+
+                    OverallApplicationAuthState.ALL_ACCOUNTS_NEED_REAUTHENTICATION -> {
+                        SignedOutContent(
+                            onAddAccountClick = onNavigateToSettings,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                        Log.w(
+                            TAG_COMPOSABLE,
+                            "All accounts need re-authentication. Showing add account prompt."
+                        )
                     }
                 }
             }
@@ -295,24 +305,6 @@ private fun LoadingIndicator(statusText: String?) {
                 Text(statusText, style = MaterialTheme.typography.bodyMedium)
             }
         }
-    }
-}
-
-@Composable
-private fun AuthErrorContent(errorState: AuthState.AuthError) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = androidx.compose.foundation.layout.Arrangement.Center
-    ) {
-        Text(
-            stringResource(R.string.title_authentication_error),
-            style = MaterialTheme.typography.headlineMedium
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(errorState.message)
     }
 }
 
@@ -405,3 +397,4 @@ private fun showToast(context: Context, message: String?) {
     Log.d("MainActivityToast", "showToast: Displaying toast message: $message")
     Toast.makeText(context, message, Toast.LENGTH_SHORT).show()
 }
+

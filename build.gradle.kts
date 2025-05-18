@@ -8,3 +8,14 @@ plugins {
     alias(libs.plugins.android.library) apply false
     alias(libs.plugins.hilt.gradle) apply false
 }
+
+subprojects {
+    configurations.all {
+        resolutionStrategy.eachDependency {
+            if (requested.group == "org.jetbrains.kotlin") {
+                useVersion(libs.versions.kotlin.get())
+                because("Enforce consistent Kotlin version ${libs.versions.kotlin.get()} across all modules and configurations")
+            }
+        }
+    }
+}

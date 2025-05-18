@@ -194,12 +194,7 @@ class DefaultMessageRepository @Inject constructor(
         val errorMapper = errorMappers[providerType]
 
         if (mailApiService == null || errorMapper == null) {
-            Log.e(
-                TAG,
-                "launchMessageFetchJob: Cannot proceed. Missing service for providerType '$providerType'. " +
-                        "MailApiService null? ${mailApiService == null}. " +
-                        "ErrorMapper null? ${errorMapper == null}."
-            )
+            Log.e(TAG, "launchMessageFetchJob: Cannot proceed. Missing service for $providerType")
             _messageDataState.value =
                 MessageDataState.Error("Setup error for account type: $providerType")
             return
@@ -209,114 +204,38 @@ class DefaultMessageRepository @Inject constructor(
             TAG,
             "launchMessageFetchJob: Launching actual job for folder ${folder.displayName}/${account.username}. Provider: $providerType, Refresh: $isRefresh"
         )
-        messageFetchJob = externalScope.launch(ioDispatcher) { // Launch in IO dispatcher
+        messageFetchJob = externalScope.launch(ioDispatcher) {
             Log.d(TAG, "[Job Coroutine - ${folder.displayName}] Starting fetch.")
             try {
-                // Token acquisition is now handled internally by the Ktor Auth plugin
-                // in both GmailApiHelper and GraphApiHelper
-                account.providerType.uppercase()
-                Log.i(
-                    TAG,
-                    "[Job Coroutine - ${folder.displayName}] Fetching messages for ${account.username}..."
-                )
-
-                // Both Google and Microsoft providers now handle tokens internally via Ktor Auth plugin
-                // We can call the MailApiService methods directly without passing tokens
                 val messagesResult = mailApiService.getMessagesForFolder(
                     folder.id, messageListSelectFields, messageListPageSize
                 )
                 ensureActive()
-                Log.d(
-                    TAG,
-                    "[Job Coroutine - ${folder.displayName}] Raw messagesResult from API service: isSuccess=${messagesResult.isSuccess}, count=${messagesResult.getOrNull()?.size}"
-                )
-                Log.d(
-                    TAG,
-                    "[Job Coroutine - ${folder.displayName}] Messages result: isSuccess=${messagesResult.isSuccess}"
-                )
 
                 val newState = if (messagesResult.isSuccess) {
                     val messages = messagesResult.getOrThrow()
-                    messages.take(3).forEach { msg ->
-                        Log.d(
-                            TAG,
-                            "[Job Coroutine - ${folder.displayName}] Mapped App Message: ID=${msg.id}, Subject='${msg.subject}', Sender='${msg.senderName}'"
-                        )
-                    }
-                    Log.i(
-                        TAG,
-                        "[Job Coroutine - ${folder.displayName}] Successfully fetched ${messages.size} messages for ${folder.displayName}"
-                    )
+                    Log.i(TAG, "Fetched ${messages.size} messages for ${folder.displayName}")
                     MessageDataState.Success(messages)
                 } else {
                     val exception = messagesResult.exceptionOrNull()
-                    val errorMsg = errorMapper.mapNetworkOrApiException(exception)
-                    Log.e(
-                        TAG,
-                        "[Job Coroutine - ${folder.displayName}] Failed to fetch messages: $errorMsg",
-                        exception
-                    )
-                    MessageDataState.Error(errorMsg)
+                        ?: IllegalStateException("Unknown error fetching messages")
+                    Log.w(TAG, "Failed to fetch messages for ${folder.displayName}", exception)
+                    val details = errorMapper.mapExceptionToErrorDetails(exception)
+                    MessageDataState.Error(details.message)
                 }
-
-                if (isActive && account.id == currentTargetAccount?.id && folder.id == currentTargetFolder?.id) {
-                    Log.d(
-                        TAG,
-                        "[Job Coroutine - ${folder.displayName}] Target still valid. Updating messageDataState to: $newState"
-                    )
+                if (isActive && currentTargetAccount?.id == account.id && currentTargetFolder?.id == folder.id) {
                     _messageDataState.value = newState
-                } else {
-                    Log.w(
-                        TAG,
-                        "[Job Coroutine - ${folder.displayName}] Message fetch completed but target changed or coroutine inactive. Discarding result."
-                    )
                 }
             } catch (e: CancellationException) {
-                Log.w(
-                    TAG,
-                    "[Job Coroutine - ${folder.displayName}] Message fetch job cancelled: ${e.message}",
-                    e
-                )
-                if (isActive && account.id == currentTargetAccount?.id && folder.id == currentTargetFolder?.id &&
-                    _messageDataState.value is MessageDataState.Loading
-                ) {
-                    Log.d(
-                        TAG,
-                        "[Job Coroutine - ${folder.displayName}] Resetting messageDataState to Initial due to cancellation while loading."
-                    )
-                    _messageDataState.value = MessageDataState.Initial
-                }
-                throw e
+                Log.w(TAG, "Message fetch job cancelled for ${folder.displayName}", e)
             } catch (e: Exception) {
-                Log.e(
-                    TAG,
-                    "[Job Coroutine - ${folder.displayName}] Exception during message fetch: ${e.message}",
-                    e
-                )
-                ensureActive()
-                val errorMsg = errorMapper.mapNetworkOrApiException(e)
-                if (isActive && account.id == currentTargetAccount?.id && folder.id == currentTargetFolder?.id) {
-                    Log.d(
-                        TAG,
-                        "[Job Coroutine - ${folder.displayName}] Target still valid after exception. Updating messageDataState to Error."
-                    )
-                    _messageDataState.value = MessageDataState.Error(errorMsg)
-                } else {
-                    Log.w(
-                        TAG,
-                        "[Job Coroutine - ${folder.displayName}] Exception caught but target changed or coroutine inactive. Discarding error."
-                    )
+                Log.e(TAG, "Exception during message fetch for ${folder.displayName}", e)
+                if (isActive && currentTargetAccount?.id == account.id && currentTargetFolder?.id == folder.id) {
+                    val details = errorMapper.mapExceptionToErrorDetails(e)
+                    _messageDataState.value = MessageDataState.Error(details.message)
                 }
             } finally {
-                Log.d(
-                    TAG,
-                    "[Job Coroutine - ${folder.displayName}] Finally block. Current job: ${coroutineContext[Job]?.hashCode()}, stored job: ${messageFetchJob?.hashCode()}"
-                )
-                if (messageFetchJob == coroutineContext[Job]) { // Check if this is the job instance that's completing
-                    Log.d(
-                        TAG,
-                        "[Job Coroutine - ${folder.displayName}] Clearing messageFetchJob reference."
-                    )
+                if (messageFetchJob == coroutineContext[Job]) {
                     messageFetchJob = null
                 }
             }
@@ -329,42 +248,195 @@ class DefaultMessageRepository @Inject constructor(
                 TAG,
                 "Message fetch job for folder '$folderIdentifier' (Account: ${account.username}) completed. Cause: ${cause?.javaClass?.simpleName}"
             )
-            if (cause != null && cause !is CancellationException && externalScope.isActive) {
-                Log.e(
+            if (messageFetchJob == null && cause is CancellationException && currentTargetAccount?.id == account.id && currentTargetFolder?.id == folder.id) {
+                Log.i(
                     TAG,
-                    "Unhandled error completing message fetch job for '$folderIdentifier'.",
-                    cause
+                    "Message fetch job for '$folderIdentifier' was cancelled, possibly by a new target. Current state: ${_messageDataState.value}. No state change."
                 )
-                if (account.id == currentTargetAccount?.id && currentTargetFolder?.id == folder.id &&
-                    _messageDataState.value !is MessageDataState.Error
-                ) { // Only update if not already an error from within the job
-                    val providerErrorMapper = errorMappers[account.providerType.uppercase()]
-                    val errorMsg = providerErrorMapper?.mapNetworkOrApiException(cause)
-                        ?: "Unknown error after job completion for ${account.providerType}."
-                    Log.d(TAG, "Updating messageDataState to Error from invokeOnCompletion.")
-                    _messageDataState.value = MessageDataState.Error(errorMsg)
+                return@invokeOnCompletion
+            }
+
+            if (cause != null && cause !is CancellationException && externalScope.isActive) {
+                if (currentTargetAccount?.id == account.id && currentTargetFolder?.id == folder.id) {
+                    Log.w(
+                        TAG,
+                        "Message fetch job for '$folderIdentifier' failed after completion. Cause: $cause"
+                    )
+                    val errorMapper = errorMappers[account.providerType.uppercase()]
+                    if (errorMapper != null) {
+                        val details = errorMapper.mapExceptionToErrorDetails(cause)
+                        _messageDataState.value = MessageDataState.Error(details.message)
+                    } else {
+                        _messageDataState.value =
+                            MessageDataState.Error("Failed to process error for ${account.providerType}: Mapper not found.")
+                    }
+                } else {
+                    Log.d(
+                        TAG,
+                        "Message fetch job for '$folderIdentifier' (original target) completed with error, but target has changed. No state update."
+                    )
                 }
+            } else if (cause == null && _messageDataState.value is MessageDataState.Loading && currentTargetAccount?.id == account.id && currentTargetFolder?.id == folder.id) {
+                Log.w(
+                    TAG,
+                    "Message fetch job for '$folderIdentifier' completed without error but state is still Loading. Setting to error."
+                )
+                _messageDataState.value =
+                    MessageDataState.Error("Unexpected completion state for ${folder.displayName}.")
             }
         }
     }
 
-    private fun cancelAndClearJob(reason: String) {
-        val jobToCancel = messageFetchJob
-        if (jobToCancel != null) {
-            Log.d(
+    override suspend fun markMessageRead(
+        account: Account,
+        messageId: String,
+        isRead: Boolean
+    ): Result<Unit> = withContext(ioDispatcher) {
+        Log.d(
+            TAG,
+            "markMessageRead called for account: ${account.username}, messageId: $messageId, isRead: $isRead"
+        )
+        val providerType = account.providerType.uppercase()
+        val mailApiService = mailApiServices[providerType]
+        val errorMapper = errorMappers[providerType]
+
+        if (mailApiService == null || errorMapper == null) {
+            Log.e(
                 TAG,
-                "cancelAndClearJob called. Reason: '$reason'. Current job active: ${jobToCancel.isActive}. Hash: ${jobToCancel.hashCode()}"
+                "markMessageRead: Cannot proceed. Missing service for providerType '$providerType'."
             )
-            messageFetchJob = null // Clear the reference immediately
-            if (jobToCancel.isActive) {
-                jobToCancel.cancel(CancellationException("Job cancelled: $reason"))
-                Log.i(
+            return@withContext Result.failure(NotImplementedError("Service not available for provider: $providerType"))
+        }
+
+        try {
+            val result = mailApiService.markMessageRead(messageId, isRead)
+            if (result.isSuccess) {
+                // Optionally, update local state if needed, e.g., refetch or update specific message in list
+                Log.i(TAG, "markMessageRead successful for messageId: $messageId")
+                // Trigger a silent refresh of the current folder's messages to reflect the change
+                // Consider making this more targeted if possible
+                if (account.id == currentTargetAccount?.id) {
+                    launchMessageFetchJob(
+                        account,
+                        currentTargetFolder!!,
+                        isRefresh = true,
+                        activity = null
+                    )
+                }
+            } else {
+                Log.w(
                     TAG,
-                    "Previous message fetch job (Hash: ${jobToCancel.hashCode()}) cancelled due to: $reason"
+                    "markMessageRead failed for messageId: $messageId",
+                    result.exceptionOrNull()
                 )
             }
-        } else {
-            Log.d(TAG, "cancelAndClearJob called. Reason: '$reason'. No active job to cancel.")
+            return@withContext result.map { }
+        } catch (e: Exception) {
+            Log.e(TAG, "markMessageRead: Exception for messageId: $messageId", e)
+            val details = errorMapper.mapExceptionToErrorDetails(e)
+            return@withContext Result.failure(Exception(details.message))
         }
+    }
+
+    override suspend fun deleteMessage(account: Account, messageId: String): Result<Unit> =
+        withContext(ioDispatcher) {
+            Log.d(
+                TAG,
+                "deleteMessage called for account: ${account.username}, messageId: $messageId"
+            )
+            val providerType = account.providerType.uppercase()
+            val mailApiService = mailApiServices[providerType]
+            val errorMapper = errorMappers[providerType]
+
+            if (mailApiService == null || errorMapper == null) {
+                Log.e(
+                    TAG,
+                    "deleteMessage: Cannot proceed. Missing service for providerType '$providerType'."
+                )
+                return@withContext Result.failure(NotImplementedError("Service not available for provider: $providerType"))
+            }
+
+            try {
+                val result = mailApiService.deleteMessage(messageId)
+                if (result.isSuccess) {
+                    Log.i(TAG, "deleteMessage successful for messageId: $messageId")
+                    // Trigger a silent refresh
+                    if (account.id == currentTargetAccount?.id && currentTargetFolder != null) {
+                        launchMessageFetchJob(
+                            account,
+                            currentTargetFolder!!,
+                            isRefresh = true,
+                            activity = null
+                        )
+                }
+                } else {
+                    Log.w(
+                        TAG,
+                        "deleteMessage failed for messageId: $messageId",
+                        result.exceptionOrNull()
+                    )
+            }
+                return@withContext result.map { }
+            } catch (e: Exception) {
+                Log.e(TAG, "deleteMessage: Exception for messageId: $messageId", e)
+                val details = errorMapper.mapExceptionToErrorDetails(e)
+                return@withContext Result.failure(Exception(details.message))
+        }
+    }
+
+    override suspend fun moveMessage(
+        account: Account,
+        messageId: String,
+        destinationFolderId: String
+    ): Result<Unit> = withContext(ioDispatcher) {
+        Log.d(
+            TAG,
+            "moveMessage called for account: ${account.username}, messageId: $messageId, destinationFolderId: $destinationFolderId"
+        )
+        val providerType = account.providerType.uppercase()
+        val mailApiService = mailApiServices[providerType]
+        val errorMapper = errorMappers[providerType]
+
+        if (mailApiService == null || errorMapper == null) {
+            Log.e(
+                TAG,
+                "moveMessage: Cannot proceed. Missing service for providerType '$providerType'."
+            )
+            return@withContext Result.failure(NotImplementedError("Service not available for provider: $providerType"))
+        }
+
+        try {
+            val result = mailApiService.moveMessage(messageId, destinationFolderId)
+            if (result.isSuccess) {
+                Log.i(
+                    TAG,
+                    "moveMessage successful for messageId: $messageId to folder $destinationFolderId"
+                )
+                // Trigger a silent refresh
+                if (account.id == currentTargetAccount?.id && currentTargetFolder != null) {
+                    launchMessageFetchJob(
+                        account,
+                        currentTargetFolder!!,
+                        isRefresh = true,
+                        activity = null
+                    )
+                }
+            } else {
+                Log.w(TAG, "moveMessage failed for messageId: $messageId", result.exceptionOrNull())
+            }
+            return@withContext result.map { }
+        } catch (e: Exception) {
+            Log.e(TAG, "moveMessage: Exception for messageId: $messageId", e)
+            val details = errorMapper.mapExceptionToErrorDetails(e)
+            return@withContext Result.failure(Exception(details.message))
+        }
+    }
+
+    private fun cancelAndClearJob(reason: String) {
+        if (messageFetchJob?.isActive == true) {
+            Log.d(TAG, "Cancelling active message fetch job. Reason: $reason")
+            messageFetchJob?.cancel(CancellationException("New operation started: $reason"))
+        }
+        messageFetchJob = null
     }
 }

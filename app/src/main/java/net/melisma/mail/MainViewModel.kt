@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.util.Log
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -19,8 +20,9 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import net.melisma.core_data.model.Account
-import net.melisma.core_data.model.AuthState
 import net.melisma.core_data.model.FolderFetchState
+import net.melisma.core_data.model.GenericAuthResult
+import net.melisma.core_data.model.GenericSignOutResult
 import net.melisma.core_data.model.MailFolder
 import net.melisma.core_data.model.MailThread
 import net.melisma.core_data.model.Message
@@ -89,8 +91,8 @@ class MainViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(MainScreenState())
     val uiState: StateFlow<MainScreenState> = _uiState.asStateFlow()
 
-    private val _appAuthIntentToLaunch = MutableStateFlow<Intent?>(null)
-    val appAuthIntentToLaunch: StateFlow<Intent?> = _appAuthIntentToLaunch.asStateFlow()
+    private val _pendingAuthIntent = MutableStateFlow<Intent?>(null)
+    val pendingAuthIntent: StateFlow<Intent?> = _pendingAuthIntent.asStateFlow()
 
     init {
         Timber.tag(TAG).d("ViewModel Initializing")
@@ -327,59 +329,65 @@ class MainViewModel @Inject constructor(
         }
     }
 
-    fun addAccount(activity: Activity, providerType: String, loginHint: String? = null) {
-        Timber.tag(TAG).i("addAccount called for provider: $providerType")
+    fun startSignInProcess(activity: Activity, providerType: String, loginHint: String? = null) {
+        Timber.tag(TAG).i("startSignInProcess called for provider: $providerType, loginHint: $loginHint")
         _uiState.update { it.copy(isLoadingAccountAction = true) }
         viewModelScope.launch {
-            if (providerType.equals(Account.PROVIDER_TYPE_GOOGLE, ignoreCase = true)) {
-                defaultAccountRepository.getGoogleLoginScopes()
-            } else {
-                emptyList()
-            }
+            defaultAccountRepository.signIn(activity, loginHint, providerType)
+                .collect { result ->
+                    val isLoading = result is GenericAuthResult.UiActionRequired
+                    _uiState.update { it.copy(isLoadingAccountAction = isLoading) }
 
-            defaultAccountRepository.getAuthenticationIntentRequest(
-                providerType,
-                activity,
-                loginHint
-            )
-                .onEach { intent ->
-                    if (intent != null && providerType.equals(
-                            Account.PROVIDER_TYPE_GOOGLE,
-                            ignoreCase = true
-                        )
-                    ) {
-                        _appAuthIntentToLaunch.value = intent
-                    } else if (providerType.equals(Account.PROVIDER_TYPE_MS, ignoreCase = true)) {
-                        _uiState.update { it.copy(isLoadingAccountAction = false) }
-                    } else {
-                        _uiState.update { it.copy(isLoadingAccountAction = false) }
+                    when (result) {
+                        is GenericAuthResult.Success -> {
+                            _uiState.update { it.copy(toastMessage = "Signed in as ${result.account.username}") }
+                            Timber.tag(TAG).i("Sign-in success for ${result.account.username}")
+                        }
+                        is GenericAuthResult.UiActionRequired -> {
+                            _pendingAuthIntent.value = result.intent
+                            Timber.tag(TAG).i("Sign-in UI Action Required. Intent posted.")
+                        }
+                        is GenericAuthResult.Error -> {
+                            val errorMessage = if (result.msalRequiresInteractiveSignIn) {
+                                Timber.tag(TAG).w("Sign-in error (MSAL): Interactive sign-in required. Message: ${result.message}")
+                                "Sign-in failed: Please try signing in again. (Interactive action needed)" // Or a more specific resource string
+                            } else {
+                                Timber.tag(TAG).e("Sign-in error: ${result.message}, type: ${result.type}")
+                                "Error: ${result.message}"
+                            }
+                            _uiState.update { ui ->
+                                ui.copy(toastMessage = errorMessage)
+                            }
+                        }
+                        is GenericAuthResult.Cancelled -> {
+                            _uiState.update { it.copy(toastMessage = "Sign-in cancelled.") }
+                            Timber.tag(TAG).i("Sign-in cancelled by user.")
+                        }
                     }
-                }.launchIn(viewModelScope)
+                }
         }
     }
 
-    fun clearAppAuthIntentToLaunch() {
-        _appAuthIntentToLaunch.value = null
+    fun authIntentLaunched() {
+        _pendingAuthIntent.value = null
     }
 
     fun handleAuthenticationResult(
+        providerType: String,
         resultCode: Int,
-        data: Intent?,
-        activity: Activity,
-        providerType: String
+        data: Intent?
     ) {
         Timber.tag(TAG)
-            .d("handleAuthenticationResult in ViewModel. Provider: $providerType, ResultCode: $resultCode, Data: $data")
+            .d("handleAuthenticationResult in ViewModel. Provider: $providerType, ResultCode: $resultCode, Data: ${data != null}")
         viewModelScope.launch {
             try {
                 defaultAccountRepository.handleAuthenticationResult(
                     providerType,
                     resultCode,
-                    data,
-                    activity
+                    data
                 )
             } catch (e: Exception) {
-                Timber.tag(TAG).e(e, "Error handling authentication result for $providerType")
+                Timber.tag(TAG).e(e, "Error calling repository handleAuthenticationResult for $providerType")
                 _uiState.update {
                     it.copy(
                         isLoadingAccountAction = false,
@@ -394,14 +402,22 @@ class MainViewModel @Inject constructor(
         Timber.tag(TAG).i("signOutAndRemoveAccount called for account: ${account.username}")
         _uiState.update { it.copy(isLoadingAccountAction = true) }
         viewModelScope.launch {
-            try {
-                defaultAccountRepository.signOut(account)
-            } catch (e: Exception) {
-                Timber.tag(TAG).e(e, "Error signing out account ${account.username}")
-                _uiState.update { it.copy(toastMessage = "Error signing out: ${e.localizedMessage}") }
-            } finally {
-                _uiState.update { it.copy(isLoadingAccountAction = false) }
-            }
+            defaultAccountRepository.signOut(account)
+                .collect { result ->
+                    _uiState.update { it.copy(isLoadingAccountAction = false) }
+                    when (result) {
+                        is GenericSignOutResult.Success -> {
+                            _uiState.update { it.copy(toastMessage = "Signed out ${account.username}") }
+                            Timber.tag(TAG).i("Sign-out success for ${account.username}")
+                        }
+                        is GenericSignOutResult.Error -> {
+                            _uiState.update { ui ->
+                                ui.copy(toastMessage = "Sign-out error: ${result.message}")
+                            }
+                            Timber.tag(TAG).e("Sign-out error for ${account.username}: ${result.message}")
+                        }
+                    }
+                }
         }
     }
 
@@ -417,9 +433,8 @@ class MainViewModel @Inject constructor(
 
     private fun selectDefaultFolderIfNeeded(currentState: MainScreenState) {
         Log.d(TAG_DEBUG_DEFAULT_SELECT, "Checking if default folder selection is needed...")
-        if (currentState.authState !is AuthState.SignedOut &&
-            currentState.authState !is AuthState.AuthError &&
-            currentState.authState !is AuthState.Initializing &&
+        if ((currentState.overallApplicationAuthState == OverallApplicationAuthState.AT_LEAST_ONE_ACCOUNT_AUTHENTICATED ||
+             currentState.overallApplicationAuthState == OverallApplicationAuthState.PARTIAL_ACCOUNTS_NEED_REAUTHENTICATION) &&
             currentState.accounts.isNotEmpty() &&
             currentState.selectedFolder == null &&
             !currentState.isAnyFolderLoading
@@ -472,7 +487,7 @@ class MainViewModel @Inject constructor(
         } else {
             Log.d(
                 TAG_DEBUG_DEFAULT_SELECT,
-                "Default folder selection skipped. AuthState: ${currentState.authState}, Accounts: ${currentState.accounts.size}, SelectedFolder: ${currentState.selectedFolder}, AnyFolderLoading: ${currentState.isAnyFolderLoading}"
+                "Default folder selection skipped. AuthState: ${currentState.overallApplicationAuthState}, Accounts: ${currentState.accounts.size}, SelectedFolder: ${currentState.selectedFolder}, AnyFolderLoading: ${currentState.isAnyFolderLoading}"
             )
         }
     }

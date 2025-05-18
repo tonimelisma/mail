@@ -5,6 +5,7 @@ import com.microsoft.identity.client.IAccount
 import com.microsoft.identity.client.exception.MsalUiRequiredException
 import io.ktor.client.plugins.auth.providers.BearerTokens
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import net.melisma.core_data.model.Account
@@ -247,7 +248,7 @@ class MicrosoftKtorTokenProvider @Inject constructor(
         if (account != null) {
             Log.d(
                 TAG,
-                "MicrosoftKtorTokenProvider: Found MSAL account with username: ${account.username} using new Flow method."
+                "MicrosoftKtorTokenProvider: Found MSAL account with username: ${account?.username} using new Flow method."
             )
         } else {
             Log.w(

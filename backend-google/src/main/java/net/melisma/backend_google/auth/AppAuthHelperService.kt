@@ -9,13 +9,21 @@ import android.content.Intent
 import android.net.Uri
 import com.auth0.android.jwt.DecodeException
 import com.auth0.android.jwt.JWT
+import io.ktor.client.HttpClient
+import io.ktor.client.request.forms.submitForm
+import io.ktor.client.statement.HttpResponse
+import io.ktor.client.statement.bodyAsText
+import io.ktor.http.Parameters
+import io.ktor.http.isSuccess
 import kotlinx.coroutines.suspendCancellableCoroutine
+import net.melisma.backend_google.di.GoogleHttpClient
 import net.openid.appauth.AuthState
 import net.openid.appauth.AuthorizationException
 import net.openid.appauth.AuthorizationRequest
 import net.openid.appauth.AuthorizationResponse
 import net.openid.appauth.AuthorizationService
 import net.openid.appauth.AuthorizationServiceConfiguration
+import net.openid.appauth.ClientAuthentication
 import net.openid.appauth.ResponseTypeValues
 import net.openid.appauth.TokenResponse
 import timber.log.Timber
@@ -34,7 +42,8 @@ data class ParsedIdTokenInfo(
 
 @Singleton
 class AppAuthHelperService @Inject constructor(
-    private val context: Context
+    private val context: Context,
+    @GoogleHttpClient private val httpClient: HttpClient // Injected HttpClient
 ) {
 
     private var authService: AuthorizationService = AuthorizationService(context)
@@ -66,14 +75,16 @@ class AppAuthHelperService @Inject constructor(
     fun buildAuthorizationRequest(
         clientId: String,
         redirectUri: Uri,
-        scopes: List<String>
+        scopes: List<String>,
+        loginHint: String? = null
     ): AuthorizationRequest {
         val combinedScopes = (MANDATORY_SCOPES + scopes).distinct().joinToString(" ")
         Timber.d(
-            "Building AuthorizationRequest with Client ID: %s, Redirect URI: %s, Scopes: %s",
+            "Building AuthorizationRequest with Client ID: %s, Redirect URI: %s, Scopes: %s, LoginHint: %s",
             clientId,
             redirectUri,
-            combinedScopes
+            combinedScopes,
+            loginHint ?: "N/A"
         )
 
         val builder = AuthorizationRequest.Builder(
@@ -82,6 +93,10 @@ class AppAuthHelperService @Inject constructor(
             ResponseTypeValues.CODE, // We want an authorization code
             redirectUri
         ).setScopes(combinedScopes)
+
+        loginHint?.let {
+            builder.setLoginHint(it)
+        }
         // PKCE is handled automatically by AppAuth by default.
 
         return builder.build()
@@ -187,19 +202,50 @@ class AppAuthHelperService @Inject constructor(
         }
     }
 
-    fun refreshAccessToken(
-        authState: AuthState,
-        callback: (String?, String?, AuthorizationException?) -> Unit
-    ) {
-        Timber.d("Attempting to refresh access token.")
-        if (authState.needsTokenRefresh) {
-            authState.performActionWithFreshTokens(authService, callback)
-        } else {
-            Timber.d(
-                "Token does not need refresh, using existing access token: %s",
-                authState.accessToken
-            )
-            callback(authState.accessToken, authState.idToken, null)
+    suspend fun refreshAccessToken(authState: AuthState): TokenResponse =
+        suspendCancellableCoroutine { continuation ->
+            Timber.d("Suspending: Attempting to refresh access token. Needs refresh: ${authState.needsTokenRefresh}")
+
+            // Directly use NoClientAuthentication.INSTANCE for Google public client.
+            val clientAuthentication: ClientAuthentication =
+                net.openid.appauth.NoClientAuthentication.INSTANCE
+
+            authState.performActionWithFreshTokens(
+                authService,
+                clientAuthentication,
+                object : AuthState.AuthStateAction {
+                    override fun execute(
+                        accessToken: String?,
+                        idToken: String?,
+                        ex: AuthorizationException?
+                    ) {
+                        if (continuation.isActive) {
+                            if (ex != null) {
+                                Timber.e(ex, "Resuming: Token refresh failed.")
+                                continuation.resumeWithException(ex)
+                            } else {
+                                val refreshRequest = authState.createTokenRefreshRequest(emptyMap())
+
+                                val refreshedTokenResponse = TokenResponse.Builder(refreshRequest)
+                                    .setAccessToken(accessToken)
+                                    .setIdToken(idToken)
+                                    .setRefreshToken(authState.refreshToken)
+                                    .setAccessTokenExpirationTime(authState.accessTokenExpirationTime)
+                                    .setTokenType(
+                                        authState.lastTokenResponse?.tokenType
+                                            ?: TokenResponse.TOKEN_TYPE_BEARER
+                                    )
+                                    .build()
+                                Timber.i("Resuming: Token refresh successful. AccessToken: ${refreshedTokenResponse.accessToken?.isNotEmpty()}, IdToken: ${refreshedTokenResponse.idToken?.isNotEmpty()}")
+                                continuation.resume(refreshedTokenResponse)
+                            }
+                        } else {
+                            Timber.w("Token refresh coroutine no longer active when action executed.")
+                        }
+                    }
+                })
+            continuation.invokeOnCancellation {
+                Timber.w("Token refresh coroutine cancelled.")
         }
     }
 
@@ -219,75 +265,37 @@ class AppAuthHelperService @Inject constructor(
         Timber.d("AppAuthHelperService disposed.")
     }
 
-    suspend fun revokeToken(refreshToken: String): Boolean =
-        suspendCancellableCoroutine { continuation ->
-            val googleRevocationEndpoint = "https://oauth2.googleapis.com/revoke"
-            Timber.d(
-                "Attempting to revoke refresh token: ${
-                    refreshToken.take(
-                        10
-                    )
-                }... via manual POST to $googleRevocationEndpoint"
+    suspend fun revokeToken(refreshToken: String): Boolean {
+        val googleRevocationEndpoint = "https://oauth2.googleapis.com/revoke"
+        Timber.d(
+            "Attempting to revoke refresh token: ${
+                refreshToken.take(
+                    10
+                )
+            }... via POST to $googleRevocationEndpoint"
+        )
+
+        return try {
+            val response: HttpResponse = httpClient.submitForm(
+                url = googleRevocationEndpoint,
+                formParameters = Parameters.build {
+                    append("token", refreshToken)
+                }
             )
 
-            // IMPORTANT: The AppAuth library does not provide a helper method for RFC 7009 token revocation.
-            // This must be implemented by making a direct HTTP POST request to the revocation endpoint.
-            // You will need an HTTP client (e.g., OkHttp, Ktor Client) for this.
-            //
-            // The request should be:
-            // METHOD: POST
-            // URL: https://oauth2.googleapis.com/revoke
-            // HEADER: Content-Type: application/x-www-form-urlencoded
-            // BODY: token=THE_REFRESH_TOKEN_STRING
-
-            // Pseudocode for HTTP client usage:
-            /*
-            val httpClient = // ... obtain/configure your HTTP client
-            val requestBodyString = "token=$refreshToken"
-            // ... create appropriate request body for your client
-
-            // ... build the POST request to googleRevocationEndpoint with the body and headers
-
-            // ... execute the request asynchronously
-
-            // httpClient.newCall(request).enqueue(object : Callback {
-            //    override fun onResponse(call: Call, response: Response) {
-            //        if (continuation.isActive) {
-            //            if (response.isSuccessful) { // Typically 200 OK
-            //                Timber.i("Token revocation request completed successfully (HTTP ${response.code()}).")
-            //                continuation.resume(true)
-            //            } else {
-            //                Timber.e(response.body?.string(), "Token revocation request failed (HTTP ${response.code()}).")
-            //                continuation.resume(false)
-            //            }
-            //        }
-            //        response.close() // Ensure response is closed
-            //    }
-            //
-            //    override fun onFailure(call: Call, e: IOException) {
-            //        if (continuation.isActive) {
-            //            Timber.e(e, "Token revocation HTTP call failed.")
-            //            continuation.resumeWithException(e) // Or simply resume(false)
-            //        }
-            //    }
-            // })
-            //
-            // continuation.invokeOnCancellation {
-            //    Timber.w("Token revocation coroutine cancelled for token: ${refreshToken.take(10)}...")
-            //    // If your HTTP client supports cancellation, trigger it here.
-            // }
-            */
-
-            // For now, indicating non-implementation:
-            Timber.e(
-                "Token revocation for ${
-                    refreshToken.take(
-                        10
-                    )
-                } not fully implemented. Manual HTTP POST request logic is required."
-            )
-            if (continuation.isActive) {
-                continuation.resume(false) // Placeholder: Revocation is not actually performed.
+            if (response.status.isSuccess()) {
+                Timber.i("Successfully revoked token (HTTP ${response.status.value}).")
+                true
+            } else {
+                val errorBody = response.bodyAsText() // Corrected Ktor body access
+                Timber.e(
+                    "Failed to revoke token. HTTP Status: ${response.status.value}. Body: $errorBody"
+                )
+                false
             }
+        } catch (e: Exception) {
+            Timber.e(e, "Exception during token revocation.")
+            false
+        }
     }
 } 

@@ -164,14 +164,14 @@ class DefaultThreadRepository @Inject constructor(
                 ensureActive() // Check for cancellation
 
                 if (initialMessagesResult.isFailure) {
-                    val error =
-                        errorMapper.mapNetworkOrApiException(initialMessagesResult.exceptionOrNull())
+                    val details =
+                        errorMapper.mapExceptionToErrorDetails(initialMessagesResult.exceptionOrNull())
                     Log.e(
                         TAG,
-                        "[${folder.displayName}] Error fetching initial messages: $error",
+                        "[${folder.displayName}] Error fetching initial messages: ${details.message}",
                         initialMessagesResult.exceptionOrNull()
                     )
-                    _threadDataState.value = ThreadDataState.Error(error)
+                    _threadDataState.value = ThreadDataState.Error(details.message)
                     return@launch
                 }
 
@@ -268,24 +268,18 @@ class DefaultThreadRepository @Inject constructor(
                 _threadDataState.value = ThreadDataState.Success(sortedThreads)
 
             } catch (e: CancellationException) {
-                Log.w(TAG, "[${folder.displayName}] Thread fetch job was cancelled: ${e.message}")
-                // If the job was cancelled while loading, it might be appropriate to revert
-                // to Initial or a specific "Cancelled" state if the UI needs to react.
-                // For now, if it was loading, it might just stop showing loading.
-                if (_threadDataState.value is ThreadDataState.Loading && isActive) {
-                    _threadDataState.value =
-                        ThreadDataState.Error("Fetch cancelled for ${folder.displayName}")
+                Log.w(TAG, "[${folder.displayName}] Thread fetch job cancelled.", e)
+                // If was loading, and still the target, set to error or clear.
+                if (isActive && currentTargetFolder?.id == folder.id && _threadDataState.value is ThreadDataState.Loading) {
+                    _threadDataState.value = ThreadDataState.Error("Thread loading cancelled.")
                 }
-                throw e // Re-throw cancellation
             } catch (e: Exception) {
-                val error = errorMapper.mapNetworkOrApiException(e)
-                Log.e(
-                    TAG,
-                    "[${folder.displayName}] Critical exception during thread fetch: $error",
-                    e
-                )
-                if (isActive) { // Only update state if the coroutine is still active
-                    _threadDataState.value = ThreadDataState.Error(error)
+                Log.e(TAG, "[${folder.displayName}] Exception during thread fetch process", e)
+                if (isActive && currentTargetFolder?.id == folder.id) {
+                    // Updated error handling
+                    val details = errorMapper.mapExceptionToErrorDetails(e)
+                    _threadDataState.value =
+                        ThreadDataState.Error(details.message) // Use details.message
                 }
             } finally {
                 Log.d(

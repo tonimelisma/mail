@@ -56,6 +56,7 @@ dependencies {
     // --- Google Identity, Auth, and Credential Manager ---
     implementation(libs.appauth) // For OpenID AppAuth OAuth 2.0 implementation
     implementation(libs.androidx.browser) // For CustomTabs to improve OAuth UI experience
+    // implementation(libs.playservices.auth) // Removed as per user request and mapper simplification
 
     implementation(libs.androidx.activity.ktx) // Useful for ActivityResultLauncher
 

@@ -1,6 +1,7 @@
 // File: backend-microsoft/src/main/java/net/melisma/backend_microsoft/auth/MicrosoftAuthManager.kt
 package net.melisma.backend_microsoft.auth
 
+import android.accounts.AccountManager
 import android.app.Activity
 import android.content.Context
 import com.microsoft.identity.client.AcquireTokenParameters
@@ -15,17 +16,53 @@ import com.microsoft.identity.client.SilentAuthenticationCallback
 import com.microsoft.identity.client.exception.MsalClientException
 import com.microsoft.identity.client.exception.MsalException
 import com.microsoft.identity.client.exception.MsalUiRequiredException
+import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import net.melisma.core_data.di.ApplicationScope
 import net.melisma.core_data.di.AuthConfigProvider
+import net.melisma.core_data.di.Dispatcher
+import net.melisma.core_data.di.MailDispatchers
+import net.melisma.core_data.security.SecureEncryptionService
 import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.coroutines.resumeWithException
+
+// Constants moved from MicrosoftTokenPersistenceService
+private const val ACCOUNT_TYPE_MICROSOFT = "net.melisma.mail.MICROSOFT"
+private const val KEY_ACCESS_TOKEN = "msAccessToken"
+private const val KEY_ID_TOKEN = "msIdToken"
+private const val KEY_ACCOUNT_ID_MSAL = "msalAccountId"
+private const val KEY_USERNAME = "msUsername"
+private const val KEY_TENANT_ID = "msTenantId"
+private const val KEY_SCOPES = "msScopes"
+private const val KEY_EXPIRES_ON_TIMESTAMP = "msExpiresOnTimestamp"
+private const val KEY_DISPLAY_NAME = "msDisplayName"
+
+// Data class moved from MicrosoftTokenPersistenceService (or defined here if not accessible)
+// Assuming it's better to have it here or as a top-level class in this package.
+// For simplicity, placing it here for now. If it needs to be public for MicrosoftAccountRepository,
+// it should be a top-level public class in this package.
+data class PersistedMicrosoftAccount(
+    val accountManagerName: String, // This will be IAccount.getId()
+    val msalAccountId: String, // IAccount.getId() - can be derived from accountManagerName
+    val username: String?, // Email/UPN
+    val displayName: String?,
+    val tenantId: String?
+)
 
 // Sealed Result Classes
 sealed class AddAccountResult {
@@ -77,15 +114,21 @@ sealed class SignOutResultWrapper {
 
 @Singleton
 class MicrosoftAuthManager @Inject constructor(
-    private val context: Context,
+    @ApplicationContext private val context: Context,
     private val authConfigProvider: AuthConfigProvider,
-    @ApplicationScope private val externalScope: CoroutineScope
+    @ApplicationScope private val externalScope: CoroutineScope,
+    private val secureEncryptionService: SecureEncryptionService,
+    @Dispatcher(MailDispatchers.IO) private val ioDispatcher: CoroutineDispatcher
 ) {
     private val TAG = "MicrosoftAuthManager"
+    private val PERSISTENCE_TAG = "MsAuthManagerPersist"
     private var mMultipleAccountApp: IMultipleAccountPublicClientApplication? = null
     private val _isMsalInitialized = MutableStateFlow(false)
     val isMsalInitialized: StateFlow<Boolean> = _isMsalInitialized.asStateFlow()
     private var initializationException: MsalException? = null
+
+    // Initialize AccountManager
+    private val accountManager: AccountManager by lazy { AccountManager.get(context) }
 
     companion object {
         val MICROSOFT_SCOPES = listOf("User.Read", "Mail.Read", "offline_access")
@@ -111,7 +154,7 @@ class MicrosoftAuthManager @Inject constructor(
                                     .i("MSAL IMultipleAccountPublicClientApplication created successfully.")
                                 initializationException = null
                                 if (continuation.isActive) {
-                                    continuation.resume(application)
+                                    continuation.resumeWith(Result.success(application))
                                 }
                             }
 
@@ -186,6 +229,18 @@ class MicrosoftAuthManager @Inject constructor(
                             authenticationResult.account.id?.take(5)
                         }..."
                     )
+                    // Persist account info to AccountManager
+                    externalScope.launch {
+                        val saved = saveAccountInfoToAccountManager(authenticationResult)
+                        if (saved) {
+                            Timber.tag(PERSISTENCE_TAG)
+                                .i("Account info saved to AccountManager for ${authenticationResult.account.username}")
+                        } else {
+                            Timber.tag(PERSISTENCE_TAG)
+                                .e("Failed to save account info to AccountManager for ${authenticationResult.account.username}")
+                        }
+                    }
+
                     trySend(
                         AuthenticationResultWrapper.Success(
                             authenticationResult.account,
@@ -377,7 +432,9 @@ class MicrosoftAuthManager @Inject constructor(
 
         Timber.tag(TAG)
             .d("getAccount: Calling getAccount for ID (obfuscated): ${accountId.take(5)}...")
-        currentApp.getAccount(accountId, object : IPublicClientApplication.GetAccountCallback {
+        currentApp.getAccount(
+            accountId,
+            object : IMultipleAccountPublicClientApplication.GetAccountCallback {
             override fun onTaskCompleted(result: IAccount?) {
                 if (result != null) {
                     Timber.tag(TAG).i("getAccount: Success, found account ${result.username}")
@@ -435,6 +492,21 @@ class MicrosoftAuthManager @Inject constructor(
                 override fun onRemoved() {
                     Timber.tag(TAG)
                         .i("signOut: Success, account ${account.username} removed from MSAL.")
+
+                    // Remove account from AccountManager
+                    externalScope.launch {
+                        account.id?.let { accountId ->
+                            val deleted = deleteAccountFromAccountManager(accountId)
+                            if (deleted) {
+                                Timber.tag(PERSISTENCE_TAG)
+                                    .i("Account info deleted from AccountManager for ${account.username}")
+                            } else {
+                                Timber.tag(PERSISTENCE_TAG)
+                                    .w("Failed to delete account info from AccountManager for ${account.username}")
+                            }
+                        } ?: Timber.tag(PERSISTENCE_TAG)
+                            .w("Account ID was null, cannot delete from AccountManager for ${account.username}")
+                    }
                     trySend(SignOutResultWrapper.Success)
                     close()
                 }
@@ -452,4 +524,184 @@ class MicrosoftAuthManager @Inject constructor(
             Timber.tag(TAG).d("signOut callbackFlow closed for account ${account.username}")
         }
     }
+
+    // --- Start of methods moved/adapted from MicrosoftTokenPersistenceService ---
+
+    private suspend fun saveAccountInfoToAccountManager(
+        authResult: IAuthenticationResult
+    ): Boolean = withContext(ioDispatcher) {
+        val account = authResult.account
+        val accountManagerName =
+            account.id // Use IAccount.getId() as the unique name for AccountManager
+        val msalAccountId = account.id
+        val username = account.username
+        val tenantId = account.tenantId
+        val claims = account.claims
+        val displayName = claims?.get("name") as? String ?: username // Fallback to username
+
+        Timber.tag(PERSISTENCE_TAG)
+            .d("saveAccountInfoToAccountManager called for MSAL Account ID: ${msalAccountId?.take(10)}..., Username: $username")
+
+        if (accountManagerName.isNullOrBlank()) { // Check for null or blank
+            Timber.tag(PERSISTENCE_TAG)
+                .e("Cannot save account: MSAL Account ID (IAccount.getId()) is blank.")
+            return@withContext false
+        }
+
+        val amAccount = android.accounts.Account(accountManagerName, ACCOUNT_TYPE_MICROSOFT)
+        val accountAdded = accountManager.addAccountExplicitly(amAccount, null, null)
+
+        if (accountAdded) {
+            Timber.tag(PERSISTENCE_TAG)
+                .i("New Microsoft account added to AccountManager: $accountManagerName")
+        } else {
+            Timber.tag(PERSISTENCE_TAG)
+                .d("Microsoft account $accountManagerName already exists, updating data.")
+        }
+
+        try {
+            // Encrypt and store Access Token
+            authResult.accessToken?.let {
+                secureEncryptionService.encrypt(it)?.let { encrypted ->
+                    accountManager.setUserData(amAccount, KEY_ACCESS_TOKEN, encrypted)
+                    Timber.tag(PERSISTENCE_TAG).d("Access token stored for $accountManagerName.")
+                } ?: Timber.tag(PERSISTENCE_TAG)
+                    .e("Failed to encrypt access token for $accountManagerName.")
+            }
+
+            // Encrypt and store ID Token (if available from IAccount)
+            account.idToken?.let {
+                secureEncryptionService.encrypt(it)?.let { encrypted ->
+                    accountManager.setUserData(amAccount, KEY_ID_TOKEN, encrypted)
+                    Timber.tag(PERSISTENCE_TAG).d("ID token stored for $accountManagerName.")
+                } ?: Timber.tag(PERSISTENCE_TAG)
+                    .e("Failed to encrypt ID token for $accountManagerName.")
+            }
+
+            // Store non-sensitive IAccount identifiers needed by MSAL to find the account
+            accountManager.setUserData(
+                amAccount,
+                KEY_ACCOUNT_ID_MSAL,
+                msalAccountId
+            )
+            accountManager.setUserData(amAccount, KEY_USERNAME, username)
+            accountManager.setUserData(amAccount, KEY_TENANT_ID, tenantId)
+
+            authResult.scope?.joinToString(" ")?.let {
+                accountManager.setUserData(amAccount, KEY_SCOPES, it)
+            }
+            authResult.expiresOn?.time?.let {
+                accountManager.setUserData(amAccount, KEY_EXPIRES_ON_TIMESTAMP, it.toString())
+            }
+            displayName?.let { accountManager.setUserData(amAccount, KEY_DISPLAY_NAME, it) }
+
+            Timber.tag(PERSISTENCE_TAG)
+                .i("MSAL account info saved successfully to AccountManager for: $accountManagerName")
+            return@withContext true
+        } catch (e: Exception) {
+            Timber.tag(PERSISTENCE_TAG).e(
+                e,
+                "Error saving MSAL account info to AccountManager for $accountManagerName"
+            )
+            if (accountAdded) { // Rollback if it was a new add
+                Timber.tag(PERSISTENCE_TAG).w(
+                    "Removing partially added MSAL account $accountManagerName from AccountManager due to save failure."
+                )
+                // accountManager.removeAccount(amAccount, null, null, null) -> This is deprecated
+                // Use removeAccountExplicitly for consistency if available, or the modern equivalent.
+                // For now, using the deprecated one as per original code context if that was it.
+                // However, if addAccountExplicitly was used, removeAccountExplicitly is better.
+                accountManager.removeAccountExplicitly(amAccount) // Use this as we used addAccountExplicitly
+            }
+            return@withContext false
+        }
+    }
+
+    private suspend fun deleteAccountFromAccountManager(accountManagerName: String): Boolean =
+        withContext(ioDispatcher) {
+            val amAccounts = accountManager.getAccountsByType(ACCOUNT_TYPE_MICROSOFT)
+            val amAccount = amAccounts.find { it.name == accountManagerName } ?: run {
+                Timber.tag(PERSISTENCE_TAG).w(
+                    "Microsoft account not found in AccountManager for deletion: $accountManagerName"
+                )
+                return@withContext false
+            }
+
+            val removedSuccessfully = accountManager.removeAccountExplicitly(amAccount)
+
+            if (removedSuccessfully) {
+                Timber.tag(PERSISTENCE_TAG)
+                    .i("Microsoft account removed from AccountManager: $accountManagerName")
+                return@withContext true
+            } else {
+                Timber.tag(PERSISTENCE_TAG).e(
+                    "Failed to remove Microsoft account from AccountManager: $accountManagerName"
+                )
+                return@withContext false
+            }
+        }
+
+    suspend fun getPersistedAccountData(accountManagerName: String): PersistedMicrosoftAccount? =
+        withContext(ioDispatcher) {
+            val amAccounts = accountManager.getAccountsByType(ACCOUNT_TYPE_MICROSOFT)
+            val amAccount =
+                amAccounts.find { it.name == accountManagerName } ?: run {
+                    Timber.tag(PERSISTENCE_TAG)
+                        .w("AccountManager: No account found for name $accountManagerName during getPersistedAccountData")
+                    return@withContext null
+                }
+
+
+            val msalAccountId = accountManager.getUserData(amAccount, KEY_ACCOUNT_ID_MSAL)
+                ?: run {
+                    Timber.tag(PERSISTENCE_TAG)
+                        .w("AccountManager: msalAccountId is null for ${amAccount.name}, cannot construct PersistedMicrosoftAccount.")
+                    return@withContext null
+                }
+            val username = accountManager.getUserData(amAccount, KEY_USERNAME)
+            val tenantId = accountManager.getUserData(amAccount, KEY_TENANT_ID)
+            val displayName = accountManager.getUserData(amAccount, KEY_DISPLAY_NAME)
+
+            return@withContext PersistedMicrosoftAccount(
+                accountManagerName = amAccount.name,
+                msalAccountId = msalAccountId,
+                username = username,
+                displayName = displayName,
+                tenantId = tenantId
+            )
+        }
+
+    suspend fun getAccessTokenFromAccountManager(accountManagerName: String): String? =
+        withContext(ioDispatcher) {
+            val amAccounts = accountManager.getAccountsByType(ACCOUNT_TYPE_MICROSOFT)
+            val amAccount =
+                amAccounts.find { it.name == accountManagerName } ?: return@withContext null
+
+            val encryptedToken =
+                accountManager.getUserData(amAccount, KEY_ACCESS_TOKEN) ?: return@withContext null
+            return@withContext secureEncryptionService.decrypt(encryptedToken)
+        }
+
+    suspend fun getAllPersistedMicrosoftAccounts(): List<PersistedMicrosoftAccount> =
+        withContext(ioDispatcher) {
+            val amAccounts = accountManager.getAccountsByType(ACCOUNT_TYPE_MICROSOFT)
+            return@withContext amAccounts.mapNotNull { amAccount ->
+                val msalAccountId = accountManager.getUserData(amAccount, KEY_ACCOUNT_ID_MSAL)
+                if (msalAccountId.isNullOrBlank()) {
+                    Timber.tag(PERSISTENCE_TAG)
+                        .w("Skipping account ${amAccount.name} due to missing or blank MSAL account ID.")
+                    null
+                } else {
+                    PersistedMicrosoftAccount(
+                        accountManagerName = amAccount.name,
+                        msalAccountId = msalAccountId,
+                        username = accountManager.getUserData(amAccount, KEY_USERNAME),
+                        displayName = accountManager.getUserData(amAccount, KEY_DISPLAY_NAME),
+                        tenantId = accountManager.getUserData(amAccount, KEY_TENANT_ID)
+                    )
+                }
+            }
+        }
+
+    // --- End of methods moved/adapted from MicrosoftTokenPersistenceService ---
 }

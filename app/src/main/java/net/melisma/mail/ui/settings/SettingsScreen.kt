@@ -104,7 +104,7 @@ fun SettingsScreen(
                 // Microsoft account button
                 Button(
                     // Trigger add Microsoft account action in ViewModel
-                    onClick = { viewModel.addAccount(activity, Account.PROVIDER_TYPE_MS) },
+                    onClick = { viewModel.startSignInProcess(activity, Account.PROVIDER_TYPE_MS) },
                     // Use isLoadingAccountAction from the updated state
                     enabled = !state.isLoadingAccountAction,
                     modifier = Modifier.padding(bottom = 8.dp) // Add some spacing between buttons
@@ -129,7 +129,12 @@ fun SettingsScreen(
                 // Google account button
                 Button(
                     // Trigger add Google account action in ViewModel
-                    onClick = { viewModel.addAccount(activity, Account.PROVIDER_TYPE_GOOGLE) },
+                    onClick = {
+                        viewModel.startSignInProcess(
+                            activity,
+                            Account.PROVIDER_TYPE_GOOGLE
+                        )
+                    },
                     // Use isLoadingAccountAction from the updated state
                     enabled = !state.isLoadingAccountAction
                 ) {
@@ -271,7 +276,7 @@ fun SettingsScreen(
                 },
                 confirmButton = {
                     TextButton(onClick = {
-                        viewModel.removeAccount(accountToRemove) // Pass only the account
+                        viewModel.signOutAndRemoveAccount(accountToRemove) // Changed to signOutAndRemoveAccount
                         showRemoveDialog = null
                     }) {
                         Text(stringResource(R.string.remove_action)) 

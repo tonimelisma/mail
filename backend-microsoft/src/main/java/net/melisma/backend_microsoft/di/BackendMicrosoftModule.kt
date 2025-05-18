@@ -53,13 +53,21 @@ object BackendMicrosoftModule { // Changed to object module as it now only conta
     fun provideMicrosoftAuthManager(
         @ApplicationContext context: Context,
         authConfigProvider: AuthConfigProvider,
-        @ApplicationScope externalScope: CoroutineScope
+        @ApplicationScope externalScope: CoroutineScope,
+        secureEncryptionService: net.melisma.core_data.security.SecureEncryptionService,
+        @net.melisma.core_data.di.Dispatcher(net.melisma.core_data.di.MailDispatchers.IO) ioDispatcher: kotlinx.coroutines.CoroutineDispatcher
     ): MicrosoftAuthManager {
         Log.d(
             "BackendMSModule",
-            "Providing MicrosoftAuthManager with ApplicationScope CoroutineScope"
+            "Providing MicrosoftAuthManager with ApplicationScope CoroutineScope, SecureEncryptionService, and IODispatcher"
         )
-        return MicrosoftAuthManager(context, authConfigProvider, externalScope)
+        return MicrosoftAuthManager(
+            context,
+            authConfigProvider,
+            externalScope,
+            secureEncryptionService,
+            ioDispatcher
+        )
     }
 
     @Provides

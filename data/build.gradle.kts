@@ -58,7 +58,7 @@ dependencies {
     implementation(project(":core-data")) // Includes ErrorMapperService now
     // Use 'api' for :backend-microsoft so its Hilt bindings and types (like AuthStateListener)
     // are visible to modules that depend on :data (e.g., :backend-google for Kapt processing)
-    api(project(":backend-microsoft")) // For MS-specific components
+    implementation(project(":backend-microsoft")) // For MS-specific components
     implementation(project(":backend-google")) // For Google-specific components
 
     // --- Google Identity Library ---
@@ -85,7 +85,7 @@ dependencies {
     testImplementation(libs.mockk.agent)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.turbine)
-    implementation("com.jakewharton.timber:timber:5.0.1")
+    implementation(libs.timber)
 
     // --- Instrumented Testing ---
     androidTestImplementation(libs.androidx.junit)

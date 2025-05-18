@@ -1,43 +1,54 @@
 package net.melisma.core_data.repository
 
 import android.app.Activity
-import android.content.Intent
+// import android.content.Intent // No longer needed for signIn directly in the interface signature
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.StateFlow
+// import kotlinx.coroutines.flow.StateFlow // StateFlow is still used for overallApplicationAuthState
 import net.melisma.core_data.model.Account
+import net.melisma.core_data.model.GenericAuthResult // New import
+import net.melisma.core_data.model.GenericSignOutResult // New import
 
 interface AccountRepository {
     fun getAccounts(): Flow<List<Account>>
     fun getActiveAccount(providerType: String): Flow<Account?> // Or a single active overall
-    val overallApplicationAuthState: StateFlow<OverallApplicationAuthState>
+    val overallApplicationAuthState: Flow<OverallApplicationAuthState>
 
     /**
-     * Initiates an authentication request for the given provider type.
+     * Initiates the sign-in process for the given provider.
      *
-     * For providers like Google (AppAuth), this Flow is expected to emit an [Intent]
-     * that the caller (typically UI) should launch via `startActivityForResult`.
-     * The result of this Intent should then be passed to `handleAuthenticationResult`.
+     * For MSAL: Returns a Flow that will directly emit Success, Error, or Cancelled.
+     * For Google (AppAuth): Returns a Flow that may first emit UiActionRequired(intent)
+     * if user interaction is needed. The caller must launch this intent.
+     * The final result (Success, Error, Cancelled) will be emitted on the SAME Flow
+     * after handleAuthenticationResult() is called by the Activity/Fragment.
      *
-     * For providers like Microsoft (MSAL 6.0+), which manage their own UI (e.g., BrowserTabActivity)
-     * internally, this Flow will likely emit `null`. The authentication process is managed
-     * internally by the repository implementation, and its outcome (success, error, cancellation)
-     * will be reflected through updates to the accounts list (`getAccounts()`) and potentially
-     * action messages (`observeActionMessages()`). The provided [activity] is used by the
-     * implementation to launch the provider's UI.
-     *
-     * @param providerType The type of account provider (e.g., Account.PROVIDER_TYPE_MS).
-     * @param activity The current Activity context, crucial for providers that need to launch UI.
-     * @return A Flow that may emit an Intent to be launched, or null if the provider handles UI internally.
+     * @param activity The current Activity, crucial for providers needing UI context.
+     * @param loginHint Optional hint for the provider, e.g., email address.
+     * @param providerType The type of account provider (e.g., Account.PROVIDER_TYPE_MS, Account.PROVIDER_TYPE_GOOGLE).
+     * @return A Flow emitting the authentication result.
      */
-    fun getAuthenticationIntentRequest(providerType: String, activity: Activity): Flow<Intent?>
+    fun signIn(
+        activity: Activity,
+        loginHint: String? = null,
+        providerType: String
+    ): Flow<GenericAuthResult>
+
+    /**
+     * Handles the result from an external authentication activity (e.g., AppAuth's redirect).
+     * This is crucial for the Google sign-in flow to complete the signIn Flow.
+     *
+     * @param providerType The provider type for which the result is being handled.
+     * @param resultCode The result code from the Activity (e.g., Activity.RESULT_OK).
+     * @param data The Intent data returned from the Activity.
+     */
     suspend fun handleAuthenticationResult(
         providerType: String,
-        resultCode: Int, // e.g. Activity.RESULT_OK
-        data: Intent?,
-        activity: Activity // For context if needed by implementation
+        resultCode: Int,
+        data: android.content.Intent?
     )
+    // Removed activity from handleAuthenticationResult as DefaultAccountRepository can hold context if needed or get it passed down.
 
-    suspend fun signOut(account: Account)
+    fun signOut(account: Account): Flow<GenericSignOutResult>
 
     fun observeActionMessages(): Flow<String?>
     fun clearActionMessage()

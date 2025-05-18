@@ -252,130 +252,70 @@ class DefaultFolderRepository @Inject constructor(
             TAG,
             "launchFolderFetchJob: Launching actual job for account '${account.username}' (ID: $accountId). Provider: $providerType, Initial: $isInitialLoad"
         )
-        val job = externalScope.launch(ioDispatcher) {
-            Log.d(TAG, "[Job Coroutine - ${account.username}] Starting fetch.")
+        folderFetchJobs[accountId] = externalScope.launch(ioDispatcher) {
+            Log.i(TAG, "launchFolderFetchJob: Coroutine started for account '${account.username}'.")
             try {
-                // Token acquisition is now handled internally by the Ktor Auth plugin
-                // in both GmailApiHelper and GraphApiHelper
-                account.providerType.uppercase()
-                Log.i(
-                    TAG,
-                    "[Job Coroutine - ${account.username}] Fetching folders..."
-                )
-
                 val foldersResult = mailApiService.getMailFolders()
                 ensureActive()
-                Log.d(
-                    TAG,
-                    "[Job Coroutine - ${account.username}] Folders result: isSuccess=${foldersResult.isSuccess}"
-                )
 
-                val newState = if (foldersResult.isSuccess) {
-                    val folders = foldersResult.getOrThrow()
+                if (foldersResult.isSuccess) {
+                    val folders = foldersResult.getOrNull() ?: emptyList()
+                    if (!isActive) {
+                        Log.i(
+                            TAG,
+                            "launchFolderFetchJob: Scope became inactive during fetch for '${account.username}'. Job cancelled by parent scope perhaps."
+                        )
+                        return@launch
+                    }
                     Log.i(
                         TAG,
-                        "[Job Coroutine - ${account.username}] Successfully fetched ${folders.size} folders."
-                    )
-                    FolderFetchState.Success(folders)
-                } else {
-                    val exception = foldersResult.exceptionOrNull()
-                    val errorMsg = errorMapper.mapNetworkOrApiException(exception)
-                    Log.e(
-                        TAG,
-                        "[Job Coroutine - ${account.username}] Failed to fetch folders: $errorMsg",
-                        exception
-                    )
-                    FolderFetchState.Error(errorMsg)
-                }
-
-                if (isActive && observedAccounts.containsKey(accountId)) {
-                    Log.d(
-                        TAG,
-                        "[Job Coroutine - ${account.username}] Target still valid. Updating folderStates to: $newState"
-                    )
-                    _folderStates.update { it + (accountId to newState) }
-                } else {
-                    Log.w(
-                        TAG,
-                        "[Job Coroutine - ${account.username}] Folder fetch completed but account no longer observed or coroutine inactive. Discarding result."
-                    )
-                }
-            } catch (e: CancellationException) {
-                Log.w(
-                    TAG,
-                    "[Job Coroutine - ${account.username}] Folder fetch job cancelled: ${e.message}",
-                    e
-                )
-                if (isActive && observedAccounts.containsKey(accountId) && _folderStates.value[accountId] is FolderFetchState.Loading) {
-                    Log.d(
-                        TAG,
-                        "[Job Coroutine - ${account.username}] Resetting folderStates for account due to cancellation while loading."
+                        "launchFolderFetchJob: Successfully fetched ${folders.size} folders for account '${account.username}'."
                     )
                     _folderStates.update { currentMap ->
-                        if (currentMap[accountId] is FolderFetchState.Loading) {
-                            currentMap - accountId
-                        } else {
-                            currentMap
-                        }
+                        currentMap + (accountId to FolderFetchState.Success(folders))
+                    }
+                } else {
+                    val exception = foldersResult.exceptionOrNull()
+                        ?: IllegalStateException("Unknown error fetching folders")
+                    Log.w(
+                        TAG,
+                        "launchFolderFetchJob: Failed to fetch folders for account '${account.username}'.",
+                        exception
+                    )
+                    val details = errorMapper.mapExceptionToErrorDetails(exception)
+                    _folderStates.update {
+                        it + (accountId to FolderFetchState.Error(details.message))
                     }
                 }
-                throw e
+            } catch (e: CancellationException) {
+                ensureActive() // Re-throw if the scope itself is cancelled
+                Log.i(
+                    TAG,
+                    "launchFolderFetchJob: Folder fetch cancelled for account '${account.username}'.",
+                    e
+                )
             } catch (e: Exception) {
                 Log.e(
                     TAG,
-                    "[Job Coroutine - ${account.username}] Exception during folder fetch: ${e.message}",
+                    "launchFolderFetchJob: Exception fetching folders for account '${account.username}'.",
                     e
                 )
                 ensureActive()
-                val errorMsg =
-                    errorMapper.mapNetworkOrApiException(e) // Or mapAuthExceptionToUserMessage if more appropriate contextually
-                if (isActive && observedAccounts.containsKey(accountId)) {
-                    Log.d(
-                        TAG,
-                        "[Job Coroutine - ${account.username}] Target still valid after exception. Updating folderStates to Error."
-                    )
-                    _folderStates.update { it + (accountId to FolderFetchState.Error(errorMsg)) }
-                } else {
-                    Log.w(
-                        TAG,
-                        "[Job Coroutine - ${account.username}] Exception caught but account no longer observed or coroutine inactive. Discarding error."
-                    )
+                val details = errorMapper.mapExceptionToErrorDetails(e)
+                _folderStates.update {
+                    it + (accountId to FolderFetchState.Error(details.message))
                 }
             } finally {
-                Log.d(
-                    TAG,
-                    "[Job Coroutine - ${account.username}] Finally block. Current job: ${coroutineContext[Job]?.hashCode()}, stored job for account $accountId: ${folderFetchJobs[accountId]?.hashCode()}"
-                )
-                if (folderFetchJobs[accountId] == coroutineContext[Job]) { // Check if this is the job instance that's completing
+                if (isActive) {
                     Log.d(
                         TAG,
-                        "[Job Coroutine - ${account.username}] Clearing folderFetchJobs reference for account $accountId."
+                        "launchFolderFetchJob: Coroutine finished for account '${account.username}'. Removing job from map."
                     )
-                    folderFetchJobs.remove(accountId)
                 }
+                folderFetchJobs.remove(accountId)
             }
         }
-        folderFetchJobs[accountId] = job // Store the new job
-
-        job.invokeOnCompletion { cause ->
-            Log.d(
-                TAG,
-                "Folder fetch job for account '${account.username}' (ID: $accountId) completed. Cause: ${cause?.javaClass?.simpleName}"
-            )
-            if (cause != null && cause !is CancellationException && externalScope.isActive) {
-                Log.e(TAG, "Unhandled error in folder fetch job for account '$accountId'.", cause)
-                if (observedAccounts.containsKey(accountId) && _folderStates.value[accountId] !is FolderFetchState.Error) {
-                    val providerErrorMapper = errorMappers[account.providerType.uppercase()]
-                    val errorMsg = providerErrorMapper?.mapNetworkOrApiException(cause)
-                        ?: "Unknown error after job completion for ${account.providerType}."
-                    Log.d(
-                        TAG,
-                        "Updating folderStates to Error from invokeOnCompletion for account '$accountId'."
-                    )
-                    _folderStates.update { it + (accountId to FolderFetchState.Error(errorMsg)) }
-                }
-            }
-        }
+        Log.d(TAG, "launchFolderFetchJob: Job launched for account '${account.username}'.")
     }
 
     private fun cancelAndRemoveJob(accountId: String, reason: String) {

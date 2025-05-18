@@ -9,7 +9,9 @@ import com.microsoft.identity.client.exception.MsalUserCancelException
 import io.ktor.client.plugins.ClientRequestException
 import io.ktor.client.plugins.ServerResponseException
 import kotlinx.serialization.SerializationException
-import net.melisma.core_data.errors.ErrorMapperService // Import the interface
+import net.melisma.core_data.errors.ErrorMapperService
+import net.melisma.core_data.errors.MappedErrorDetails
+import net.melisma.core_data.model.GenericAuthErrorType
 import java.io.IOException
 import java.net.UnknownHostException
 import javax.inject.Inject
@@ -20,7 +22,7 @@ import kotlin.coroutines.cancellation.CancellationException
  * Microsoft-specific implementation of [ErrorMapperService].
  * Handles mapping MSAL exceptions and common network exceptions.
  */
-@Singleton // Mark as Singleton if appropriate for Hilt
+@Singleton
 class MicrosoftErrorMapper @Inject constructor() : ErrorMapperService {
 
     private val TAG = "MicrosoftErrorMapper"
@@ -71,70 +73,140 @@ class MicrosoftErrorMapper @Inject constructor() : ErrorMapperService {
         return Exception(errorMessage)
     }
 
-    override fun mapNetworkOrApiException(exception: Throwable?): String {
-        Log.w(
-            TAG,
-            "Mapping network/API exception: ${exception?.let { it::class.java.simpleName + " - " + it.message } ?: "null"}"
-        )
-        // Handle standard coroutine cancellation first
-        if (exception is CancellationException) {
-            return exception.message ?: "Operation cancelled."
-        }
-        // TODO: Enhance with Ktor specific exceptions in Step 1.2
+    private fun mapMsalExceptionToDetails(exception: MsalException): MappedErrorDetails {
+        val defaultMessage =
+            exception.message ?: "An error occurred during Microsoft authentication."
+        val errorCode = exception.errorCode
+
         return when (exception) {
-            is UnknownHostException -> "No internet connection"
-            is IOException -> "Network error occurred"
-            // Add more specific network/API errors here if needed
-            else -> exception?.message?.takeIf { it.isNotBlank() }
-                ?: "An unknown network or API error occurred"
+            is MsalUiRequiredException -> MappedErrorDetails(
+                exception.message ?: "Your session has expired. Please sign in again.",
+                GenericAuthErrorType.MSAL_INTERACTIVE_AUTH_REQUIRED,
+                errorCode
+            )
+
+            is MsalUserCancelException -> MappedErrorDetails(
+                exception.message ?: "Operation cancelled by user.",
+                GenericAuthErrorType.OPERATION_CANCELLED,
+                errorCode
+            )
+
+            is MsalClientException -> {
+                val msg =
+                    exception.message ?: "A client error occurred during Microsoft authentication."
+                val type = when (exception.errorCode) {
+                    "no_current_account" -> GenericAuthErrorType.ACCOUNT_NOT_FOUND
+                    "invalid_parameter" -> GenericAuthErrorType.INVALID_REQUEST
+                    // Add more mappings here based on actual MsalClientException.errorCode strings
+                    else -> GenericAuthErrorType.AUTHENTICATION_FAILED
+                }
+                MappedErrorDetails(msg, type, errorCode)
+            }
+
+            is MsalServiceException -> {
+                val msg =
+                    exception.message ?: "A service error occurred with Microsoft authentication."
+                val type = when (exception.errorCode) {
+                    // Add specific service error code mappings here
+                    // Example: MsalServiceException.INVALID_GRANT might map to AUTHENTICATION_FAILED
+                    else -> GenericAuthErrorType.SERVICE_UNAVAILABLE // Or AUTHENTICATION_FAILED
+                }
+                MappedErrorDetails(msg, type, errorCode)
+            }
+
+            else -> MappedErrorDetails(
+                defaultMessage,
+                GenericAuthErrorType.AUTHENTICATION_FAILED,
+                errorCode
+            )
         }
     }
 
-    override fun mapAuthExceptionToUserMessage(exception: Throwable?): String {
-        // Handle standard coroutine cancellation first
+    override fun mapExceptionToErrorDetails(exception: Throwable?): MappedErrorDetails {
+        Log.w(
+            TAG,
+            "mapExceptionToErrorDetails: ${exception?.let { it::class.java.simpleName + " - " + it.message } ?: "null"}"
+        )
+
+        return when (exception) {
+            is MsalException -> mapMsalExceptionToDetails(exception)
+            is CancellationException -> MappedErrorDetails(
+                exception.message ?: "Operation cancelled.",
+                GenericAuthErrorType.OPERATION_CANCELLED,
+                "Cancellation"
+            )
+
+            is UnknownHostException -> MappedErrorDetails(
+                "No internet connection. Please check your network.",
+                GenericAuthErrorType.NETWORK_ERROR,
+                "UnknownHost"
+            )
+
+            is ClientRequestException -> MappedErrorDetails(
+                "Error connecting to Microsoft services (HTTP ${exception.response.status.value}). Check network or server status.",
+                GenericAuthErrorType.NETWORK_ERROR,
+                "KtorClientRequest-${exception.response.status.value}"
+            )
+
+            is ServerResponseException -> MappedErrorDetails(
+                "Microsoft service error (HTTP ${exception.response.status.value}). Please try again later.",
+                GenericAuthErrorType.SERVICE_UNAVAILABLE,
+                "KtorServerResponse-${exception.response.status.value}"
+            )
+
+            is SerializationException -> MappedErrorDetails(
+                "Error processing data from Microsoft. ${exception.message ?: ""}",
+                GenericAuthErrorType.UNKNOWN_ERROR,
+                "Serialization"
+            )
+
+            is IOException -> MappedErrorDetails(
+                exception.message ?: "A network error occurred. Please check your connection.",
+                GenericAuthErrorType.NETWORK_ERROR,
+                "IOException"
+            )
+
+            else -> MappedErrorDetails(
+                exception?.message?.takeIf { it.isNotBlank() } ?: "An unexpected error occurred.",
+                GenericAuthErrorType.UNKNOWN_ERROR,
+                exception?.javaClass?.simpleName ?: "UnknownThrowable"
+            )
+        }
+    }
+
+    fun mapAuthExceptionToUserMessage(exception: Throwable?): String {
+        Log.w(
+            TAG,
+            "mapAuthExceptionToUserMessage (legacy): ${exception?.let { it::class.java.simpleName + " - " + it.message } ?: "null"}"
+        )
         if (exception is CancellationException) {
             return exception.message ?: "Authentication cancelled."
         }
 
-        // --- MSAL Specific Handling ---
         if (exception is MsalException) {
-            Log.w(
-                TAG,
-                "Mapping MSAL auth exception: ${exception::class.java.simpleName} - ${exception.errorCode} - ${exception.message}"
-            )
-            val code = exception.errorCode ?: "UNKNOWN"
-
+            val details = mapMsalExceptionToDetails(exception)
             return when (exception) {
                 is MsalUserCancelException -> "Authentication cancelled."
-                is MsalUiRequiredException -> "Session expired. Please retry or sign out/in."
+                is MsalUiRequiredException -> "Your session has expired. Please sign in again or refresh your session."
                 is MsalClientException -> when (exception.errorCode) {
-                    MsalClientException.NO_CURRENT_ACCOUNT -> "Account not found or session invalid."
-                    MsalClientException.INVALID_PARAMETER -> "Authentication request is invalid."
-                    // Add more specific MsalClientException codes as needed
-                    else -> exception.message?.takeIf { it.isNotBlank() }
-                        ?: "Authentication client error ($code)"
+                    "no_current_account" -> "No account found or your session is invalid. Please sign in."
+                    "invalid_parameter" -> "The authentication request was invalid. Please try again."
+                    else -> details.message
                 }
 
-                is MsalServiceException -> exception.message?.takeIf { it.isNotBlank() }
-                    ?: "Authentication service error ($code)"
-
-                else -> exception.message?.takeIf { it.isNotBlank() }
-                    ?: "Authentication failed ($code)"
+                is MsalServiceException -> details.message
+                else -> details.message
             }
         }
 
-        // --- Fallback for Non-MSAL Auth or Other Exceptions ---
-        // If it wasn't an MSAL exception, try mapping it as a general network/API error.
-        Log.w(
-            TAG,
-            "Mapping non-MSAL auth/other exception: ${exception?.let { it::class.java.simpleName + " - " + it.message } ?: "null"}")
-        val networkMapped = mapNetworkOrApiException(exception)
-        // Use a generic auth fallback only if the network mapping also resulted in a generic message
-        return if (networkMapped == "An unknown network or API error occurred") {
-            exception?.message?.takeIf { it.isNotBlank() }
-                ?: "An unknown authentication error occurred"
-        } else {
-            networkMapped
+        val mappedDetails = mapExceptionToErrorDetails(exception)
+
+        return when (mappedDetails.type) {
+            GenericAuthErrorType.NETWORK_ERROR -> "A network error occurred. Please check your internet connection and try again."
+            GenericAuthErrorType.SERVICE_UNAVAILABLE -> "Microsoft services are temporarily unavailable. Please try again later."
+            GenericAuthErrorType.OPERATION_CANCELLED -> mappedDetails.message
+            else -> mappedDetails.message.takeIf { it.isNotBlank() }
+                ?: "An unknown authentication error occurred."
         }
     }
 }

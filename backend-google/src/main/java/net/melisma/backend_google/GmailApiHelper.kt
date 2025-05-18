@@ -4,14 +4,14 @@ import android.util.Log
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.get
-import io.ktor.client.request.headers // Ktor request headers
+import io.ktor.client.request.headers
 import io.ktor.client.request.parameter
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
-import io.ktor.http.HttpHeaders // Ktor HTTP headers
+import io.ktor.http.HttpHeaders
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -20,20 +20,22 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
+import net.melisma.backend_google.auth.GoogleNeedsReauthenticationException
 import net.melisma.backend_google.di.GoogleHttpClient
 import net.melisma.backend_google.model.GmailLabel
 import net.melisma.backend_google.model.GmailLabelList
 import net.melisma.backend_google.model.GmailMessage
 import net.melisma.backend_google.model.GmailMessageList
 import net.melisma.backend_google.model.GmailThread
-import net.melisma.backend_google.model.MessagePart // Added for clarity in recursive search
+import net.melisma.backend_google.model.MessagePart
 import net.melisma.backend_google.model.MessagePartHeader
 import net.melisma.core_data.datasource.MailApiService
 import net.melisma.core_data.errors.ErrorMapperService
+import net.melisma.core_data.model.Account
 import net.melisma.core_data.model.MailFolder
 import net.melisma.core_data.model.Message
 import net.melisma.core_data.model.WellKnownFolderType
-import java.io.IOException
+import net.melisma.core_data.repository.AccountRepository
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -43,7 +45,8 @@ import javax.inject.Singleton
 @Singleton
 class GmailApiHelper @Inject constructor(
     @GoogleHttpClient private val httpClient: HttpClient,
-    private val errorMapper: ErrorMapperService
+    private val errorMapper: ErrorMapperService,
+    private val accountRepository: AccountRepository
 ) : MailApiService {
     private val TAG = "GmailApiHelper" // Consistent TAG
     private val BASE_URL = "https://gmail.googleapis.com/gmail/v1/users/me"
@@ -80,7 +83,6 @@ class GmailApiHelper @Inject constructor(
     private val jsonParser = Json { ignoreUnknownKeys = true }
 
     override suspend fun getMailFolders(): Result<List<MailFolder>> {
-        // ... (getMailFolders implementation as before, ensure TAG is used for logs)
         return try {
             Log.d(TAG, "Fetching Gmail labels from API...")
             val response: HttpResponse = httpClient.get("$BASE_URL/labels")
@@ -91,10 +93,10 @@ class GmailApiHelper @Inject constructor(
                     TAG,
                     "Error fetching labels: ${response.status} - Error details in API response."
                 )
-                val httpException =
-                    IOException("Gmail API Error ${response.status.value} fetching labels: $responseBodyText")
-                val errorMessageString = errorMapper.mapNetworkOrApiException(httpException)
-                return Result.failure(Exception(errorMessageString))
+                val httpEx =
+                    io.ktor.client.plugins.ClientRequestException(response, responseBodyText)
+                val mappedDetails = errorMapper.mapExceptionToErrorDetails(httpEx)
+                return Result.failure(Exception(mappedDetails.message))
             }
 
             val labelList = jsonParser.decodeFromString<GmailLabelList>(responseBodyText)
@@ -109,10 +111,26 @@ class GmailApiHelper @Inject constructor(
                 "Successfully mapped and filtered to ${mailFolders.size} visible MailFolders."
             )
             Result.success(mailFolders)
+        } catch (e: GoogleNeedsReauthenticationException) {
+            Log.w(
+                TAG,
+                "Google account ${e.accountId} needs re-authentication during getMailFolders.",
+                e
+            )
+            try {
+                accountRepository.markAccountForReauthentication(
+                    e.accountId,
+                    Account.PROVIDER_TYPE_GOOGLE
+                )
+            } catch (markEx: Exception) {
+                Log.e(TAG, "Failed to mark account ${e.accountId} for re-authentication", markEx)
+            }
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(Exception("Re-authentication required: ${mappedDetails.message}", e))
         } catch (e: Exception) {
-            Log.e(TAG, "Exception in getMailFolders: ${e.javaClass.simpleName} - ${e.message}", e)
-            val errorMessageString = errorMapper.mapNetworkOrApiException(e)
-            Result.failure(Exception(errorMessageString))
+            Log.e(TAG, "Exception fetching mail folders", e)
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(Exception(mappedDetails.message))
         }
     }
 
@@ -260,10 +278,10 @@ class GmailApiHelper @Inject constructor(
                     TAG,
                     "Error fetching message list for $folderId: ${messageIdsResponse.status} - Error details in API response."
                 )
-                val httpException =
-                    IOException("HTTP Error ${messageIdsResponse.status.value} fetching messages for $folderId: $errorBody")
-                val errorMessageString = errorMapper.mapNetworkOrApiException(httpException)
-                return Result.failure(Exception(errorMessageString))
+                val httpEx =
+                    io.ktor.client.plugins.ClientRequestException(messageIdsResponse, errorBody)
+                val mappedDetails = errorMapper.mapExceptionToErrorDetails(httpEx)
+                return Result.failure(Exception(mappedDetails.message))
             }
 
             val messageList = messageIdsResponse.body<GmailMessageList>()
@@ -283,10 +301,26 @@ class GmailApiHelper @Inject constructor(
                 "Successfully processed details for ${messages.size} messages for folder (label): $folderId"
             )
             Result.success(messages)
+        } catch (e: GoogleNeedsReauthenticationException) {
+            Log.w(
+                TAG,
+                "Google account ${e.accountId} needs re-authentication during getMessagesForFolder (folder: $folderId).",
+                e
+            )
+            try {
+                accountRepository.markAccountForReauthentication(
+                    e.accountId,
+                    Account.PROVIDER_TYPE_GOOGLE
+                )
+            } catch (markEx: Exception) {
+                Log.e(TAG, "Failed to mark account ${e.accountId} for re-authentication", markEx)
+            }
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(Exception("Re-authentication required: ${mappedDetails.message}", e))
         } catch (e: Exception) {
-            Log.e(TAG, "Error in getMessagesForFolder for $folderId", e)
-            val errorMessageString = errorMapper.mapNetworkOrApiException(e)
-            Result.failure(Exception(errorMessageString))
+            Log.e(TAG, "Exception fetching messages for folder $folderId", e)
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(Exception(mappedDetails.message))
         }
     }
 
@@ -536,13 +570,30 @@ class GmailApiHelper @Inject constructor(
                     TAG,
                     "Error marking message read/unread for $messageId: ${response.status} - Error details in API response."
                 )
-                val httpException =
-                    IOException("HTTP Error ${response.status.value} marking message read/unread: $errorBody")
-                Result.failure(Exception(errorMapper.mapNetworkOrApiException(httpException)))
+                val httpEx = io.ktor.client.plugins.ClientRequestException(response, errorBody)
+                val mappedDetails = errorMapper.mapExceptionToErrorDetails(httpEx)
+                Result.failure(Exception(mappedDetails.message))
             }
+        } catch (e: GoogleNeedsReauthenticationException) {
+            Log.w(
+                TAG,
+                "Google account ${e.accountId} needs re-authentication during markMessageRead (message: $messageId).",
+                e
+            )
+            try {
+                accountRepository.markAccountForReauthentication(
+                    e.accountId,
+                    Account.PROVIDER_TYPE_GOOGLE
+                )
+            } catch (markEx: Exception) {
+                Log.e(TAG, "Failed to mark account ${e.accountId} for re-authentication", markEx)
+            }
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(Exception("Re-authentication required: ${mappedDetails.message}", e))
         } catch (e: Exception) {
             Log.e(TAG, "Exception in markMessageRead for $messageId", e)
-            Result.failure(Exception(errorMapper.mapNetworkOrApiException(e)))
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(Exception(mappedDetails.message))
         }
     }
 
@@ -558,13 +609,30 @@ class GmailApiHelper @Inject constructor(
                     TAG,
                     "Error deleting (trashing) message $messageId: ${response.status} - Error details in API response."
                 )
-                val httpException =
-                    IOException("HTTP Error ${response.status.value} deleting message: $errorBody")
-                Result.failure(Exception(errorMapper.mapNetworkOrApiException(httpException)))
+                val httpEx = io.ktor.client.plugins.ClientRequestException(response, errorBody)
+                val mappedDetails = errorMapper.mapExceptionToErrorDetails(httpEx)
+                Result.failure(Exception(mappedDetails.message))
             }
+        } catch (e: GoogleNeedsReauthenticationException) {
+            Log.w(
+                TAG,
+                "Google account ${e.accountId} needs re-authentication during deleteMessage (message: $messageId).",
+                e
+            )
+            try {
+                accountRepository.markAccountForReauthentication(
+                    e.accountId,
+                    Account.PROVIDER_TYPE_GOOGLE
+                )
+            } catch (markEx: Exception) {
+                Log.e(TAG, "Failed to mark account ${e.accountId} for re-authentication", markEx)
+            }
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(Exception("Re-authentication required: ${mappedDetails.message}", e))
         } catch (e: Exception) {
             Log.e(TAG, "Exception in deleteMessage for $messageId", e)
-            Result.failure(Exception(errorMapper.mapNetworkOrApiException(e)))
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(Exception(mappedDetails.message))
         }
     }
 
@@ -676,13 +744,30 @@ class GmailApiHelper @Inject constructor(
                     TAG,
                     "Error moving message $messageId (modifying labels): ${response.status} - Error details in API response."
                 )
-                val httpException =
-                    IOException("HTTP Error ${response.status.value} (modifying labels for move): $errorBody")
-                Result.failure(Exception(errorMapper.mapNetworkOrApiException(httpException)))
+                val httpEx = io.ktor.client.plugins.ClientRequestException(response, errorBody)
+                val mappedDetails = errorMapper.mapExceptionToErrorDetails(httpEx)
+                Result.failure(Exception(mappedDetails.message))
             }
+        } catch (e: GoogleNeedsReauthenticationException) {
+            Log.w(
+                TAG,
+                "Google account ${e.accountId} needs re-authentication during moveMessage (message: $messageId).",
+                e
+            )
+            try {
+                accountRepository.markAccountForReauthentication(
+                    e.accountId,
+                    Account.PROVIDER_TYPE_GOOGLE
+                )
+            } catch (markEx: Exception) {
+                Log.e(TAG, "Failed to mark account ${e.accountId} for re-authentication", markEx)
+            }
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(Exception("Re-authentication required: ${mappedDetails.message}", e))
         } catch (e: Exception) {
             Log.e(TAG, "Exception in moveMessage for $messageId to $targetFolderId", e)
-            Result.failure(Exception(errorMapper.mapNetworkOrApiException(e)))
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(Exception(mappedDetails.message))
         }
     }
 
@@ -705,9 +790,26 @@ class GmailApiHelper @Inject constructor(
                 "Successfully fetched and mapped ${messages.size} messages for thread ID: $threadId"
             )
             Result.success(messages)
+        } catch (e: GoogleNeedsReauthenticationException) {
+            Log.w(
+                TAG,
+                "Google account ${e.accountId} needs re-authentication during getMessagesForThread (thread: $threadId).",
+                e
+            )
+            try {
+                accountRepository.markAccountForReauthentication(
+                    e.accountId,
+                    Account.PROVIDER_TYPE_GOOGLE
+                )
+            } catch (markEx: Exception) {
+                Log.e(TAG, "Failed to mark account ${e.accountId} for re-authentication", markEx)
+            }
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(Exception("Re-authentication required: ${mappedDetails.message}", e))
         } catch (e: Exception) {
             Log.e(TAG, "Error fetching messages for thread ID: $threadId", e)
-            Result.failure(Exception(errorMapper.mapNetworkOrApiException(e)))
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(Exception(mappedDetails.message))
         }
     }
 }

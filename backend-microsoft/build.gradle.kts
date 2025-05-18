@@ -51,7 +51,7 @@ dependencies {
 
     // --- MSAL ---
     // CHANGED 'implementation' to 'api' to expose MSAL to dependent modules like :data
-    api(libs.microsoft.msal) // <<< --- CHANGE HERE
+    implementation(libs.microsoft.msal)
 
     // --- Hilt ---
     implementation(libs.hilt.android)
@@ -59,6 +59,7 @@ dependencies {
 
     // --- AndroidX & Kotlin ---
     implementation(libs.androidx.core.ktx)
+    implementation(libs.kotlinx.coroutines.core)
 
     // Logging
     implementation(libs.timber)
