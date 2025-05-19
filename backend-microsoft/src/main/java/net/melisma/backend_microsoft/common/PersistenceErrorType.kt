@@ -8,5 +8,7 @@ enum class PersistenceErrorType {
     MISSING_DATA, // e.g., essential field missing from AccountManager
     OPERATION_FAILED, // General failure for remove/clear
     INVALID_ARGUMENT, // e.g. null account ID
+    SECURITY_ISSUE, // Added for SecurityExceptions
+    MSAL_SDK_ERROR, // For errors originating from the MSAL SDK itself
     UNKNOWN_ERROR
 } 

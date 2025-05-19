@@ -47,7 +47,7 @@ class MicrosoftTokenPersistenceService @Inject constructor(
     ): PersistenceResult<Unit> = withContext(Dispatchers.IO) {
         val accountManagerName = msalAccount.id ?: run {
             Timber.tag(TAG).e("Cannot save account: MSAL Account ID (IAccount.getId()) is null.")
-            return@withContext PersistenceResult.Failure(
+            return@withContext PersistenceResult.Failure<PersistenceErrorType>(
                 PersistenceErrorType.INVALID_ARGUMENT,
                 "MSAL Account ID (IAccount.getId()) is null."
             )
@@ -74,7 +74,7 @@ class MicrosoftTokenPersistenceService @Inject constructor(
                     userData.putString(KEY_ACCESS_TOKEN, encryptedToken)
                 } ?: Timber.tag(TAG).e("Failed to encrypt access token for $accountManagerName.")
                     .run {
-                        return@withContext PersistenceResult.Failure(
+                        return@withContext PersistenceResult.Failure<PersistenceErrorType>(
                             PersistenceErrorType.ENCRYPTION_FAILED,
                             "Failed to encrypt access token for $accountManagerName."
                         )
@@ -82,12 +82,12 @@ class MicrosoftTokenPersistenceService @Inject constructor(
             }
 
             // IAccount.getIdToken() might be stale, prefer from IAuthenticationResult if available
-            val idTokenToStore = authResult?.idToken ?: msalAccount.idToken
+            val idTokenToStore = authResult?.account?.idToken ?: msalAccount.idToken
             idTokenToStore?.let { token ->
                 secureEncryptionService.encrypt(token)?.let { encryptedToken ->
                     userData.putString(KEY_ID_TOKEN, encryptedToken)
                 } ?: Timber.tag(TAG).e("Failed to encrypt ID token for $accountManagerName.").run {
-                    return@withContext PersistenceResult.Failure(
+                    return@withContext PersistenceResult.Failure<PersistenceErrorType>(
                         PersistenceErrorType.ENCRYPTION_FAILED,
                         "Failed to encrypt ID token for $accountManagerName."
                     )
@@ -104,12 +104,12 @@ class MicrosoftTokenPersistenceService @Inject constructor(
             // Remove existing account to prevent issues with addAccountExplicitly if account already exists with different signature
             val removalResult = removeAccountFromManagerInternal(
                 accountManagerName,
-                clearOnlyUserData = false,
-                calledDuringSave = true
+                clearOnlyUserData = false
             )
-            if (removalResult is PersistenceResult.Failure && !calledDuringSave) { // Only fail if not called during save and proper removal failed
+            if (removalResult is PersistenceResult.Failure<*>) {
+                val failure = removalResult as PersistenceResult.Failure<PersistenceErrorType>
                 Timber.tag(TAG)
-                    .w("Failed to remove pre-existing account for $accountManagerName during save: ${removalResult.errorType}, but proceeding with add.")
+                    .w("Failed to remove pre-existing account for $accountManagerName during save: ${failure.errorType}, but proceeding with add.")
                 // Don't return failure here, allow addAccountExplicitly to proceed.
                 // If addAccountExplicitly also fails, that will be the reported error.
             }
@@ -121,14 +121,14 @@ class MicrosoftTokenPersistenceService @Inject constructor(
             } else {
                 Timber.tag(TAG)
                     .e("Failed to add Microsoft account explicitly to AccountManager for: $accountManagerName")
-                return@withContext PersistenceResult.Failure(
+                return@withContext PersistenceResult.Failure<PersistenceErrorType>(
                     PersistenceErrorType.STORAGE_FAILED,
                     "Failed to add Microsoft account explicitly to AccountManager for: $accountManagerName"
                 )
             }
         } catch (e: Exception) {
             Timber.tag(TAG).e(e, "Error saving Microsoft account info for: $accountManagerName")
-            return@withContext PersistenceResult.Failure(
+            return@withContext PersistenceResult.Failure<PersistenceErrorType>(
                 PersistenceErrorType.UNKNOWN_ERROR,
                 "Error saving Microsoft account info for: $accountManagerName",
                 e
@@ -146,7 +146,7 @@ class MicrosoftTokenPersistenceService @Inject constructor(
             if (account == null) {
                 Timber.tag(TAG)
                     .w("No Microsoft account found in AccountManager for name: $accountManagerName")
-                return@withContext PersistenceResult.Failure(
+                return@withContext PersistenceResult.Failure<PersistenceErrorType>(
                     PersistenceErrorType.ACCOUNT_NOT_FOUND,
                     "No Microsoft account found in AccountManager for name: $accountManagerName"
                 )
@@ -157,7 +157,7 @@ class MicrosoftTokenPersistenceService @Inject constructor(
                     accountManager.getUserData(account, KEY_ACCOUNT_ID_MSAL) ?: run {
                         Timber.tag(TAG)
                             .w("MSAL Account ID is null for ${account.name}. Cannot construct PersistedMicrosoftAccount.")
-                        return@withContext PersistenceResult.Failure(
+                        return@withContext PersistenceResult.Failure<PersistenceErrorType>(
                             PersistenceErrorType.MISSING_DATA,
                             "MSAL Account ID is null for ${account.name}"
                         )
@@ -180,7 +180,7 @@ class MicrosoftTokenPersistenceService @Inject constructor(
                     e,
                     "Error retrieving PersistedMicrosoftAccount for name: $accountManagerName"
                 )
-                return@withContext PersistenceResult.Failure(
+                return@withContext PersistenceResult.Failure<PersistenceErrorType>(
                     PersistenceErrorType.UNKNOWN_ERROR,
                     "Error retrieving PersistedMicrosoftAccount for name: $accountManagerName",
                     e
@@ -201,8 +201,12 @@ class MicrosoftTokenPersistenceService @Inject constructor(
             for (androidAccount in androidAccounts) {
                 when (val result = getPersistedAccount(androidAccount.name)) {
                     is PersistenceResult.Success -> persistedAccounts.add(result.data)
-                    is PersistenceResult.Failure -> Timber.tag(TAG)
-                        .w("Failed to get persisted account ${androidAccount.name} in getAll: ${result.errorType} - ${result.message}")
+                    is PersistenceResult.Failure<*> -> {
+                        val failure =
+                            result as PersistenceResult.Failure<PersistenceErrorType> // Explicit cast
+                        Timber.tag(TAG)
+                            .w("Failed to get persisted account ${androidAccount.name} in getAll: ${failure.errorType} - ${failure.message}")
+                    }
                 }
             }
             Timber.tag(TAG)
@@ -216,13 +220,13 @@ class MicrosoftTokenPersistenceService @Inject constructor(
                 .firstOrNull { it.name == accountManagerName }
             if (account == null) {
                 Timber.tag(TAG).w("No account found for $accountManagerName to get access token.")
-                return@withContext PersistenceResult.Failure(
+                return@withContext PersistenceResult.Failure<PersistenceErrorType>(
                     PersistenceErrorType.ACCOUNT_NOT_FOUND,
                     "No account found for $accountManagerName to get access token."
                 )
             }
             val encryptedToken = accountManager.getUserData(account, KEY_ACCESS_TOKEN) ?: run {
-                return@withContext PersistenceResult.Failure(
+                return@withContext PersistenceResult.Failure<PersistenceErrorType>(
                     PersistenceErrorType.MISSING_DATA,
                     "Encrypted access token not found for $accountManagerName."
                 )
@@ -231,7 +235,7 @@ class MicrosoftTokenPersistenceService @Inject constructor(
             return@withContext try {
                 secureEncryptionService.decrypt(encryptedToken)?.let {
                     PersistenceResult.Success(it)
-                } ?: PersistenceResult.Failure(
+                } ?: PersistenceResult.Failure<PersistenceErrorType>(
                     PersistenceErrorType.DECRYPTION_FAILED,
                     "Failed to decrypt access token for $accountManagerName"
                 ).also {
@@ -239,7 +243,7 @@ class MicrosoftTokenPersistenceService @Inject constructor(
                 }
             } catch (e: Exception) {
                 Timber.tag(TAG).e(e, "Decryption error for access token for $accountManagerName")
-                PersistenceResult.Failure(
+                PersistenceResult.Failure<PersistenceErrorType>(
                     PersistenceErrorType.DECRYPTION_FAILED,
                     "Decryption error for access token for $accountManagerName",
                     e
@@ -253,13 +257,13 @@ class MicrosoftTokenPersistenceService @Inject constructor(
                 .firstOrNull { it.name == accountManagerName }
             if (account == null) {
                 Timber.tag(TAG).w("No account found for $accountManagerName to get ID token.")
-                return@withContext PersistenceResult.Failure(
+                return@withContext PersistenceResult.Failure<PersistenceErrorType>(
                     PersistenceErrorType.ACCOUNT_NOT_FOUND,
                     "No account found for $accountManagerName to get ID token."
                 )
             }
             val encryptedToken = accountManager.getUserData(account, KEY_ID_TOKEN) ?: run {
-                return@withContext PersistenceResult.Failure(
+                return@withContext PersistenceResult.Failure<PersistenceErrorType>(
                     PersistenceErrorType.MISSING_DATA,
                     "Encrypted ID token not found for $accountManagerName."
                 )
@@ -267,7 +271,7 @@ class MicrosoftTokenPersistenceService @Inject constructor(
             return@withContext try {
                 secureEncryptionService.decrypt(encryptedToken)?.let {
                     PersistenceResult.Success(it)
-                } ?: PersistenceResult.Failure(
+                } ?: PersistenceResult.Failure<PersistenceErrorType>(
                     PersistenceErrorType.DECRYPTION_FAILED,
                     "Failed to decrypt ID token for $accountManagerName"
                 ).also {
@@ -275,7 +279,7 @@ class MicrosoftTokenPersistenceService @Inject constructor(
                 }
             } catch (e: Exception) {
                 Timber.tag(TAG).e(e, "Decryption error for ID token for $accountManagerName")
-                PersistenceResult.Failure(
+                PersistenceResult.Failure<PersistenceErrorType>(
                     PersistenceErrorType.DECRYPTION_FAILED,
                     "Decryption error for ID token for $accountManagerName",
                     e
@@ -288,79 +292,106 @@ class MicrosoftTokenPersistenceService @Inject constructor(
         removeAccountFromManager: Boolean
     ): PersistenceResult<Unit> = withContext(Dispatchers.IO) {
         Timber.tag(TAG)
-            .d("Clearing account data for $accountManagerName, remove: $removeAccountFromManager")
-        return@withContext removeAccountFromManagerInternal(
-            accountManagerName,
-            clearOnlyUserData = !removeAccountFromManager
-        )
-    }
-
-    private fun removeAccountFromManagerInternal(
-        accountManagerName: String,
-        clearOnlyUserData: Boolean,
-        calledDuringSave: Boolean = false
-    ): PersistenceResult<Unit> {
-        val accounts = accountManager.getAccountsByType(ACCOUNT_TYPE_MICROSOFT)
-        val account = accounts.firstOrNull { it.name == accountManagerName }
-
-        if (account == null) {
-            if (!calledDuringSave) { // Don't warn if this is called pre-emptively during save
-                Timber.tag(TAG)
-                    .w("No Microsoft account found to clear/remove for name: $accountManagerName")
+            .d("Clearing account data for $accountManagerName, remove from manager: $removeAccountFromManager")
+        if (removeAccountFromManager) {
+            val removalResult =
+                removeAccountFromManagerInternal(accountManagerName, clearOnlyUserData = false)
+            // If full removal from AccountManager fails, report it as a failure.
+            if (removalResult is PersistenceResult.Failure<*>) { // Ensure <*>
+                return@withContext removalResult // Propagate the failure (already correctly typed)
             }
-            return PersistenceResult.Success(Unit) // No account means it's already "cleared" or "removed"
-        }
-
-        return try {
-            if (clearOnlyUserData) {
-                Timber.tag(TAG).d("Clearing user data for account: $accountManagerName")
+            Timber.tag(TAG).i("Account $accountManagerName explicitly removed from AccountManager.")
+            return@withContext PersistenceResult.Success(Unit)
+        } else {
+            // Only clear user data, keep the account entry itself.
+            // This path might be less common for MSAL which usually removes the whole account.
+            val accounts = accountManager.getAccountsByType(ACCOUNT_TYPE_MICROSOFT)
+            val account = accounts.firstOrNull { it.name == accountManagerName }
+            if (account == null) {
+                Timber.tag(TAG).w("Cannot clear user data: Account $accountManagerName not found.")
+                return@withContext PersistenceResult.Failure<PersistenceErrorType>(
+                    PersistenceErrorType.ACCOUNT_NOT_FOUND,
+                    "Account $accountManagerName not found for clearing user data."
+                )
+            }
+            try {
+                // Clear specific user data fields we manage
                 accountManager.setUserData(account, KEY_ACCESS_TOKEN, null)
                 accountManager.setUserData(account, KEY_ID_TOKEN, null)
-                accountManager.setUserData(account, KEY_ACCOUNT_ID_MSAL, null)
-                accountManager.setUserData(account, KEY_USERNAME, null)
-                accountManager.setUserData(account, KEY_TENANT_ID, null)
-                accountManager.setUserData(account, KEY_DISPLAY_NAME, null)
                 accountManager.setUserData(account, KEY_SCOPES, null)
                 accountManager.setUserData(account, KEY_EXPIRES_ON_TIMESTAMP, null)
-                // Add any other keys that might be persisted
-            } else {
-                // This is a full removal
-                Timber.tag(TAG).d("Attempting to remove account explicitly: $accountManagerName")
-                val removed = accountManager.removeAccountExplicitly(account)
+                // Optionally keep KEY_ACCOUNT_ID_MSAL, KEY_USERNAME, KEY_DISPLAY_NAME, KEY_TENANT_ID if just tokens are cleared
+                Timber.tag(TAG)
+                    .i("User data (tokens) cleared for account $accountManagerName, entry kept.")
+                return@withContext PersistenceResult.Success(Unit)
+            } catch (e: Exception) {
+                Timber.tag(TAG).e(e, "Error clearing user data for account $accountManagerName")
+                return@withContext PersistenceResult.Failure<PersistenceErrorType>(
+                    PersistenceErrorType.STORAGE_FAILED,
+                    "Error clearing user data for $accountManagerName",
+                    e
+                )
+            }
+        }
+    }
 
-                if (removed) {
+    // Internal helper to remove account from AccountManager
+    // Should return PersistenceResult to indicate success/failure of this specific operation
+    private suspend fun removeAccountFromManagerInternal(
+        accountManagerName: String,
+        clearOnlyUserData: Boolean // Added based on Google's version, might need adjustment for MS
+    ): PersistenceResult<Unit> = withContext(Dispatchers.IO) {
+        Timber.tag(TAG)
+            .d("Internal remove from AccountManager for: $accountManagerName, clearOnlyUserData: $clearOnlyUserData")
+        val accounts = accountManager.getAccountsByType(ACCOUNT_TYPE_MICROSOFT)
+        val accountToRemove = accounts.firstOrNull { it.name == accountManagerName }
+
+        if (accountToRemove == null) {
+            Timber.tag(TAG)
+                .w("Account $accountManagerName not found in AccountManager for removal.")
+            // This might not be a failure if the goal is to ensure it's gone, and it is.
+            return@withContext PersistenceResult.Success(Unit) // Or ACCOUNT_NOT_FOUND if strictness is needed
+        }
+
+        try {
+            if (clearOnlyUserData) {
+                // Similar to clearAccountData's else branch, but more focused.
+                accountManager.setUserData(accountToRemove, KEY_ACCESS_TOKEN, null)
+                accountManager.setUserData(accountToRemove, KEY_ID_TOKEN, null)
+                accountManager.setUserData(accountToRemove, KEY_SCOPES, null)
+                accountManager.setUserData(accountToRemove, KEY_EXPIRES_ON_TIMESTAMP, null)
+                Timber.tag(TAG)
+                    .i("Cleared only user data for $accountManagerName in internal remove.")
+                return@withContext PersistenceResult.Success(Unit)
+            } else {
+                // Use removeAccountExplicitly as it's synchronous and non-deprecated.
+                val removedSuccessfully = accountManager.removeAccountExplicitly(accountToRemove)
+                if (removedSuccessfully) {
                     Timber.tag(TAG)
-                        .i("Successfully removed Microsoft account from AccountManager: $accountManagerName")
+                        .i("Account $accountManagerName removed explicitly from AccountManager.")
+                    return@withContext PersistenceResult.Success(Unit)
                 } else {
                     Timber.tag(TAG)
-                        .e("Failed to remove Microsoft account from AccountManager: $accountManagerName. Attempting to clear user data as fallback.")
-                    // Fallback: if remove failed, at least try to clear its data
-                    val clearFallbackResult = removeAccountFromManagerInternal(
-                        accountManagerName,
-                        clearOnlyUserData = true,
-                        calledDuringSave = calledDuringSave
+                        .e("Failed to remove account $accountManagerName explicitly using AccountManager.removeAccountExplicitly().")
+                    // This could be due to authenticator restrictions or other issues.
+                    return@withContext PersistenceResult.Failure<PersistenceErrorType>(
+                        PersistenceErrorType.STORAGE_FAILED,
+                        "AccountManager.removeAccountExplicitly() returned false for $accountManagerName"
                     )
-                    return if (clearFallbackResult is PersistenceResult.Success) {
-                        PersistenceResult.Failure(
-                            PersistenceErrorType.OPERATION_FAILED,
-                            "Failed to remove account, but fallback data clear succeeded for $accountManagerName."
-                        )
-                    } else {
-                        PersistenceResult.Failure(
-                            PersistenceErrorType.OPERATION_FAILED,
-                            "Failed to remove account and also failed to clear user data for $accountManagerName.",
-                            clearFallbackResult.cause
-                        )
-                    }
                 }
             }
-            PersistenceResult.Success(Unit)
+        } catch (e: SecurityException) {
+            Timber.tag(TAG).e(e, "SecurityException while removing account $accountManagerName")
+            return@withContext PersistenceResult.Failure<PersistenceErrorType>(
+                PersistenceErrorType.SECURITY_ISSUE,
+                "SecurityException: ${e.message}",
+                e
+            )
         } catch (e: Exception) {
-            Timber.tag(TAG)
-                .e(e, "Error during clear/remove for Microsoft account name: $accountManagerName")
-            PersistenceResult.Failure(
+            Timber.tag(TAG).e(e, "Exception while removing account $accountManagerName")
+            return@withContext PersistenceResult.Failure<PersistenceErrorType>(
                 PersistenceErrorType.UNKNOWN_ERROR,
-                "Error during clear/remove for Microsoft account name: $accountManagerName",
+                "Exception: ${e.message}",
                 e
             )
         }

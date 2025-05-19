@@ -73,6 +73,9 @@ dependencies {
     // Logging
     implementation(libs.timber) // Added Timber for logging
 
+    // Ktor Client Auth (for BearerTokens, etc.)
+    implementation(libs.ktor.client.auth)
+
     // Hilt
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)

@@ -3,8 +3,8 @@
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
-    alias(libs.plugins.kotlin.ksp) // Changed from kapt
     alias(libs.plugins.hilt.gradle)
+    alias(libs.plugins.kotlin.ksp)
     alias(libs.plugins.kotlin.serialization) // For kotlinx.serialization
 }
 

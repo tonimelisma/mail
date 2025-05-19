@@ -65,3 +65,92 @@ These changes contribute to a cleaner, more maintainable codebase by removing un
 and permissions, clarifying build configurations, and providing up-to-date architectural
 documentation. The primary impact is a more accurate representation of the Google authentication
 flow, now correctly documented as solely using AppAuth managed by `GoogleAuthManager`. 
+
+## Code Refactoring and Bug Fixes (Session: Add Current Date/Time Here)
+
+This section details changes made to Kotlin files to address build errors and align with the ongoing
+refactoring efforts based on MTPS.md and DESIGN.md.
+
+### `:backend-microsoft` Module
+
+* **`MicrosoftAuthManager.kt`**:
+    * Updated `PersistenceResult.Failure` checks to correctly use type arguments (e.g.,
+      `PersistenceResult.Failure<*>` or `PersistenceResult.Failure<PersistenceErrorType>`) for
+      exhaustive `when` statements.
+    * Refactored `getAccount` to be a `suspend fun` using `withContext(ioDispatcher)` and to
+      correctly retrieve `displayName` and `tenantId` from the `MicrosoftTokenPersistenceService` or
+      fall back to `IAccount` properties.
+    * Ensured `signInInteractive` and `acquireTokenSilent` correctly interact with the
+      `MicrosoftTokenPersistenceService` to save/enrich account information, including
+      `displayNameFromClaims`, and construct `ManagedMicrosoftAccount` instances upon success.
+    * Corrected calls to `activeMicrosoftAccountHolder.setActiveMicrosoftAccountId`.
+    * Adjusted `signOut` to correctly call `tokenPersistenceService.clearAccountData` and handle its
+      `PersistenceResult`.
+    * Modified `getAccounts` and `enrichIAccount` to use
+      `tokenPersistenceService.getPersistedAccount` for enriching `IAccount` objects into
+      `ManagedMicrosoftAccount` objects, handling potential persistence failures gracefully.
+
+* **`MicrosoftTokenPersistenceService.kt`**:
+    * Updated all `PersistenceResult.Failure` usages to explicitly include the generic type
+      `<PersistenceErrorType>`.
+    * Changed `msalAccount.idToken` to `msalAccount.getIdToken()` method call for fetching the ID
+      token from an `IAccount` object, preferring `authResult.idToken` if available.
+    * Ensured `saveAccountInfo` correctly handles `authResult` being potentially null.
+    * Refined `removeAccountFromManagerInternal` and `clearAccountData` logic.
+
+* **`MicrosoftAccountRepository.kt` (as per previous session, now `backend-microsoft/...`)**:
+    * Added import for `net.melisma.backend_microsoft.model.ManagedMicrosoftAccount`.
+    * Corrected usage of `OverallApplicationAuthState` enum values to match its definition (e.g.,
+      `OverallApplicationAuthState.NO_ACCOUNTS_CONFIGURED`).
+    * Ensured all references to `iAccount` and `displayName` on `ManagedMicrosoftAccount` instances
+      are correct based on its definition.
+    * Updated logic in `observeMicrosoftAuthManagerChanges` to correctly create `Account` objects
+      for the UI layer, including fetching `displayName` and handling `needsReauthentication` state
+      based on silent token acquisition attempts.
+
+* **`MicrosoftKtorTokenProvider.kt`**:
+    * Updated to call the `suspend fun microsoftAuthManager.getAccount(activeAccountId)` to retrieve
+      `ManagedMicrosoftAccount`.
+    * Ensured that `iAccount` and user details (`username`/`displayName`) are accessed correctly
+      from the retrieved `ManagedMicrosoftAccount`.
+    * Wrapped calls in `externalScope.async(ioDispatcher)` or similar to ensure they are executed
+      within a coroutine context when calling suspend functions from a non-suspend interface method.
+
+### `:backend-google` Module
+
+* **`GoogleAuthManager.kt`**:
+    * Updated `PersistenceResult.Failure` checks to use `<GooglePersistenceErrorType>`.
+    * Modified `signInInteractive` to correctly use `appAuthHelperService.buildAuthorizationRequest`
+      and `appAuthHelperService.createAuthorizationRequestIntent`, providing `clientId` (from
+      `BuildConfig.GOOGLE_ANDROID_CLIENT_ID`) and `redirectUri` (hardcoded with a TODO for
+      configurability, e.g., "net.melisma.android:/oauth2redirect").
+    * Refactored `handleAuthorizationResponse` to correctly call
+      `appAuthHelperService.exchangeAuthorizationCode` (suspend fun), parse `ParsedIdTokenInfo`,
+      save tokens via `tokenPersistenceService.saveTokens` (which now takes `ParsedIdTokenInfo` and
+      `TokenResponse`), and create `ManagedGoogleAccount`.
+    * Corrected `getAccount` and `getAccounts` to use `userInfo.accountId` (from
+      `GoogleTokenPersistenceService.UserInfo`) instead of `userInfo.id` when creating
+      `ManagedGoogleAccount` instances.
+    * Adjusted various internal logging calls and error handling messages for clarity.
+
+* **`GoogleTokenPersistenceService.kt`**:
+    * Injected `AppAuthHelperService` into the constructor.
+    * Updated `saveTokens` to use the injected `appAuthHelperService.serviceConfiguration` when
+      creating an `AuthState`.
+    * The `saveTokens` method signature was updated to accept `ParsedIdTokenInfo` and
+      `TokenResponse` directly for saving account details and auth state respectively (this was an
+      implicit change driven by `GoogleAuthManager` refactoring).
+    * Ensured all `PersistenceResult.Failure` usages correctly specify
+      `<GooglePersistenceErrorType>`.
+    * The internal `UserInfo` data class was confirmed to have `accountId` (previously `id`),
+      aligning with usage in `GoogleAuthManager`.
+
+* **`AppAuthHelperService.kt`**:
+    * The `serviceConfiguration` property was made `internal` (changed from `private lateinit var`
+      to `internal val ... by lazy`) to allow access from `GoogleTokenPersistenceService` for
+      `AuthState` creation.
+    * Constructor and `buildAuthorizationRequest` signature were confirmed to be consistent with
+      `GoogleAuthManager` usage (constructor takes `@ApplicationContext`,
+      `buildAuthorizationRequest` takes `clientId` and `redirectUri`).
+
+</rewritten_file> 

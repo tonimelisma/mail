@@ -20,7 +20,8 @@ import android.accounts.Account as AndroidAccount
 class GoogleTokenPersistenceService @Inject constructor(
     @ApplicationContext private val context: Context,
     private val accountManager: AccountManager,
-    private val secureEncryptionService: SecureEncryptionService
+    private val secureEncryptionService: SecureEncryptionService,
+    private val appAuthHelperService: AppAuthHelperService
 ) {
 
     companion object {
@@ -42,14 +43,14 @@ class GoogleTokenPersistenceService @Inject constructor(
         Timber.tag(TAG)
             .d("Attempting to save tokens for Google account ID: %s, Email: %s", accountId, email)
         try {
-            val authState = AuthState(AppAuthHelperService.serviceConfig)
+            val authState = AuthState(appAuthHelperService.serviceConfiguration)
             authState.update(tokenResponse, null)
 
             val authStateJson = authState.jsonSerializeString()
             val encryptedAuthStateJson = secureEncryptionService.encrypt(authStateJson)
             if (encryptedAuthStateJson == null) {
                 Timber.tag(TAG).e("Failed to encrypt AuthState for account ID: %s", accountId)
-                return@withContext PersistenceResult.Failure(
+                return@withContext PersistenceResult.Failure<GooglePersistenceErrorType>(
                     GooglePersistenceErrorType.ENCRYPTION_FAILED,
                     "Failed to encrypt AuthState for account ID: $accountId"
                 )
@@ -63,7 +64,11 @@ class GoogleTokenPersistenceService @Inject constructor(
                 KEY_USER_PHOTO_URL to photoUrl
             )
 
-            removeAccountFromManagerInternal(accountId, calledDuringSave = true)
+            removeAccountFromManagerInternal(
+                accountId,
+                clearOnlyUserData = false,
+                calledDuringSave = true
+            )
 
             if (accountManager.addAccountExplicitly(androidAccount, null, userData)) {
                 Timber.tag(TAG)
@@ -74,14 +79,14 @@ class GoogleTokenPersistenceService @Inject constructor(
                     "Failed to add Google account explicitly to AccountManager for ID: %s",
                     accountId
                 )
-                return@withContext PersistenceResult.Failure(
+                return@withContext PersistenceResult.Failure<GooglePersistenceErrorType>(
                     GooglePersistenceErrorType.STORAGE_FAILED,
                     "Failed to add Google account explicitly for ID: $accountId"
                 )
             }
         } catch (e: Exception) {
             Timber.tag(TAG).e(e, "Error saving Google tokens for account ID: %s", accountId)
-            return@withContext PersistenceResult.Failure(
+            return@withContext PersistenceResult.Failure<GooglePersistenceErrorType>(
                 GooglePersistenceErrorType.UNKNOWN_ERROR,
                 "Error saving Google tokens for account ID: $accountId",
                 e
@@ -98,7 +103,7 @@ class GoogleTokenPersistenceService @Inject constructor(
 
         if (account == null) {
             Timber.tag(TAG).w("No Google account found in AccountManager for ID: %s", accountId)
-            return@withContext PersistenceResult.Failure(
+            return@withContext PersistenceResult.Failure<GooglePersistenceErrorType>(
                 GooglePersistenceErrorType.ACCOUNT_NOT_FOUND,
                 "No Google account found for ID: $accountId"
             )
@@ -108,7 +113,7 @@ class GoogleTokenPersistenceService @Inject constructor(
             val encryptedAuthStateJson = accountManager.getUserData(account, KEY_AUTH_STATE_JSON)
             if (encryptedAuthStateJson == null) {
                 Timber.tag(TAG).e("No AuthState JSON found in AccountManager for ID: %s", accountId)
-                return@withContext PersistenceResult.Failure(
+                return@withContext PersistenceResult.Failure<GooglePersistenceErrorType>(
                     GooglePersistenceErrorType.MISSING_AUTH_STATE_JSON,
                     "No AuthState JSON found for ID: $accountId"
                 )
@@ -117,7 +122,7 @@ class GoogleTokenPersistenceService @Inject constructor(
             val authStateJson = secureEncryptionService.decrypt(encryptedAuthStateJson)
             if (authStateJson == null) {
                 Timber.tag(TAG).e("Failed to decrypt AuthState JSON for ID: %s", accountId)
-                return@withContext PersistenceResult.Failure(
+                return@withContext PersistenceResult.Failure<GooglePersistenceErrorType>(
                     GooglePersistenceErrorType.DECRYPTION_FAILED,
                     "Failed to decrypt AuthState JSON for ID: $accountId"
                 )
@@ -131,7 +136,7 @@ class GoogleTokenPersistenceService @Inject constructor(
             } catch (jsonEx: org.json.JSONException) {
                 Timber.tag(TAG)
                     .e(jsonEx, "Failed to deserialize AuthState JSON for ID: %s", accountId)
-                return@withContext PersistenceResult.Failure(
+                return@withContext PersistenceResult.Failure<GooglePersistenceErrorType>(
                     GooglePersistenceErrorType.AUTH_STATE_DESERIALIZATION_FAILED,
                     "Failed to deserialize AuthState for ID: $accountId",
                     jsonEx
@@ -141,7 +146,7 @@ class GoogleTokenPersistenceService @Inject constructor(
         } catch (e: Exception) {
             Timber.tag(TAG)
                 .e(e, "Error retrieving/deserializing AuthState for Google ID: %s", accountId)
-            return@withContext PersistenceResult.Failure(
+            return@withContext PersistenceResult.Failure<GooglePersistenceErrorType>(
                 GooglePersistenceErrorType.UNKNOWN_ERROR,
                 "Error retrieving/deserializing AuthState for ID: $accountId",
                 e
@@ -197,7 +202,7 @@ class GoogleTokenPersistenceService @Inject constructor(
                         accountId
                     )
                     clearUserDataForAccountInternal(account)
-                    return PersistenceResult.Failure(
+                    return PersistenceResult.Failure<GooglePersistenceErrorType>(
                         GooglePersistenceErrorType.STORAGE_FAILED,
                         "Failed to remove account, fallback data clear attempted for $accountId."
                     )
@@ -206,7 +211,7 @@ class GoogleTokenPersistenceService @Inject constructor(
             PersistenceResult.Success(Unit)
         } catch (e: Exception) {
             Timber.tag(TAG).e(e, "Error during clear/remove for Google account ID: %s", accountId)
-            PersistenceResult.Failure(
+            PersistenceResult.Failure<GooglePersistenceErrorType>(
                 GooglePersistenceErrorType.UNKNOWN_ERROR,
                 "Error during clear/remove for account ID: $accountId",
                 e
@@ -228,7 +233,7 @@ class GoogleTokenPersistenceService @Inject constructor(
         val account = accounts.firstOrNull { it.name == accountId }
         if (account == null) {
             Timber.tag(TAG).w("No Google account found to retrieve user info for ID: %s", accountId)
-            return@withContext PersistenceResult.Failure(
+            return@withContext PersistenceResult.Failure<GooglePersistenceErrorType>(
                 GooglePersistenceErrorType.ACCOUNT_NOT_FOUND,
                 "No Google account found for UserInfo for ID: $accountId"
             )
@@ -247,7 +252,7 @@ class GoogleTokenPersistenceService @Inject constructor(
             )
         } catch (e: Exception) {
             Timber.tag(TAG).e(e, "Error retrieving user info for Google ID: %s", accountId)
-            return@withContext PersistenceResult.Failure(
+            return@withContext PersistenceResult.Failure<GooglePersistenceErrorType>(
                 GooglePersistenceErrorType.UNKNOWN_ERROR,
                 "Error retrieving UserInfo for ID: $accountId",
                 e
@@ -269,15 +274,22 @@ class GoogleTokenPersistenceService @Inject constructor(
                 for (androidAccount in androidAccounts) {
                     when (val userInfoResult = getUserInfo(androidAccount.name)) {
                         is PersistenceResult.Success -> userInfos.add(userInfoResult.data)
-                        is PersistenceResult.Failure -> Timber.tag(TAG)
-                            .w("Failed to get UserInfo for account ${androidAccount.name} in getAll: ${userInfoResult.errorType} - ${userInfoResult.message}")
+                        is PersistenceResult.Failure<*> -> {
+                            val failure =
+                                userInfoResult as PersistenceResult.Failure<GooglePersistenceErrorType>
+                            Timber.tag(TAG)
+                                .w(
+                                    "Failed to get UserInfo for account ${androidAccount.name} in getAll: ${failure.errorType.name} - ${failure.message}",
+                                    failure.cause
+                                )
+                        }
                     }
                 }
                 Timber.tag(TAG).d("Retrieved ${userInfos.size} UserInfo objects.")
                 return@withContext PersistenceResult.Success(userInfos)
             } catch (e: Exception) {
                 Timber.tag(TAG).e(e, "Error retrieving all Google UserInfos")
-                return@withContext PersistenceResult.Failure(
+                return@withContext PersistenceResult.Failure<GooglePersistenceErrorType>(
                     GooglePersistenceErrorType.UNKNOWN_ERROR,
                     "Error retrieving all UserInfos",
                     e
@@ -299,7 +311,7 @@ class GoogleTokenPersistenceService @Inject constructor(
                     "No Google account found in AccountManager to update AuthState for ID: %s",
                     accountId
                 )
-                return@withContext PersistenceResult.Failure(
+                return@withContext PersistenceResult.Failure<GooglePersistenceErrorType>(
                     GooglePersistenceErrorType.ACCOUNT_NOT_FOUND,
                     "No Google account found to update AuthState for ID: $accountId"
                 )
@@ -314,7 +326,7 @@ class GoogleTokenPersistenceService @Inject constructor(
                         "Failed to encrypt AuthState for account ID during update: %s",
                         accountId
                     )
-                    return@withContext PersistenceResult.Failure(
+                    return@withContext PersistenceResult.Failure<GooglePersistenceErrorType>(
                         GooglePersistenceErrorType.ENCRYPTION_FAILED,
                         "Failed to encrypt AuthState during update for ID: $accountId"
                     )
@@ -331,7 +343,11 @@ class GoogleTokenPersistenceService @Inject constructor(
                     KEY_USER_PHOTO_URL to existingPhotoUrl
                 )
 
-                removeAccountFromManagerInternal(accountId, calledDuringSave = true)
+                removeAccountFromManagerInternal(
+                    accountId,
+                    clearOnlyUserData = false,
+                    calledDuringSave = true
+                )
 
                 val androidAccount = AndroidAccount(accountId, ACCOUNT_TYPE_GOOGLE)
                 if (accountManager.addAccountExplicitly(androidAccount, null, userData)) {
@@ -345,14 +361,14 @@ class GoogleTokenPersistenceService @Inject constructor(
                         "Failed to re-add Google account during AuthState update for ID: %s",
                         accountId
                     )
-                    return@withContext PersistenceResult.Failure(
+                    return@withContext PersistenceResult.Failure<GooglePersistenceErrorType>(
                         GooglePersistenceErrorType.TOKEN_UPDATE_FAILED,
                         "Failed to re-add account during AuthState update for ID: $accountId"
                     )
                 }
             } catch (e: Exception) {
                 Timber.tag(TAG).e(e, "Error updating/saving AuthState for Google ID: %s", accountId)
-                return@withContext PersistenceResult.Failure(
+                return@withContext PersistenceResult.Failure<GooglePersistenceErrorType>(
                     GooglePersistenceErrorType.UNKNOWN_ERROR,
                     "Error updating AuthState for ID: $accountId",
                     e

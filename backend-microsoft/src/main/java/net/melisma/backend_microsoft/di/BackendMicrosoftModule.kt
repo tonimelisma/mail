@@ -17,16 +17,20 @@ import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.plugins.logging.LogLevel
 import io.ktor.client.plugins.logging.Logging
 import io.ktor.serialization.kotlinx.json.json
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.serialization.json.Json
 import net.melisma.backend_microsoft.GraphApiHelper
+import net.melisma.backend_microsoft.auth.ActiveMicrosoftAccountHolder
 import net.melisma.backend_microsoft.auth.MicrosoftAuthManager
 import net.melisma.backend_microsoft.auth.MicrosoftKtorTokenProvider
+import net.melisma.backend_microsoft.auth.MicrosoftTokenPersistenceService
 import net.melisma.backend_microsoft.errors.MicrosoftErrorMapper
+import net.melisma.core_data.auth.NeedsReauthenticationException
+import net.melisma.core_data.auth.TokenProviderException
 import net.melisma.core_data.datasource.MailApiService
 import net.melisma.core_data.di.ApplicationScope
 import net.melisma.core_data.di.AuthConfigProvider
 import net.melisma.core_data.errors.ErrorMapperService
+import timber.log.Timber
 import java.util.concurrent.TimeUnit
 import javax.inject.Qualifier
 import javax.inject.Singleton
@@ -53,19 +57,21 @@ object BackendMicrosoftModule { // Changed to object module as it now only conta
     fun provideMicrosoftAuthManager(
         @ApplicationContext context: Context,
         authConfigProvider: AuthConfigProvider,
-        @ApplicationScope externalScope: CoroutineScope,
-        secureEncryptionService: net.melisma.core_data.security.SecureEncryptionService,
+        @ApplicationScope externalScope: kotlinx.coroutines.CoroutineScope,
+        tokenPersistenceService: MicrosoftTokenPersistenceService,
+        activeMicrosoftAccountHolder: ActiveMicrosoftAccountHolder,
         @net.melisma.core_data.di.Dispatcher(net.melisma.core_data.di.MailDispatchers.IO) ioDispatcher: kotlinx.coroutines.CoroutineDispatcher
     ): MicrosoftAuthManager {
         Log.d(
             "BackendMSModule",
-            "Providing MicrosoftAuthManager with ApplicationScope CoroutineScope, SecureEncryptionService, and IODispatcher"
+            "Providing MicrosoftAuthManager with correct dependencies"
         )
         return MicrosoftAuthManager(
             context,
             authConfigProvider,
             externalScope,
-            secureEncryptionService,
+            tokenPersistenceService,
+            activeMicrosoftAccountHolder,
             ioDispatcher
         )
     }
@@ -75,7 +81,8 @@ object BackendMicrosoftModule { // Changed to object module as it now only conta
     @MicrosoftGraphHttpClient
     fun provideMicrosoftGraphHttpClient(
         json: Json,
-        microsoftKtorTokenProvider: MicrosoftKtorTokenProvider
+        microsoftKtorTokenProvider: MicrosoftKtorTokenProvider,
+        microsoftAuthManager: MicrosoftAuthManager
     ): HttpClient {
         Log.d("BackendMSModule", "Providing Microsoft Graph HTTPClient with Auth plugin.")
         return HttpClient(OkHttp) {
@@ -100,14 +107,44 @@ object BackendMicrosoftModule { // Changed to object module as it now only conta
             install(Auth) {
                 bearer {
                     loadTokens {
-                        microsoftKtorTokenProvider.loadBearerTokens()
+                        Timber.tag("KtorAuth").d("MS Auth: loadTokens called.")
+                        try {
+                            microsoftKtorTokenProvider.getBearerTokens()
+                        } catch (e: NeedsReauthenticationException) {
+                            Timber.tag("KtorAuth")
+                                .w(e, "MS Auth: Needs re-authentication during loadTokens.")
+                            null
+                        } catch (e: TokenProviderException) {
+                            Timber.tag("KtorAuth")
+                                .e(e, "MS Auth: TokenProviderException during loadTokens.")
+                            null
+                        } catch (e: Exception) {
+                            Timber.tag("KtorAuth")
+                                .e(e, "MS Auth: Unexpected exception during loadTokens.")
+                            null
+                        }
                     }
                     refreshTokens {
-                        microsoftKtorTokenProvider.refreshBearerTokens(this.oldTokens)
-                    }
-                    // Only send tokens to Microsoft Graph
-                    sendWithoutRequest { request ->
-                        request.url.host == "graph.microsoft.com"
+                        Timber.tag("KtorAuth").d(
+                            "MS Auth: refreshTokens called. Old access token: ${
+                                this.oldTokens?.accessToken?.take(10)
+                            }..."
+                        )
+                        try {
+                            microsoftKtorTokenProvider.refreshBearerTokens(this.oldTokens)
+                        } catch (e: NeedsReauthenticationException) {
+                            Timber.tag("KtorAuth")
+                                .w(e, "MS Auth: Needs re-authentication during refreshTokens.")
+                            null
+                        } catch (e: TokenProviderException) {
+                            Timber.tag("KtorAuth")
+                                .e(e, "MS Auth: TokenProviderException during refreshTokens.")
+                            null
+                        } catch (e: Exception) {
+                            Timber.tag("KtorAuth")
+                                .e(e, "MS Auth: Unexpected exception during refreshTokens.")
+                            null
+                        }
                     }
                 }
             }

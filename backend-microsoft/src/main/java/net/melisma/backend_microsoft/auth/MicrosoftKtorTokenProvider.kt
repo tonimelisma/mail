@@ -1,15 +1,20 @@
 package net.melisma.backend_microsoft.auth
 
-import android.util.Log
+// import android.util.Log // Timber is used
+// import kotlinx.coroutines.CoroutineScope
+// import kotlinx.coroutines.Dispatchers
+// import kotlinx.coroutines.SupervisorJob
 import com.microsoft.identity.client.IAccount
 import com.microsoft.identity.client.exception.MsalUiRequiredException
 import io.ktor.client.plugins.auth.providers.BearerTokens
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import net.melisma.core_data.auth.NeedsReauthenticationException
+import net.melisma.core_data.auth.TokenProvider
+import net.melisma.core_data.auth.TokenProviderException
 import net.melisma.core_data.model.Account
 import net.melisma.core_data.repository.AccountRepository
+import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -17,87 +22,62 @@ import javax.inject.Singleton
 class MicrosoftKtorTokenProvider @Inject constructor(
     private val microsoftAuthManager: MicrosoftAuthManager,
     private val activeAccountHolder: ActiveMicrosoftAccountHolder,
-    private val accountRepository: AccountRepository
-) {
-    private val TAG = "MicrosoftKtorTokenProv"
+    private val accountRepository: AccountRepository // Used to mark account for re-authentication
+) : TokenProvider {
+    private val TAG = "MsKtorTokenProvider" // Shortened for clarity in logs
     private val refreshMutex = Mutex()
 
-    // Define default scopes needed for Graph API calls by GraphApiHelper
-    private val defaultGraphApiScopes =
-        listOf("https://graph.microsoft.com/.default") // Or more specific like "User.Read", "Mail.ReadWrite" etc.
+    // Define default scopes needed for Graph API calls.
+    // Consider making these more configurable or specific if needed.
+    private val defaultGraphApiScopes = listOf("https://graph.microsoft.com/.default")
 
-    suspend fun loadBearerTokens(): BearerTokens? {
-        Log.d(TAG, "MicrosoftKtorTokenProvider: loadBearerTokens() called")
+    override suspend fun getBearerTokens(): BearerTokens? {
+        Timber.tag(TAG).d("getBearerTokens() called")
         val accountId = activeAccountHolder.getActiveMicrosoftAccountIdValue()
         if (accountId == null) {
-            Log.w(
-                TAG,
-                "MicrosoftKtorTokenProvider: No active Microsoft account ID for loading tokens"
-            )
+            Timber.tag(TAG).w("No active Microsoft account ID. Cannot load tokens.")
             return null
         }
-        Log.d(TAG, "MicrosoftKtorTokenProvider: Active account ID: $accountId")
+        Timber.tag(TAG).d("Active Microsoft account ID: $accountId")
 
-        Log.d(TAG, "MicrosoftKtorTokenProvider: Finding MSAL account for ID: $accountId")
         val msalAccount = findMsalAccount(accountId)
         if (msalAccount == null) {
-            Log.e(
-                TAG,
-                "MicrosoftKtorTokenProvider: MSAL IAccount not found for active ID: $accountId"
-            )
+            Timber.tag(TAG)
+                .e("MSAL IAccount not found for active ID: $accountId. This is unexpected.")
+            // This could be due to a race condition (e.g. account removed right before this call)
+            // Or an issue with account loading/persistence.
+            // Returning null will likely cause the API call to fail.
+            // Throwing an exception might be too aggressive if Ktor can't handle it gracefully.
             return null
         }
-        Log.d(TAG, "MicrosoftKtorTokenProvider: Found MSAL account: ${msalAccount.username}")
-
-        Log.d(
-            TAG,
-            "MicrosoftKtorTokenProvider: Attempting to acquire token silently for account: ${msalAccount.username}"
-        )
+        Timber.tag(TAG).d("Found MSAL account: ${msalAccount.username}")
         return acquireTokenAndConvertToBearer(msalAccount, isRefreshAttempt = false)
     }
 
-    suspend fun refreshBearerTokens(oldTokens: BearerTokens?): BearerTokens? {
-        Log.d(TAG, "MicrosoftKtorTokenProvider: refreshBearerTokens() called by Ktor Auth plugin")
+    override suspend fun refreshBearerTokens(oldTokens: BearerTokens?): BearerTokens? {
+        Timber.tag(TAG).d("refreshBearerTokens() called by Ktor Auth plugin.")
         val accountId = activeAccountHolder.getActiveMicrosoftAccountIdValue()
+            ?: oldTokens?.refreshToken // Attempt to get accountId from old refresh token if not active
+
         if (accountId == null) {
-            Log.e(
-                TAG,
-                "MicrosoftKtorTokenProvider: Refresh failed - No active Microsoft account ID"
-            )
+            Timber.tag(TAG)
+                .e("Refresh failed - No active Microsoft account ID and no ID in oldTokens.")
             return null
         }
-        Log.d(TAG, "MicrosoftKtorTokenProvider: Active account ID for refresh: $accountId")
+        Timber.tag(TAG).d("Microsoft account ID for refresh: $accountId")
 
-        Log.d(TAG, "MicrosoftKtorTokenProvider: Finding MSAL account for refresh")
         val msalAccount = findMsalAccount(accountId)
         if (msalAccount == null) {
-            Log.e(
-                TAG,
-                "MicrosoftKtorTokenProvider: MSAL IAccount not found for active ID: $accountId during refresh"
-            )
+            Timber.tag(TAG).e("MSAL IAccount not found for ID: $accountId during refresh.")
+            // If account is gone, refresh is impossible.
             return null
         }
-        Log.d(
-            TAG,
-            "MicrosoftKtorTokenProvider: Found MSAL account for refresh: ${msalAccount.username}"
-        )
+        Timber.tag(TAG).d("Found MSAL account for refresh: ${msalAccount.username}")
 
-        Log.d(
-            TAG,
-            "MicrosoftKtorTokenProvider: Attempting token refresh for MS account: ${msalAccount.username}"
-        )
-        // Use mutex to prevent multiple concurrent silent refresh calls for the same account
+        // MSAL handles its own refresh token logic, so acquiring token silently
+        // should attempt to refresh if the cached access token is expired.
         return refreshMutex.withLock {
-            Log.d(
-                TAG,
-                "MicrosoftKtorTokenProvider: Acquired refresh mutex for account: ${msalAccount.username}"
-            )
-            // Optional: Double-check if token is still invalid or was refreshed by another call
-            // This is complex with MSAL as it manages its own cache. A simple re-fetch is often easiest.
-            Log.d(
-                TAG,
-                "MicrosoftKtorTokenProvider: Calling acquireTokenAndConvertToBearer with isRefreshAttempt=true"
-            )
+            Timber.tag(TAG).d("Acquired refresh mutex for account: ${msalAccount.username}")
             acquireTokenAndConvertToBearer(msalAccount, isRefreshAttempt = true)
         }
     }
@@ -105,163 +85,127 @@ class MicrosoftKtorTokenProvider @Inject constructor(
     private suspend fun acquireTokenAndConvertToBearer(
         msalAccount: IAccount,
         isRefreshAttempt: Boolean
-    ): BearerTokens? {
-        Log.d(
-            TAG,
-            "MicrosoftKtorTokenProvider: acquireTokenAndConvertToBearer(account=${msalAccount.username}, isRefreshAttempt=$isRefreshAttempt)"
-        )
-        return try {
-            Log.d(
-                TAG,
-                "MicrosoftKtorTokenProvider: Calling microsoftAuthManager.acquireTokenSilent with scopes: $defaultGraphApiScopes"
-            )
-            val acquireTokenResult =
-                microsoftAuthManager.acquireTokenSilent(msalAccount, defaultGraphApiScopes).first()
-            Log.d(
-                TAG,
-                "MicrosoftKtorTokenProvider: Received result: ${acquireTokenResult::class.java.simpleName}"
-            )
+    ): BearerTokens { // Changed to non-nullable, will throw exceptions on failure
+        val operationType = if (isRefreshAttempt) "refresh" else "initial load"
+        Timber.tag(TAG)
+            .d("acquireTokenAndConvertToBearer for $operationType: account=${msalAccount.username}")
+
+        try {
+            val acquireTokenResult: AcquireTokenResult =
+                microsoftAuthManager.acquireTokenSilent(msalAccount, defaultGraphApiScopes)
+            Timber.tag(TAG)
+                .d("MSAL acquireTokenSilent result: ${acquireTokenResult::class.simpleName}")
 
             when (acquireTokenResult) {
                 is AcquireTokenResult.Success -> {
-                    val expiresOn = acquireTokenResult.result.expiresOn
-                    Log.i(
-                        TAG,
-                        "MicrosoftKtorTokenProvider: MSAL Token acquired successfully for ${msalAccount.username}. " +
-                                "Expires: $expiresOn"
-                    )
-                    Log.d(
-                        TAG,
-                        "MicrosoftKtorTokenProvider: Token length: ${acquireTokenResult.result.accessToken.length} chars"
-                    )
+                    Timber.tag(TAG)
+                        .i("MSAL Token acquired successfully for ${msalAccount.username}. Expires: ${acquireTokenResult.result.expiresOn}")
 
-                    // The 'refreshToken' field in BearerTokens is not directly used by MSAL for its own refresh.
-                    // MSAL uses its internal refresh token when acquireTokenSilent is called.
-                    // We can put the account ID or a placeholder if needed by Ktor, or an empty string.
-                    val accountIdOrPlaceholder = msalAccount.id ?: "ms_account_id_placeholder"
-                    Log.d(
-                        TAG,
-                        "MicrosoftKtorTokenProvider: Creating BearerTokens with account ID: $accountIdOrPlaceholder"
-                    )
+                    val msalAccountId = msalAccount.id ?: run {
+                        Timber.tag(TAG)
+                            .e("MSAL account ID (IAccount.id) is null after successful token acquisition. This should not happen.")
+                        throw TokenProviderException("MSAL account ID is null post-success.")
+                    }
 
-                    BearerTokens(
-                        acquireTokenResult.result.accessToken,
-                        accountIdOrPlaceholder
+                    return BearerTokens(
+                        accessToken = acquireTokenResult.result.accessToken,
+                        // Store the MSAL account ID in refreshToken field.
+                        // This allows the Ktor `validate` block to retrieve it to fetch user details for Principal.
+                        refreshToken = msalAccountId
                     )
                 }
-
                 is AcquireTokenResult.UiRequired -> {
-                    Log.w(
-                        TAG,
-                        "MicrosoftKtorTokenProvider: MSAL UI required for ${msalAccount.username}. " +
-                                "Cannot silently acquire/refresh token."
-                    )
-                    // Signal re-authentication needed
-                    msalAccount.id?.let { accountId ->
+                    Timber.tag(TAG)
+                        .w("MSAL UI required for ${msalAccount.username} during token $operationType.")
+                    msalAccount.id?.let { id ->
                         accountRepository.markAccountForReauthentication(
-                            accountId,
+                            id,
                             Account.PROVIDER_TYPE_MS
                         )
-                        // Log.w(TAG, "MsalUiRequiredException for $accountId. Token acquisition requires user interaction.")
-                        // Potentially signal this upstream for UI handling if Ktor client consumers can act on it
-                        // For now, returning null will cause the API call to fail, and the UI should handle general API errors.
                     }
-                    null
-                }
-
-                is AcquireTokenResult.Error -> {
-                    Log.e(
-                        TAG,
-                        "MicrosoftKtorTokenProvider: MSAL Error acquiring token for ${msalAccount.username}",
-                        acquireTokenResult.exception
+                    throw NeedsReauthenticationException(
+                        accountIdToReauthenticate = msalAccount.id,
+                        message = "MSAL UI interaction required for account ${msalAccount.username}",
+                        cause = (acquireTokenResult as? AcquireTokenResult.Error)?.exception
+                            ?: MsalUiRequiredException(
+                                "UiRequired",
+                                "MSAL reported UI interaction needed."
+                            )
                     )
-                    // Check if it's an MsalUiRequiredException wrapped in Error result
+                }
+                is AcquireTokenResult.Error -> {
+                    Timber.tag(TAG).e(
+                        acquireTokenResult.exception,
+                        "MSAL Error acquiring token for ${msalAccount.username}"
+                    )
                     if (acquireTokenResult.exception is MsalUiRequiredException) {
-                        Log.w(
-                            TAG,
-                            "MSAL Error was MsalUiRequiredException for ${msalAccount.username}"
-                        )
-                        msalAccount.id?.let { accountId ->
+                        msalAccount.id?.let { id ->
                             accountRepository.markAccountForReauthentication(
-                                accountId,
+                                id,
                                 Account.PROVIDER_TYPE_MS
                             )
-                            // Log.w(TAG, "MsalUiRequiredException for $accountId. Token acquisition requires user interaction.")
-                            // Potentially signal this upstream for UI handling if Ktor client consumers can act on it
-                            // For now, returning null will cause the API call to fail, and the UI should handle general API errors.
                         }
+                        throw NeedsReauthenticationException(
+                            accountIdToReauthenticate = msalAccount.id,
+                            message = "MSAL UI interaction required (wrapped in Error) for account ${msalAccount.username}",
+                            cause = acquireTokenResult.exception
+                        )
+                    } else {
+                        throw TokenProviderException(
+                            message = "MSAL Error acquiring token for ${msalAccount.username}: ${acquireTokenResult.exception.message}",
+                            cause = acquireTokenResult.exception
+                        )
                     }
-                    Log.e(
-                        TAG,
-                        "MicrosoftKtorTokenProvider: Error details: ${acquireTokenResult.exception.message}"
-                    )
-                    null
                 }
 
-                else -> { // Cancelled, NotInitialized, NoAccountProvided (shouldn't happen if msalAccount is valid)
-                    Log.w(
-                        TAG,
-                        "MicrosoftKtorTokenProvider: Unexpected MSAL result during token acquisition for ${msalAccount.username}: $acquireTokenResult"
-                    )
-                    null
+                is AcquireTokenResult.Cancelled, is AcquireTokenResult.NotInitialized, is AcquireTokenResult.NoAccountProvided -> {
+                    Timber.tag(TAG)
+                        .w("Unexpected MSAL result ($acquireTokenResult) during token $operationType for ${msalAccount.username}")
+                    throw TokenProviderException("Unexpected or non-successful MSAL result: $acquireTokenResult")
+                }
+
+                else -> {
+                    Timber.tag(TAG)
+                        .e("Unhandled MSAL acquireTokenSilent result: $acquireTokenResult")
+                    throw TokenProviderException("Unhandled MSAL acquireTokenSilent result: ${acquireTokenResult::class.java.simpleName}")
                 }
             }
-        } catch (e: MsalUiRequiredException) { // Catch specifically if flow.first() rethrows it
-            Log.w(
-                TAG,
-                "MicrosoftKtorTokenProvider: MSAL UI required (caught MsalUiRequiredException) for ${msalAccount.username}. " +
-                        "Cannot silently acquire/refresh token.",
-                e
-            )
-            // Signal re-authentication needed
-            msalAccount.id?.let { accountId ->
-                accountRepository.markAccountForReauthentication(
-                    accountId,
-                    Account.PROVIDER_TYPE_MS
-                )
-                // Log.w(TAG, "MsalUiRequiredException for $accountId. Token acquisition requires user interaction.")
-                // Potentially signal this upstream for UI handling if Ktor client consumers can act on it
-                // For now, returning null will cause the API call to fail, and the UI should handle general API errors.
+        } catch (e: MsalUiRequiredException) { // Catch direct MsalUiRequiredException if not wrapped by our sealed class
+            Timber.tag(TAG)
+                .w(e, "Caught direct MsalUiRequiredException for ${msalAccount.username}")
+            msalAccount.id?.let { id ->
+                accountRepository.markAccountForReauthentication(id, Account.PROVIDER_TYPE_MS)
             }
-            Log.w(TAG, "MicrosoftKtorTokenProvider: Error details: ${e.message}")
-            null
-        } catch (e: Exception) {
-            Log.e(
-                TAG,
-                "MicrosoftKtorTokenProvider: Generic exception during MSAL token acquisition for ${msalAccount.username}",
-                e
+            throw NeedsReauthenticationException(
+                accountIdToReauthenticate = msalAccount.id,
+                message = "MSAL UI interaction required (direct catch) for account ${msalAccount.username}",
+                cause = e
             )
-            Log.e(
-                TAG,
-                "MicrosoftKtorTokenProvider: Error type: ${e.javaClass.simpleName}, Message: ${e.message}"
+        } catch (e: NeedsReauthenticationException) {
+            throw e // Re-throw if it's already the correct type from our when block
+        } catch (e: TokenProviderException) {
+            throw e // Re-throw if it's already the correct type
+        } catch (e: Exception) { // Catch any other exceptions
+            Timber.tag(TAG).e(
+                e,
+                "Generic exception during MSAL token $operationType for ${msalAccount.username}"
             )
-            null
+            throw TokenProviderException(
+                message = "Generic exception during token $operationType for ${msalAccount.username}: ${e.message}",
+                cause = e
+            )
         }
     }
 
     private suspend fun findMsalAccount(accountId: String): IAccount? {
-        Log.d(
-            TAG,
-            "MicrosoftKtorTokenProvider: findMsalAccount (new suspend version) called for accountId: $accountId"
-        )
-        val account = try {
-            microsoftAuthManager.getAccountById(accountId).firstOrNull()
-        } catch (e: Exception) {
-            Log.e(TAG, "Exception while calling microsoftAuthManager.getAccountById($accountId)", e)
-            null
-        }
+        Timber.tag(TAG).d("findMsalAccount called for accountId: $accountId")
+        val iAccount: IAccount? = microsoftAuthManager.getAccount(accountId)
 
-        if (account != null) {
-            Log.d(
-                TAG,
-                "MicrosoftKtorTokenProvider: Found MSAL account with username: ${account?.username} using new Flow method."
-            )
+        if (iAccount != null) {
+            Timber.tag(TAG).d("Found MSAL account with username: ${iAccount.username}")
         } else {
-            Log.w(
-                TAG,
-                "MicrosoftKtorTokenProvider: No MSAL account found with ID: $accountId using new Flow method."
-            )
+            Timber.tag(TAG).w("No MSAL account found with ID: $accountId")
         }
-        return account
+        return iAccount
     }
 }

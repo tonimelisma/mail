@@ -9,6 +9,7 @@ import android.content.Intent
 import android.net.Uri
 import com.auth0.android.jwt.DecodeException
 import com.auth0.android.jwt.JWT
+import dagger.hilt.android.qualifiers.ApplicationContext
 import io.ktor.client.HttpClient
 import io.ktor.client.request.forms.submitForm
 import io.ktor.client.statement.HttpResponse
@@ -17,6 +18,7 @@ import io.ktor.http.Parameters
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.suspendCancellableCoroutine
 import net.melisma.backend_google.di.UnauthenticatedGoogleHttpClient
+import net.melisma.backend_google.model.ParsedIdTokenInfo
 import net.openid.appauth.AuthState
 import net.openid.appauth.AuthorizationException
 import net.openid.appauth.AuthorizationRequest
@@ -33,19 +35,36 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 // Define the data class for parsed ID token information
+// MOVED to backend-google/src/main/java/net/melisma/backend_google/model/ParsedIdTokenInfo.kt
+/*
 data class ParsedIdTokenInfo(
     val userId: String?,
     val email: String?,
     val displayName: String?,
     val picture: String? = null
 )
+*/
 
 @Singleton
 class AppAuthHelperService @Inject constructor(
-    private val context: Context,
-    @UnauthenticatedGoogleHttpClient private val httpClient: HttpClient // Changed to use UnauthenticatedGoogleHttpClient
+    @ApplicationContext private val context: Context,
+    @UnauthenticatedGoogleHttpClient private val httpClient: HttpClient
+    // Assuming GOOGLE_ANDROID_CLIENT_ID and REDIRECT_URI_STRING are provided elsewhere (e.g., BuildConfig, Hilt module)
+    // For this example, let's assume they are directly available or passed if this class is @Inject constructor
+    // private val clientId: String, 
+    // private val redirectUri: Uri 
 ) {
+    private val TAG = "AppAuthHelperService"
 
+    // Make this internal so GoogleTokenPersistenceService can access it for AuthState creation.
+    internal val serviceConfiguration: AuthorizationServiceConfiguration by lazy {
+        AuthorizationServiceConfiguration(
+            Uri.parse("https://accounts.google.com/o/oauth2/v2/auth"),  // authorization endpoint
+            Uri.parse("https://oauth2.googleapis.com/token"),        // token endpoint
+            null                                             // registration endpoint (null for Google)
+        )
+    }
+    
     private val authService: AuthorizationService by lazy {
         AuthorizationService(context)
     }
@@ -65,21 +84,25 @@ class AppAuthHelperService @Inject constructor(
             "profile",
             "offline_access" // For refresh token
         )
+    }
 
-        // Simplified to 2-argument constructor for now
-        val serviceConfig = AuthorizationServiceConfiguration(
-            Uri.parse("https://accounts.google.com/o/oauth2/v2/auth"), // Authorization endpoint
-            Uri.parse("https://oauth2.googleapis.com/token")          // Token endpoint
-            // Revocation endpoint will need to be handled differently if this basic config works
-        )
+    init {
+        // Initialize any other necessary components
     }
 
     fun buildAuthorizationRequest(
-        clientId: String,
-        redirectUri: Uri,
+        loginHint: String?,
         scopes: List<String>,
-        loginHint: String? = null
+        clientId: String, // Expect clientId to be passed in
+        redirectUri: Uri  // Expect redirectUri to be passed in
     ): AuthorizationRequest {
+        val builder = AuthorizationRequest.Builder(
+            serviceConfiguration, // Use the class property
+            clientId,
+            ResponseTypeValues.CODE, // We want an authorization code
+            redirectUri
+        )
+
         val combinedScopes = (MANDATORY_SCOPES + scopes).distinct().joinToString(" ")
         Timber.d(
             "Building AuthorizationRequest with Client ID: %s, Redirect URI: %s, Scopes: %s, LoginHint: %s",
@@ -89,12 +112,7 @@ class AppAuthHelperService @Inject constructor(
             loginHint ?: "N/A"
         )
 
-        val builder = AuthorizationRequest.Builder(
-            serviceConfig,
-            clientId,
-            ResponseTypeValues.CODE, // We want an authorization code
-            redirectUri
-        ).setScopes(combinedScopes)
+        builder.setScopes(combinedScopes)
 
         loginHint?.let {
             builder.setLoginHint(it)

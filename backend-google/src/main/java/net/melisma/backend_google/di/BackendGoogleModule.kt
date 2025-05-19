@@ -1,6 +1,5 @@
 package net.melisma.backend_google.di
 
-// Added imports for Context, AccountManager and @ApplicationContext
 import android.accounts.AccountManager
 import android.content.Context
 import android.util.Log
@@ -25,10 +24,15 @@ import io.ktor.http.HttpHeaders
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.json.Json
 import net.melisma.backend_google.GmailApiHelper
+import net.melisma.backend_google.auth.ActiveGoogleAccountHolder
+import net.melisma.backend_google.auth.GoogleAuthManager
 import net.melisma.backend_google.auth.GoogleKtorTokenProvider
 import net.melisma.backend_google.errors.GoogleErrorMapper
+import net.melisma.core_data.auth.NeedsReauthenticationException
+import net.melisma.core_data.auth.TokenProviderException
 import net.melisma.core_data.datasource.MailApiService
 import net.melisma.core_data.errors.ErrorMapperService
+import timber.log.Timber
 import java.util.concurrent.TimeUnit
 import javax.inject.Qualifier
 import javax.inject.Singleton
@@ -57,7 +61,9 @@ object BackendGoogleModule {
     @GoogleHttpClient
     fun provideGoogleHttpClient(
         json: Json,
-        googleKtorTokenProvider: GoogleKtorTokenProvider
+        googleKtorTokenProvider: GoogleKtorTokenProvider,
+        googleAuthManager: GoogleAuthManager,
+        activeGoogleAccountHolder: ActiveGoogleAccountHolder
     ): HttpClient {
         Log.d("BackendGoogleModule", "Providing Google HTTPClient with Auth plugin setup.")
         return HttpClient(OkHttp) {
@@ -89,18 +95,34 @@ object BackendGoogleModule {
             // Install the Auth plugin
             install(Auth) {
                 bearer {
-                    loadTokens {
-                        // This lambda IS a suspend context
-                        googleKtorTokenProvider.getBearerTokens()
+                    loadTokens { credentials ->
+                        Timber.tag("KtorAuth").d("Google Auth: loadTokens called")
+                        try {
+                            googleKtorTokenProvider.getBearerTokens()
+                        } catch (e: NeedsReauthenticationException) {
+                            Timber.tag("KtorAuth")
+                                .w(e, "Google Auth: Needs re-authentication during loadTokens.")
+                            null
+                        } catch (e: TokenProviderException) {
+                            Timber.tag("KtorAuth")
+                                .e(e, "Google Auth: TokenProviderException during loadTokens.")
+                            null
+                        }
                     }
-
-                    refreshTokens {
-                        // This would be called by Ktor if a request with tokens from loadTokens fails (e.g., 401)
-                        googleKtorTokenProvider.getBearerTokens()
-                        // Alternatively, a more specific refresh-only method could be exposed by the provider
+                    refreshTokens { oldTokens ->
+                        Timber.tag("KtorAuth").d("Google Auth: refreshTokens called")
+                        try {
+                            googleKtorTokenProvider.refreshBearerTokens(oldTokens)
+                        } catch (e: NeedsReauthenticationException) {
+                            Timber.tag("KtorAuth")
+                                .w(e, "Google Auth: Needs re-authentication during refreshTokens.")
+                            null
+                        } catch (e: TokenProviderException) {
+                            Timber.tag("KtorAuth")
+                                .e(e, "Google Auth: TokenProviderException during refreshTokens.")
+                            null
+                        }
                     }
-
-                    // Optional: Only send tokens for Gmail API calls
                     sendWithoutRequest { request ->
                         request.url.host == "gmail.googleapis.com" || request.url.host == "www.googleapis.com"
                     }

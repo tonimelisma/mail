@@ -28,7 +28,9 @@ import net.melisma.backend_google.auth.ActiveGoogleAccountHolder
 import net.melisma.backend_google.auth.GoogleAuthManager
 import net.melisma.backend_google.auth.GoogleSignInResult
 import net.melisma.backend_google.auth.GoogleSignOutResult
+import net.melisma.backend_google.common.GooglePersistenceErrorType
 import net.melisma.backend_google.model.ManagedGoogleAccount
+import net.melisma.core_data.common.PersistenceResult
 import net.melisma.core_data.di.MicrosoftRepo
 import net.melisma.core_data.errors.ErrorMapperService
 import net.melisma.core_data.errors.MappedErrorDetails
@@ -113,7 +115,7 @@ class DefaultAccountRepository @Inject constructor(
                         Timber.tag(TAG).i(
                             "Init: Setting active Google account from persisted: ${firstGoogleAccount.username} (ID: ${firstGoogleAccount.id})"
                         )
-                        activeGoogleAccountHolder.setActiveAccount(firstGoogleAccount.id)
+                        activeGoogleAccountHolder.setActiveAccountId(firstGoogleAccount.id)
                     }
                     updateCombinedAccountsAndOverallAuthState() // Update combined list and overall state
                 }
@@ -568,7 +570,7 @@ class DefaultAccountRepository @Inject constructor(
                     if (isLocallyKnown) {
                         _googleAccounts.update { it.filterNot { acc -> acc.id == account.id } }
                         if (activeGoogleAccountHolder.activeAccountId.value == account.id) {
-                            activeGoogleAccountHolder.clearActiveAccount()
+                            activeGoogleAccountHolder.setActiveAccountId(null)
                         }
                         // updateCombinedAccountsAndOverallAuthState() is triggered by _googleAccounts.update
                         emit(GenericSignOutResult.Success) // Consider if this should be an error or a silent success.
@@ -785,7 +787,7 @@ class DefaultAccountRepository @Inject constructor(
     }
 
     /**
-     * Helper extension function to map GooglePersistenceErrorType to GenericAuthErrorType.
+     * Extension function to map [GooglePersistenceErrorType] to a more generic [GenericAuthErrorType].
      * This can be expanded as more specific mappings are needed.
      */
     fun GooglePersistenceErrorType.toGenericAuthErrorType(): GenericAuthErrorType {
@@ -800,10 +802,9 @@ class DefaultAccountRepository @Inject constructor(
             GooglePersistenceErrorType.STORAGE_FAILED,
             GooglePersistenceErrorType.TOKEN_UPDATE_FAILED -> GenericAuthErrorType.STORAGE_ERROR
 
-            GooglePersistenceErrorType.NETWORK_ERROR -> GenericAuthErrorType.NETWORK_ERROR // Assuming GooglePersistenceErrorType has NETWORK_ERROR
-            GooglePersistenceErrorType.UNKNOWN_ERROR -> GenericAuthErrorType.UNKNOWN_ERROR
-            // Add more specific mappings if GooglePersistenceErrorType grows
-            else -> GenericAuthErrorType.UNKNOWN_ERROR
+            GooglePersistenceErrorType.TOKEN_REFRESH_INVALID_GRANT -> GenericAuthErrorType.AUTHENTICATION_FAILED
+            GooglePersistenceErrorType.UNKNOWN_ERROR,
+            GooglePersistenceErrorType.AUTH_STATE_SERIALIZATION_FAILED -> GenericAuthErrorType.UNKNOWN_ERROR
         }
     }
 }
