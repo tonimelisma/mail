@@ -71,19 +71,36 @@ class AppAuthHelperService @Inject constructor(
 
     companion object {
         const val GOOGLE_AUTH_REQUEST_CODE = 1000
-        const val GMAIL_API_SCOPE_BASE = "https://www.googleapis.com/auth/gmail."
+        // const val GMAIL_API_SCOPE_BASE = "https://www.googleapis.com/auth/gmail." // Inlined
+
+        // Define all required scopes in a single list.
+        // If the user does not grant all of these, authentication should be treated as failed.
+        val RequiredScopes = listOf(
+            "https://www.googleapis.com/auth/gmail.readonly", // View your messages and settings
+            "https://www.googleapis.com/auth/gmail.modify",   // Modify but not delete messages
+            "https://www.googleapis.com/auth/gmail.labels",   // Manage your labels
+            // "https://www.googleapis.com/auth/gmail.send",    // If sending mail is needed
+            // "https://www.googleapis.com/auth/gmail.metadata", // If only metadata access is needed for some features
+            "openid",
+            "email",
+            "profile",
+            "offline_access" // For refresh token
+        ).distinct() // Ensure no duplicates if scopes are combined programmatically later
+
+        // GMAIL_SCOPES and MANDATORY_SCOPES are now consolidated into RequiredScopes
+        /*
         val GMAIL_SCOPES = listOf(
-            "${GMAIL_API_SCOPE_BASE}readonly", // View your messages and settings
-            "${GMAIL_API_SCOPE_BASE}modify",   // Modify but not delete messages (e.g., mark read/unread)
-            "${GMAIL_API_SCOPE_BASE}labels",   // Manage your labels (folders)
-            // Add other Gmail scopes as needed, e.g., send, metadata
+            "${GMAIL_API_SCOPE_BASE}readonly", 
+            "${GMAIL_API_SCOPE_BASE}modify",   
+            "${GMAIL_API_SCOPE_BASE}labels",   
         )
         val MANDATORY_SCOPES = listOf(
             "openid",
             "email",
             "profile",
-            "offline_access" // For refresh token
+            "offline_access" 
         )
+        */
     }
 
     init {
@@ -92,18 +109,17 @@ class AppAuthHelperService @Inject constructor(
 
     fun buildAuthorizationRequest(
         loginHint: String?,
-        scopes: List<String>,
-        clientId: String, // Expect clientId to be passed in
-        redirectUri: Uri  // Expect redirectUri to be passed in
+        clientId: String,
+        redirectUri: Uri  
     ): AuthorizationRequest {
         val builder = AuthorizationRequest.Builder(
-            serviceConfiguration, // Use the class property
+            serviceConfiguration, 
             clientId,
-            ResponseTypeValues.CODE, // We want an authorization code
+            ResponseTypeValues.CODE, 
             redirectUri
         )
 
-        val combinedScopes = (MANDATORY_SCOPES + scopes).distinct().joinToString(" ")
+        val combinedScopes = RequiredScopes.joinToString(" ") // Use the consolidated RequiredScopes
         Timber.d(
             "Building AuthorizationRequest with Client ID: %s, Redirect URI: %s, Scopes: %s, LoginHint: %s",
             clientId,

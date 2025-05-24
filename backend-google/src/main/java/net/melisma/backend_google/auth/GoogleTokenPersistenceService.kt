@@ -275,6 +275,7 @@ class GoogleTokenPersistenceService @Inject constructor(
                     when (val userInfoResult = getUserInfo(androidAccount.name)) {
                         is PersistenceResult.Success -> userInfos.add(userInfoResult.data)
                         is PersistenceResult.Failure<*> -> {
+                            @Suppress("UNCHECKED_CAST")
                             val failure =
                                 userInfoResult as PersistenceResult.Failure<GooglePersistenceErrorType>
                             Timber.tag(TAG)

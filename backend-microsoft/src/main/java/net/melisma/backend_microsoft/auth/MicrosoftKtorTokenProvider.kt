@@ -8,7 +8,6 @@ import com.microsoft.identity.client.IAccount
 import com.microsoft.identity.client.exception.MsalUiRequiredException
 import io.ktor.client.plugins.auth.providers.BearerTokens
 import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import net.melisma.core_data.auth.NeedsReauthenticationException
 import net.melisma.core_data.auth.TokenProvider
 import net.melisma.core_data.auth.TokenProviderException
@@ -27,9 +26,8 @@ class MicrosoftKtorTokenProvider @Inject constructor(
     private val TAG = "MsKtorTokenProvider" // Shortened for clarity in logs
     private val refreshMutex = Mutex()
 
-    // Define default scopes needed for Graph API calls.
-    // Consider making these more configurable or specific if needed.
-    private val defaultGraphApiScopes = listOf("https://graph.microsoft.com/.default")
+    // Removed local defaultGraphApiScopes, will use MicrosoftScopeDefinitions.AppRequiredScopes
+    // private val defaultGraphApiScopes = listOf("https://graph.microsoft.com/.default")
 
     override suspend fun getBearerTokens(): BearerTokens? {
         Timber.tag(TAG).d("getBearerTokens() called")
@@ -55,31 +53,29 @@ class MicrosoftKtorTokenProvider @Inject constructor(
     }
 
     override suspend fun refreshBearerTokens(oldTokens: BearerTokens?): BearerTokens? {
-        Timber.tag(TAG).d("refreshBearerTokens() called by Ktor Auth plugin.")
-        val accountId = activeAccountHolder.getActiveMicrosoftAccountIdValue()
-            ?: oldTokens?.refreshToken // Attempt to get accountId from old refresh token if not active
-
+        Timber.tag(TAG).d("refreshBearerTokens() called.")
+        // The accountId should be stored in oldTokens.refreshToken as per getBearerTokens logic
+        val accountId = oldTokens?.refreshToken
         if (accountId == null) {
-            Timber.tag(TAG)
-                .e("Refresh failed - No active Microsoft account ID and no ID in oldTokens.")
+            Timber.tag(TAG).w("No accountId found in oldTokens for refresh. Cannot refresh tokens.")
             return null
         }
-        Timber.tag(TAG).d("Microsoft account ID for refresh: $accountId")
+        Timber.tag(TAG).d("Attempting to refresh tokens for Microsoft account ID: $accountId")
 
         val msalAccount = findMsalAccount(accountId)
         if (msalAccount == null) {
-            Timber.tag(TAG).e("MSAL IAccount not found for ID: $accountId during refresh.")
-            // If account is gone, refresh is impossible.
-            return null
+            Timber.tag(TAG).e(
+                "MSAL IAccount not found for active ID: $accountId during refresh. This is unexpected."
+            )
+            // Propagate the issue as a TokenProviderException or NeedsReauthenticationException
+            throw NeedsReauthenticationException(
+                accountIdToReauthenticate = accountId,
+                message = "MSAL account not found for ID $accountId during token refresh."
+            )
         }
-        Timber.tag(TAG).d("Found MSAL account for refresh: ${msalAccount.username}")
 
-        // MSAL handles its own refresh token logic, so acquiring token silently
-        // should attempt to refresh if the cached access token is expired.
-        return refreshMutex.withLock {
-            Timber.tag(TAG).d("Acquired refresh mutex for account: ${msalAccount.username}")
-            acquireTokenAndConvertToBearer(msalAccount, isRefreshAttempt = true)
-        }
+        // Use the centralized AppRequiredScopes for refreshing tokens as well.
+        return acquireTokenAndConvertToBearer(msalAccount, isRefreshAttempt = true)
     }
 
     private suspend fun acquireTokenAndConvertToBearer(
@@ -91,8 +87,12 @@ class MicrosoftKtorTokenProvider @Inject constructor(
             .d("acquireTokenAndConvertToBearer for $operationType: account=${msalAccount.username}")
 
         try {
+            // Use the centralized RequiredScopes from MicrosoftScopeDefinitions
             val acquireTokenResult: AcquireTokenResult =
-                microsoftAuthManager.acquireTokenSilent(msalAccount, defaultGraphApiScopes)
+                microsoftAuthManager.acquireTokenSilent(
+                    msalAccount,
+                    MicrosoftScopeDefinitions.RequiredScopes
+                )
             Timber.tag(TAG)
                 .d("MSAL acquireTokenSilent result: ${acquireTokenResult::class.simpleName}")
 

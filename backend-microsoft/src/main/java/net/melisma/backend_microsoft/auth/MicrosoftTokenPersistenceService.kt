@@ -107,6 +107,7 @@ class MicrosoftTokenPersistenceService @Inject constructor(
                 clearOnlyUserData = false
             )
             if (removalResult is PersistenceResult.Failure<*>) {
+                @Suppress("UNCHECKED_CAST")
                 val failure = removalResult as PersistenceResult.Failure<PersistenceErrorType>
                 Timber.tag(TAG)
                     .w("Failed to remove pre-existing account for $accountManagerName during save: ${failure.errorType}, but proceeding with add.")
@@ -202,6 +203,7 @@ class MicrosoftTokenPersistenceService @Inject constructor(
                 when (val result = getPersistedAccount(androidAccount.name)) {
                     is PersistenceResult.Success -> persistedAccounts.add(result.data)
                     is PersistenceResult.Failure<*> -> {
+                        @Suppress("UNCHECKED_CAST")
                         val failure =
                             result as PersistenceResult.Failure<PersistenceErrorType> // Explicit cast
                         Timber.tag(TAG)

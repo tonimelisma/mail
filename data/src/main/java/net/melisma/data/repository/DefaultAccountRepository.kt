@@ -687,6 +687,7 @@ class DefaultAccountRepository @Inject constructor(
                     Timber.tag(TAG)
                         .d("GoogleAuthManager.requestReauthentication successful for $accountId. Updating local state.")
                 } else if (result is PersistenceResult.Failure<*>) {
+                    @Suppress("UNCHECKED_CAST")
                     val failure = result as PersistenceResult.Failure<GooglePersistenceErrorType>
                     Timber.tag(TAG).w(
                         "GoogleAuthManager.requestReauthentication failed for $accountId: ${failure.errorType}. Still marking for re-auth locally.",

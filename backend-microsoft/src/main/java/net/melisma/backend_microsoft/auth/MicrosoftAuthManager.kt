@@ -130,23 +130,10 @@ class MicrosoftAuthManager @Inject constructor(
 
     companion object {
         // All required scopes for the application
-        val MICROSOFT_SCOPES = listOf(
-            "User.Read",
-            "Mail.ReadWrite",
-            "Mail.Send",
-            "Calendars.ReadWrite",
-            "Contacts.ReadWrite",
-            "offline_access",
-            "openid",
-            "profile"
-        )
+        // Now sourced from MicrosoftScopeDefinitions
+        val MICROSOFT_SCOPES = MicrosoftScopeDefinitions.RequiredScopes
 
-        // Define minimum required scopes for basic functionality
-        val MINIMUM_REQUIRED_SCOPES = listOf(
-            "User.Read",
-            "Mail.Read",
-            "Mail.Send"
-        )
+        // MINIMUM_REQUIRED_SCOPES has been removed.
     }
 
     init {
@@ -245,7 +232,29 @@ class MicrosoftAuthManager @Inject constructor(
                         }..."
                     )
                     Timber.tag(TAG)
-                        .d("Granted scopes: ${authenticationResult.scope?.joinToString()}")
+                        .d("Granted scopes from MSAL: ${authenticationResult.scope?.joinToString()}")
+
+                    // Verify all requested scopes were granted
+                    val requestedScopesSet = scopes.toSet()
+                    val grantedScopesSet = authenticationResult.scope?.toSet() ?: emptySet()
+
+                    if (!grantedScopesSet.containsAll(requestedScopesSet)) {
+                        Timber.tag(TAG).w(
+                            "signInInteractive: Not all requested scopes were granted. Requested: $requestedScopesSet, Granted: $grantedScopesSet"
+                        )
+                        trySend(
+                            AuthenticationResultWrapper.Error(
+                                MsalClientException(
+                                    "declined_scopes", // Custom error code for declined/missing scopes
+                                    "Not all requested permissions were granted by the user."
+                                )
+                            )
+                        )
+                        close()
+                        return
+                    }
+
+                    Timber.tag(TAG).i("All requested scopes have been granted.")
 
                     externalScope.launch(ioDispatcher) { // Ensure persistence is on IO dispatcher
                         val displayNameFromClaims =
@@ -272,8 +281,13 @@ class MicrosoftAuthManager @Inject constructor(
                                 )
                             )
                         } else {
-                            Timber.tag(TAG)
-                                .e("Failed to save account info for ${authenticationResult.account.username}: ${(saveResult as PersistenceResult.Failure<PersistenceErrorType>).errorType}")
+                            @Suppress("UNCHECKED_CAST")
+                            val specificFailure =
+                                saveResult as PersistenceResult.Failure<PersistenceErrorType>
+                            Timber.tag(TAG).e(
+                                specificFailure.cause,
+                                "Failed to save account info for ${authenticationResult.account.username}: ${specificFailure.errorType}, Msg: ${specificFailure.message}"
+                            )
                             // Even if persistence fails, the MSAL auth succeeded.
                             // We might want to convey this specific error.
                             // For now, let's treat MSAL success as overall success but log persistence error.
@@ -441,6 +455,7 @@ class MicrosoftAuthManager @Inject constructor(
                                 removeAccountFromManager = true
                             )
                             if (clearResult is PersistenceResult.Failure<*>) {
+                                @Suppress("UNCHECKED_CAST")
                                 val failure =
                                     clearResult as PersistenceResult.Failure<PersistenceErrorType>
                                 Timber.tag(TAG).e(
@@ -479,6 +494,7 @@ class MicrosoftAuthManager @Inject constructor(
                                 removeAccountFromManager = true // Attempt full removal despite MSAL error
                             )
                             if (clearResult is PersistenceResult.Failure<*>) {
+                                @Suppress("UNCHECKED_CAST")
                                 val failure =
                                     clearResult as PersistenceResult.Failure<PersistenceErrorType>
                                 Timber.tag(TAG).e(
@@ -564,35 +580,29 @@ class MicrosoftAuthManager @Inject constructor(
             when (it) {
                 is PersistenceResult.Success -> {
                     val persisted = it.data
-                    if (persisted != null) {
-                        val msalAccount =
-                            getAccount(persisted.msalAccountId) // Fetch IAccount for ManagedMicrosoftAccount
-                        if (msalAccount != null) {
-                            PersistenceResult.Success(
-                                ManagedMicrosoftAccount.fromPersisted(
-                                    persisted,
-                                    msalAccount
-                                )
+                    val msalAccount =
+                        getAccount(persisted.msalAccountId) // Fetch IAccount for ManagedMicrosoftAccount
+                    if (msalAccount != null) {
+                        PersistenceResult.Success(
+                            ManagedMicrosoftAccount.fromPersisted(
+                                persisted,
+                                msalAccount
                             )
-                        } else {
-                            Timber.w(
-                                TAG,
-                                "Could not find MSAL IAccount for persisted account ${persisted.msalAccountId}"
-                            )
-                            PersistenceResult.Failure(
-                                PersistenceErrorType.ACCOUNT_NOT_FOUND,
-                                "MSAL IAccount not found for persisted data for ID: ${persisted.msalAccountId}"
-                            )
-                        }
+                        )
                     } else {
+                        Timber.w(
+                            TAG,
+                            "Could not find MSAL IAccount for persisted account ${persisted.msalAccountId}"
+                        )
                         PersistenceResult.Failure(
                             PersistenceErrorType.ACCOUNT_NOT_FOUND,
-                            "Persisted account data is null for ID: $accountId"
+                            "MSAL IAccount not found for persisted data for ID: ${persisted.msalAccountId}"
                         )
                     }
                 }
 
                 is PersistenceResult.Failure<*> -> {
+                    @Suppress("UNCHECKED_CAST")
                     val failure = it as PersistenceResult.Failure<PersistenceErrorType>
                     PersistenceResult.Failure(failure.errorType, failure.message, failure.cause)
                 }
