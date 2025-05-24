@@ -1,6 +1,7 @@
 package net.melisma.core_data.security
 
 import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import android.util.Log
@@ -72,7 +73,10 @@ class SecureEncryptionService @Inject constructor() {
     fun decrypt(encryptedData: String): String? {
         return try {
             // Get the key from keystore
-            val key = getKey() ?: return null
+            val key = getKey() ?: run {
+                Log.w(TAG, "Decryption failed: Key not found for alias $KEY_ALIAS")
+                return null
+            }
 
             // Get the raw bytes from the Base64 encoded string
             val encryptedBytes = Base64.decode(encryptedData, Base64.NO_WRAP)
@@ -93,8 +97,21 @@ class SecureEncryptionService @Inject constructor() {
 
             // Return decrypted string
             String(decryptedBytes, Charsets.UTF_8)
+        } catch (e: KeyPermanentlyInvalidatedException) {
+            Log.e(
+                TAG,
+                "Decryption failed due to KeyPermanentlyInvalidatedException for alias $KEY_ALIAS. Deleting key.",
+                e
+            )
+            try {
+                keyStore.deleteEntry(KEY_ALIAS)
+                Log.i(TAG, "Successfully deleted invalidated key for alias $KEY_ALIAS.")
+            } catch (deleteEx: Exception) {
+                Log.e(TAG, "Failed to delete invalidated key for alias $KEY_ALIAS.", deleteEx)
+            }
+            null
         } catch (e: Exception) {
-            Log.e(TAG, "Decryption failed", e)
+            Log.e(TAG, "Decryption failed for alias $KEY_ALIAS", e)
             null
         }
     }

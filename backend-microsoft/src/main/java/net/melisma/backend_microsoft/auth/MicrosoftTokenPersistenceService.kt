@@ -241,10 +241,18 @@ class MicrosoftTokenPersistenceService @Inject constructor(
                     PersistenceErrorType.DECRYPTION_FAILED,
                     "Failed to decrypt access token for $accountManagerName"
                 ).also {
-                    Timber.tag(TAG).e("Failed to decrypt access token for $accountManagerName")
+                    Timber.tag(TAG)
+                        .e("Failed to decrypt access token for $accountManagerName. Clearing stale token.")
+                    // Clear the stale token from AccountManager
+                    accountManager.setUserData(account, KEY_ACCESS_TOKEN, null)
                 }
             } catch (e: Exception) {
-                Timber.tag(TAG).e(e, "Decryption error for access token for $accountManagerName")
+                Timber.tag(TAG).e(
+                    e,
+                    "Decryption error for access token for $accountManagerName. Clearing stale token."
+                )
+                // Clear the stale token from AccountManager
+                accountManager.setUserData(account, KEY_ACCESS_TOKEN, null)
                 PersistenceResult.Failure<PersistenceErrorType>(
                     PersistenceErrorType.DECRYPTION_FAILED,
                     "Decryption error for access token for $accountManagerName",
@@ -277,10 +285,18 @@ class MicrosoftTokenPersistenceService @Inject constructor(
                     PersistenceErrorType.DECRYPTION_FAILED,
                     "Failed to decrypt ID token for $accountManagerName"
                 ).also {
-                    Timber.tag(TAG).e("Failed to decrypt ID token for $accountManagerName")
+                    Timber.tag(TAG)
+                        .e("Failed to decrypt ID token for $accountManagerName. Clearing stale token.")
+                    // Clear the stale token from AccountManager
+                    accountManager.setUserData(account, KEY_ID_TOKEN, null)
                 }
             } catch (e: Exception) {
-                Timber.tag(TAG).e(e, "Decryption error for ID token for $accountManagerName")
+                Timber.tag(TAG).e(
+                    e,
+                    "Decryption error for ID token for $accountManagerName. Clearing stale token."
+                )
+                // Clear the stale token from AccountManager
+                accountManager.setUserData(account, KEY_ID_TOKEN, null)
                 PersistenceResult.Failure<PersistenceErrorType>(
                     PersistenceErrorType.DECRYPTION_FAILED,
                     "Decryption error for ID token for $accountManagerName",

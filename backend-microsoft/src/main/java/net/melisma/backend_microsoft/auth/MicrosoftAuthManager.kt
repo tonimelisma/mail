@@ -9,6 +9,7 @@ package net.melisma.backend_microsoft.auth
 // import net.melisma.backend_microsoft.common.PersistenceResult // Old import
 
 // Model imports
+// MSAL Logger imports
 import android.app.Activity
 import android.content.Context
 import com.microsoft.identity.client.AcquireTokenParameters
@@ -16,8 +17,10 @@ import com.microsoft.identity.client.AcquireTokenSilentParameters
 import com.microsoft.identity.client.AuthenticationCallback
 import com.microsoft.identity.client.IAccount
 import com.microsoft.identity.client.IAuthenticationResult
+import com.microsoft.identity.client.ILoggerCallback
 import com.microsoft.identity.client.IMultipleAccountPublicClientApplication
 import com.microsoft.identity.client.IPublicClientApplication
+import com.microsoft.identity.client.Logger
 import com.microsoft.identity.client.PublicClientApplication
 import com.microsoft.identity.client.SilentAuthenticationCallback
 import com.microsoft.identity.client.exception.MsalClientException
@@ -139,6 +142,39 @@ class MicrosoftAuthManager @Inject constructor(
     init {
         Timber.tag(TAG).d("MicrosoftAuthManager created. Initialization will be triggered.")
         initializeMsalClient()
+        setupMsalLogger() // Call to setup MSAL logger
+    }
+
+    private fun setupMsalLogger() {
+        Logger.getInstance().setExternalLogger(object : ILoggerCallback {
+            override fun log(
+                tag: String?,
+                logLevel: Logger.LogLevel?,
+                message: String?,
+                containsPII: Boolean
+            ) {
+                // Use Timber for logging. You can customize the Timber tag or log level mapping.
+                val msalTag = "MSAL_$tag"
+                val logMessage = "ContainsPII: $containsPII - Message: $message"
+
+                when (logLevel) {
+                    Logger.LogLevel.ERROR -> Timber.tag(msalTag).e(logMessage)
+                    Logger.LogLevel.WARNING -> Timber.tag(msalTag).w(logMessage)
+                    Logger.LogLevel.INFO -> Timber.tag(msalTag).i(logMessage)
+                    Logger.LogLevel.VERBOSE -> Timber.tag(msalTag).v(logMessage)
+                    else -> Timber.tag(msalTag)
+                        .d(logMessage) // Default to debug for null or other levels
+                }
+            }
+        })
+        // Enable PII logging - be careful with this in production apps.
+        // Only enable PII if you are legally allowed to and you handle the data responsibly.
+        Logger.getInstance().setEnablePII(true)
+        Timber.tag(TAG).i("MSAL PII logging enabled. Ensure compliance with privacy regulations.")
+
+        // Enable MSAL logs to also go to Logcat (in addition to the external logger)
+        Logger.getInstance().setEnableLogcatLog(true)
+        Timber.tag(TAG).i("MSAL Logcat logging enabled.")
     }
 
     private fun initializeMsalClient() {
@@ -322,6 +358,14 @@ class MicrosoftAuthManager @Inject constructor(
             }).build()
 
         Timber.tag(TAG).d("signInInteractive: Calling currentApp.acquireToken with parameters.")
+        // Add detailed logging before acquireToken call
+        Timber.tag(TAG).d(
+            "signInInteractive: Pre-acquireToken details - Activity: ${activity.localClassName}, isFinishing: ${activity.isFinishing}, isChangingConfigurations: ${activity.isChangingConfigurations}"
+        )
+        Timber.tag(TAG).d("signInInteractive: Scopes for acquireToken: $scopes")
+        // It might be verbose, but logging parts of acquireTokenParameters could be useful if it had more configurable parts exposed
+        // For now, activity state and scopes are the most relevant custom inputs here.
+
         currentApp.acquireToken(acquireTokenParameters)
 
         awaitClose {

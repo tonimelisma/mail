@@ -453,43 +453,38 @@ class GoogleAuthManager @Inject constructor(
             try {
                 val refreshedTokenResponse =
                     appAuthHelperService.refreshAccessToken(currentAuthState)
-                if (refreshedTokenResponse != null) {
-                    Log.d(TAG, "Token refreshed successfully for $accountId.")
-                    currentAuthState.update(refreshedTokenResponse, null) // Update in place
-                    val updatedAuthState = currentAuthState // Use the modified currentAuthState
-                    when (val updateResult =
-                        tokenPersistenceService.updateAuthState(accountId, updatedAuthState)) {
-                        is PersistenceResult.Success -> {
-                            Log.d(TAG, "Updated AuthState persisted for $accountId.")
-                            refreshedTokenResponse.accessToken?.let {
-                                return@withContext GoogleGetTokenResult.Success(it)
-                            } ?: run {
-                                Log.e(
-                                    TAG,
-                                    "Refreshed token response has null access token for $accountId."
-                                )
-                                return@withContext GoogleGetTokenResult.Error("Refreshed token is null for $accountId.")
-                            }
-                        }
-
-                        is PersistenceResult.Failure<*> -> {
-                            @Suppress("UNCHECKED_CAST")
-                            val failure =
-                                updateResult as PersistenceResult.Failure<GooglePersistenceErrorType>
+                Log.d(TAG, "Token refreshed successfully for $accountId.")
+                currentAuthState.update(refreshedTokenResponse, null) // Update in place
+                val updatedAuthState = currentAuthState // Use the modified currentAuthState
+                when (val updateResult =
+                    tokenPersistenceService.updateAuthState(accountId, updatedAuthState)) {
+                    is PersistenceResult.Success -> {
+                        Log.d(TAG, "Updated AuthState persisted for $accountId.")
+                        refreshedTokenResponse.accessToken?.let {
+                            return@withContext GoogleGetTokenResult.Success(it)
+                        } ?: run {
                             Log.e(
                                 TAG,
-                                "Failed to persist updated AuthState for $accountId: ${failure.errorType}",
-                                failure.cause
+                                "Refreshed token response has null access token for $accountId."
                             )
-                            return@withContext mapPersistenceErrorToGetTokenError(
-                                failure,
-                                "Failed to save refreshed token"
-                            )
+                            return@withContext GoogleGetTokenResult.Error("Refreshed token is null for $accountId.")
                         }
                     }
-                } else {
-                    Log.e(TAG, "Token refresh returned null response for $accountId.")
-                    return@withContext GoogleGetTokenResult.Error("Token refresh failed for $accountId (null response).")
+
+                    is PersistenceResult.Failure<*> -> {
+                        @Suppress("UNCHECKED_CAST")
+                        val failure =
+                            updateResult as PersistenceResult.Failure<GooglePersistenceErrorType>
+                        Log.e(
+                            TAG,
+                            "Failed to persist updated AuthState for $accountId: ${failure.errorType}",
+                            failure.cause
+                        )
+                        return@withContext mapPersistenceErrorToGetTokenError(
+                            failure,
+                            "Failed to save refreshed token"
+                        )
+                    }
                 }
             } catch (e: AuthorizationException) {
                 Log.e(
