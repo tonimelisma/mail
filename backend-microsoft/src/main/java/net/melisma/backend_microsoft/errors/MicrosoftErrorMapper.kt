@@ -2,6 +2,7 @@ package net.melisma.backend_microsoft.errors
 
 import android.util.Log
 import com.microsoft.identity.client.exception.MsalClientException
+import com.microsoft.identity.client.exception.MsalDeclinedScopeException
 import com.microsoft.identity.client.exception.MsalException
 import com.microsoft.identity.client.exception.MsalServiceException
 import com.microsoft.identity.client.exception.MsalUiRequiredException
@@ -88,6 +89,12 @@ class MicrosoftErrorMapper @Inject constructor() : ErrorMapperService {
             is MsalUserCancelException -> MappedErrorDetails(
                 exception.message ?: "Operation cancelled by user.",
                 GenericAuthErrorType.OPERATION_CANCELLED,
+                errorCode
+            )
+
+            is MsalDeclinedScopeException -> MappedErrorDetails(
+                "Please accept all permissions, including offline access. This is required for the app to function properly.",
+                GenericAuthErrorType.AUTHENTICATION_FAILED,
                 errorCode
             )
 

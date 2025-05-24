@@ -72,15 +72,8 @@ fun SettingsScreen(
     // Observe toast message changes (remains the same)
     LaunchedEffect(state.toastMessage) {
         state.toastMessage?.let { message ->
-            // Added more specific check based on repository messages if needed,
-            // but checking for keywords is okay for now.
-            if (message.contains("Account added") || message.contains("Account removed") || message.contains(
-                    "Error"
-                )
-            ) {
-                scope.launch { snackbarHostState.showSnackbar(message) }
-                viewModel.toastMessageShown()
-            }
+            scope.launch { snackbarHostState.showSnackbar(message) }
+            viewModel.toastMessageShown()
         }
     }
 

@@ -95,7 +95,7 @@ object BackendGoogleModule {
             // Install the Auth plugin
             install(Auth) {
                 bearer {
-                    loadTokens { credentials ->
+                    loadTokens {
                         Timber.tag("KtorAuth").d("Google Auth: loadTokens called")
                         try {
                             googleKtorTokenProvider.getBearerTokens()
@@ -109,10 +109,10 @@ object BackendGoogleModule {
                             null
                         }
                     }
-                    refreshTokens { oldTokens ->
+                    refreshTokens {
                         Timber.tag("KtorAuth").d("Google Auth: refreshTokens called")
                         try {
-                            googleKtorTokenProvider.refreshBearerTokens(oldTokens)
+                            googleKtorTokenProvider.refreshBearerTokens(this.oldTokens)
                         } catch (e: NeedsReauthenticationException) {
                             Timber.tag("KtorAuth")
                                 .w(e, "Google Auth: Needs re-authentication during refreshTokens.")

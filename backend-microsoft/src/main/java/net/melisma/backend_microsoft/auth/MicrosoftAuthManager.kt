@@ -129,16 +129,24 @@ class MicrosoftAuthManager @Inject constructor(
     // private val accountManager: AccountManager by lazy { AccountManager.get(context) } // Moved to persistence service
 
     companion object {
-        // Scopes remain relevant for this manager's API
+        // All required scopes for the application
         val MICROSOFT_SCOPES = listOf(
             "User.Read",
-            "Mail.Read",
-            "offline_access",
+            "Mail.ReadWrite",
             "Mail.Send",
             "Calendars.ReadWrite",
-            "Contacts.ReadWrite"
+            "Contacts.ReadWrite",
+            "offline_access",
+            "openid",
+            "profile"
         )
 
+        // Define minimum required scopes for basic functionality
+        val MINIMUM_REQUIRED_SCOPES = listOf(
+            "User.Read",
+            "Mail.Read",
+            "Mail.Send"
+        )
     }
 
     init {
@@ -236,6 +244,9 @@ class MicrosoftAuthManager @Inject constructor(
                             authenticationResult.account.id?.take(5)
                         }..."
                     )
+                    Timber.tag(TAG)
+                        .d("Granted scopes: ${authenticationResult.scope?.joinToString()}")
+
                     externalScope.launch(ioDispatcher) { // Ensure persistence is on IO dispatcher
                         val displayNameFromClaims =
                             authenticationResult.account.claims?.get("name") as? String
@@ -260,7 +271,7 @@ class MicrosoftAuthManager @Inject constructor(
                                     authenticationResult
                                 )
                             )
-                        } else if (saveResult is PersistenceResult.Failure<*>) {
+                        } else {
                             Timber.tag(TAG)
                                 .e("Failed to save account info for ${authenticationResult.account.username}: ${(saveResult as PersistenceResult.Failure<PersistenceErrorType>).errorType}")
                             // Even if persistence fails, the MSAL auth succeeded.
@@ -276,16 +287,17 @@ class MicrosoftAuthManager @Inject constructor(
                                     authenticationResult
                                 )
                             )
-                            // Or, if persistence is critical for sign-in to be "Success":
-                            // trySend(AuthenticationResultWrapper.Error(MsalClientException(MsalClientException.IO_ERROR, "Failed to persist account.")))
                         }
                     }
                 }
 
                 override fun onError(exception: MsalException) {
                     Timber.tag(TAG).w(exception, "signInInteractive: Error")
+                    Timber.tag(TAG)
+                        .w("MSAL error code: ${exception.errorCode}, message: ${exception.message}")
+                    // Handle MsalDeclinedScopeException here if needed (custom logging or mapping)
                     trySend(AuthenticationResultWrapper.Error(exception))
-                    close(exception) // Close the flow with the error
+                    close() // Close the flow without propagating the exception
                 }
 
                 override fun onCancel() {

@@ -125,7 +125,7 @@ class GoogleAuthManager @Inject constructor(
         return withContext(ioDispatcher) {
             try {
                 // Using a common redirect URI pattern. This should ideally be configured (e.g. BuildConfig or string resource)
-                val redirectUri = Uri.parse("net.melisma.android:/oauth2redirect")
+                val redirectUri = Uri.parse("net.melisma.mail:/oauth2redirect")
 
                 // GOOGLE_ANDROID_CLIENT_ID must be available in BuildConfig of this module or provided via DI
                 val actualClientId = BuildConfig.GOOGLE_ANDROID_CLIENT_ID

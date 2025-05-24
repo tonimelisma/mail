@@ -4,6 +4,7 @@ package net.melisma.backend_microsoft.repository
 
 import android.app.Activity
 import android.content.Intent
+import com.microsoft.identity.client.exception.MsalDeclinedScopeException
 import com.microsoft.identity.client.exception.MsalUiRequiredException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -213,20 +214,38 @@ class MicrosoftAccountRepository @Inject constructor(
 
                         GenericAuthResult.Success(coreAccount)
                     }
-
                     is AuthenticationResultWrapper.Error -> {
-                        val isUiRequired = msalResult.exception is MsalUiRequiredException
-                        val mappedDetails =
-                            microsoftErrorMapper.mapExceptionToErrorDetails(msalResult.exception)
-                        GenericAuthResult.Error(
-                            message = mappedDetails.message,
-                            type = mappedDetails.type,
-                            providerSpecificErrorCode = mappedDetails.providerSpecificErrorCode,
-                            msalRequiresInteractiveSignIn = isUiRequired
-                        )
+                        Timber.tag(TAG).w("MSAL error during sign-in: ${msalResult.exception}")
+                        val errorCode = msalResult.exception.errorCode
+                        val errorMessage = msalResult.exception.message
+                        Timber.tag(TAG).w("MSAL error code: $errorCode, message: $errorMessage")
+
+                        // Handle specific error codes
+                        when (msalResult.exception) {
+                            is MsalDeclinedScopeException -> {
+                                GenericAuthResult.Error(
+                                    message = "Please accept all permissions, including offline access. This is required for the app to function properly.",
+                                    type = GenericAuthErrorType.AUTHENTICATION_FAILED
+                                )
+                            }
+
+                            else -> {
+                                val mappedError =
+                                    microsoftErrorMapper.mapExceptionToErrorDetails(msalResult.exception)
+                                GenericAuthResult.Error(
+                                    message = mappedError.message,
+                                    type = mappedError.type
+                                )
+                            }
+                        }
                     }
 
-                    is AuthenticationResultWrapper.Cancelled -> GenericAuthResult.Cancelled
+                    is AuthenticationResultWrapper.Cancelled -> {
+                        GenericAuthResult.Error(
+                            message = "Sign-in cancelled by user",
+                            type = GenericAuthErrorType.OPERATION_CANCELLED
+                        )
+                    }
                 }
             }
     }

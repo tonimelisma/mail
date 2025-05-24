@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import net.melisma.backend_google.auth.ActiveGoogleAccountHolder
 import net.melisma.backend_google.auth.GoogleAuthManager
@@ -685,10 +686,11 @@ class DefaultAccountRepository @Inject constructor(
                 if (result is PersistenceResult.Success) {
                     Timber.tag(TAG)
                         .d("GoogleAuthManager.requestReauthentication successful for $accountId. Updating local state.")
-                } else if (result is PersistenceResult.Failure) {
+                } else if (result is PersistenceResult.Failure<*>) {
+                    val failure = result as PersistenceResult.Failure<GooglePersistenceErrorType>
                     Timber.tag(TAG).w(
-                        "GoogleAuthManager.requestReauthentication failed for $accountId: ${result.errorType}. Still marking for re-auth locally.",
-                        result.cause
+                        "GoogleAuthManager.requestReauthentication failed for $accountId: ${failure.errorType}. Still marking for re-auth locally.",
+                        failure.cause
                     )
                 }
 
@@ -709,7 +711,7 @@ class DefaultAccountRepository @Inject constructor(
                 Timber.tag(TAG)
                     .w("Could not find Google account with ID $accountId to mark for re-authentication.")
             }
-        } else if (providerType == Account.PROVIDER_TYPE_MICROSOFT) {
+        } else if (providerType == Account.PROVIDER_TYPE_MS) {
             // Delegate to MicrosoftAccountRepository, assuming it has a similar method
             // This part of the method needs to be implemented or adjusted based on MicrosoftAccountRepository's capabilities.
             // For now, just logging. If MicrosoftAccountRepository updates its list internally and DefaultAccountRepository observes it,

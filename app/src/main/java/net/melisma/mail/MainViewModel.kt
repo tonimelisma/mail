@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import net.melisma.core_data.model.Account
 import net.melisma.core_data.model.FolderFetchState
+import net.melisma.core_data.model.GenericAuthErrorType
 import net.melisma.core_data.model.GenericAuthResult
 import net.melisma.core_data.model.GenericSignOutResult
 import net.melisma.core_data.model.MailFolder
@@ -340,7 +341,12 @@ class MainViewModel @Inject constructor(
 
                     when (result) {
                         is GenericAuthResult.Success -> {
-                            _uiState.update { it.copy(toastMessage = "Signed in as ${result.account.username}") }
+                            val message = if (result.account.needsReauthentication) {
+                                "Signed in as ${result.account.username} (Some permissions were declined. You may need to sign in again later.)"
+                            } else {
+                                "Signed in as ${result.account.username}"
+                            }
+                            _uiState.update { it.copy(toastMessage = message) }
                             Timber.tag(TAG).i("Sign-in success for ${result.account.username}")
                         }
                         is GenericAuthResult.UiActionRequired -> {
@@ -348,20 +354,37 @@ class MainViewModel @Inject constructor(
                             Timber.tag(TAG).i("Sign-in UI Action Required. Intent posted.")
                         }
                         is GenericAuthResult.Error -> {
-                            val errorMessage = if (result.msalRequiresInteractiveSignIn) {
-                                Timber.tag(TAG).w("Sign-in error (MSAL): Interactive sign-in required. Message: ${result.message}")
-                                "Sign-in failed: Please try signing in again. (Interactive action needed)" // Or a more specific resource string
-                            } else {
-                                Timber.tag(TAG).e("Sign-in error: ${result.message}, type: ${result.type}")
-                                "Error: ${result.message}"
+                            val errorMessage = when (result.type) {
+                                GenericAuthErrorType.MSAL_INTERACTIVE_AUTH_REQUIRED -> {
+                                    Timber.tag(TAG)
+                                        .w("Sign-in error (MSAL): Interactive sign-in required. Message: ${result.message}")
+                                    "Sign-in failed: Please try signing in again. (Interactive action needed)"
+                                }
+
+                                GenericAuthErrorType.OPERATION_CANCELLED -> {
+                                    Timber.tag(TAG).i("Sign-in cancelled by user")
+                                    "Sign-in cancelled"
+                                }
+
+                                GenericAuthErrorType.AUTHENTICATION_FAILED -> {
+                                    Timber.tag(TAG)
+                                        .e("Sign-in error: ${result.message}, type: ${result.type}")
+                                    result.message
+                                }
+
+                                else -> {
+                                    Timber.tag(TAG)
+                                        .e("Sign-in error: ${result.message}, type: ${result.type}")
+                                    "Error: ${result.message}"
+                                }
                             }
                             _uiState.update { ui ->
                                 ui.copy(toastMessage = errorMessage)
                             }
                         }
                         is GenericAuthResult.Cancelled -> {
-                            _uiState.update { it.copy(toastMessage = "Sign-in cancelled.") }
-                            Timber.tag(TAG).i("Sign-in cancelled by user.")
+                            Timber.tag(TAG).i("Sign-in cancelled (GenericAuthResult.Cancelled)")
+                            _uiState.update { it.copy(toastMessage = "Sign-in cancelled") }
                         }
                     }
                 }

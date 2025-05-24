@@ -37,7 +37,10 @@ enum class GenericAuthErrorType {
     INVALID_REQUEST,
     OPERATION_CANCELLED, // Explicit cancellation by user
     MSAL_INTERACTIVE_AUTH_REQUIRED, // Specific for MsalUiRequiredException
-    UNKNOWN_ERROR
+    UNKNOWN_ERROR,
+    ACCOUNT_NOT_FOUND_OR_INVALID, // Added for Google/MS error mapping
+    SECURITY_ERROR, // Added for encryption/decryption errors
+    STORAGE_ERROR // Added for storage/persistence errors
 }
 
 sealed class GenericSignOutResult {
