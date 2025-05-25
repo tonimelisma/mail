@@ -23,4 +23,12 @@ interface ThreadRepository {
      * Refreshes the threads for the currently set target folder and account.
      */
     suspend fun refreshThreads(activity: Activity? = null)
+
+    suspend fun markThreadRead(account: Account, threadId: String, isRead: Boolean): Result<Unit>
+    suspend fun deleteThread(account: Account, threadId: String): Result<Unit>
+    suspend fun moveThread(
+        account: Account,
+        threadId: String,
+        destinationFolderId: String
+    ): Result<Unit>
 } 

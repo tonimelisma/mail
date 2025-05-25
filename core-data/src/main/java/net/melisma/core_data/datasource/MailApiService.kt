@@ -1,5 +1,6 @@
 package net.melisma.core_data.datasource
 
+import kotlinx.coroutines.flow.Flow
 import net.melisma.core_data.model.MailFolder
 import net.melisma.core_data.model.Message
 
@@ -33,8 +34,33 @@ interface MailApiService {
     suspend fun getMessagesForFolder(
         folderId: String,
         selectFields: List<String> = emptyList(),
-        maxResults: Int = 25
+        maxResults: Int = 20
     ): Result<List<Message>>
+
+    /**
+     * Fetches messages for a specific thread/conversation.
+     *
+     * @param threadId The ID of the thread (for Gmail) or conversation (for Outlook).
+     * @param folderId The ID of the folder in which the thread is primarily located or being viewed.
+     *                 This can help scope the search for providers like MS Graph.
+     * @param selectFields Optional list of fields to include in the response
+     * @param maxResults Maximum number of messages to return (pagination limit)
+     * @return Result containing the list of [Message] objects in the thread/conversation or an error.
+     */
+    suspend fun getMessagesForThread(
+        threadId: String,
+        folderId: String,
+        selectFields: List<String> = emptyList(),
+        maxResults: Int = 100
+    ): Result<List<Message>>
+
+    /**
+     * Fetches message details for a specific message.
+     *
+     * @param messageId The ID of the message to fetch details for
+     * @return Flow containing the message details or null if the message is not found
+     */
+    suspend fun getMessageDetails(messageId: String): Flow<Message?>
 
     /**
      * Marks a message as read or unread.
@@ -46,7 +72,7 @@ interface MailApiService {
     suspend fun markMessageRead(
         messageId: String,
         isRead: Boolean
-    ): Result<Boolean>
+    ): Result<Unit>
 
     /**
      * Deletes a message (moves it to trash/deleted items folder).
@@ -56,29 +82,57 @@ interface MailApiService {
      */
     suspend fun deleteMessage(
         messageId: String
-    ): Result<Boolean>
+    ): Result<Unit>
 
     /**
      * Moves a message to a different folder.
      *
      * @param messageId The ID of the message to move
-     * @param targetFolderId The ID of the destination folder
+     * @param currentFolderId The ID of the current folder
+     * @param destinationFolderId The ID of the destination folder
      * @return Result indicating success or failure
      */
     suspend fun moveMessage(
         messageId: String,
-        targetFolderId: String
-    ): Result<Boolean>
+        currentFolderId: String,
+        destinationFolderId: String
+    ): Result<Unit>
 
     /**
-     * Fetches all messages belonging to a specific thread/conversation.
+     * Marks all messages in a thread as read or unread.
      *
-     * @param threadId The ID of the thread (for Gmail) or conversation (for Outlook).
-     * @param folderId The ID of the folder in which the thread is primarily located or being viewed.
-     *                 This can help scope the search for providers like MS Graph.
-     * @return Result containing the list of [Message] objects in the thread/conversation or an error.
+     * @param threadId The ID of the thread to mark messages in
+     * @param isRead Whether the messages should be marked as read (true) or unread (false)
+     * @return Result indicating success or failure
      */
-    suspend fun getMessagesForThread(threadId: String, folderId: String): Result<List<Message>>
+    suspend fun markThreadRead(
+        threadId: String,
+        isRead: Boolean
+    ): Result<Unit>
+
+    /**
+     * Deletes all messages in a thread.
+     *
+     * @param threadId The ID of the thread to delete messages from
+     * @return Result indicating success or failure
+     */
+    suspend fun deleteThread(
+        threadId: String
+    ): Result<Unit>
+
+    /**
+     * Moves all messages in a thread to a different folder.
+     *
+     * @param threadId The ID of the thread to move messages from
+     * @param currentFolderId The ID of the current folder
+     * @param destinationFolderId The ID of the destination folder
+     * @return Result indicating success or failure
+     */
+    suspend fun moveThread(
+        threadId: String,
+        currentFolderId: String,
+        destinationFolderId: String
+    ): Result<Unit>
 
     // Future methods to consider:
     // - getMessageContent(messageId) - For fetching full message content

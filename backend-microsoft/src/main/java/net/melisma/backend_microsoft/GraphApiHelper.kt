@@ -4,15 +4,16 @@ import android.util.Log
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.accept
-import io.ktor.client.request.delete
 import io.ktor.client.request.get
 import io.ktor.client.request.patch
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
-import io.ktor.http.ContentType.Application.Json
+import io.ktor.http.ContentType
 import io.ktor.http.isSuccess
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.buildJsonObject
@@ -107,7 +108,7 @@ class GraphApiHelper @Inject constructor(
                     // The API might return it by default for some folders.
                     parameters.append("\$select", "id,displayName,totalItemCount,unreadItemCount")
                 }
-                accept(Json)
+                accept(ContentType.Application.Json)
             }
 
             if (response.status.isSuccess()) {
@@ -257,7 +258,7 @@ class GraphApiHelper @Inject constructor(
                         parameters.append("\$top", maxResults.toString())
                         parameters.append("\$orderby", "receivedDateTime desc")
                     }
-                    accept(Json)
+                    accept(ContentType.Application.Json)
                 }
 
             if (response.status.isSuccess()) {
@@ -352,51 +353,50 @@ class GraphApiHelper @Inject constructor(
         return null
     }
 
-    override suspend fun markMessageRead(
-        messageId: String,
-        isRead: Boolean
-    ): Result<Boolean> {
+    override suspend fun markMessageRead(messageId: String, isRead: Boolean): Result<Unit> {
+        Log.d(TAG, "Marking message $messageId as isRead=$isRead")
         return try {
-            Log.d(TAG, "Marking message $messageId as ${if (isRead) "read" else "unread"}")
-            val endpoint = "$MS_GRAPH_ROOT_ENDPOINT/me/messages/$messageId"
-            val requestBody = buildJsonObject { put("isRead", isRead) }
-            val response = httpClient.patch(endpoint) {
-                accept(Json)
-                setBody(requestBody)
+            val requestBody = buildJsonObject {
+                put("isRead", isRead)
             }
+            // Simplest possible Ktor PATCH with setBody
+            val response: HttpResponse =
+                httpClient.patch("$MS_GRAPH_ROOT_ENDPOINT/me/messages/$messageId") {
+                setBody(requestBody)
+                    // NO explicit contentType(), headers{}, or accept() here.
+                    // Relying entirely on ContentNegotiation plugin for Content-Type
+                    // and defaultRequest for Accept if set at client level.
+            }
+
             if (response.status.isSuccess()) {
-                Log.d(TAG, "Successfully marked message $messageId as ${if (isRead) "read" else "unread"}")
-                Result.success(true)
+                Log.d(TAG, "Successfully marked message $messageId as isRead=$isRead")
+                Result.success(Unit)
             } else {
                 val errorBody = response.bodyAsText()
-                Log.e(
-                    TAG,
-                    "Error marking message: ${response.status} - Error details in API response."
-                )
+                Log.e(TAG, "Error marking message $messageId: ${response.status} - $errorBody")
                 Result.failure(errorMapper.mapHttpError(response.status.value, errorBody))
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Exception marking message $messageId as ${if (isRead) "read" else "unread"}", e)
+            Log.e(TAG, "Exception marking message $messageId", e)
             Result.failure(errorMapper.mapExceptionToError(e))
         }
     }
 
-    override suspend fun deleteMessage(
-        messageId: String
-    ): Result<Boolean> {
+    override suspend fun deleteMessage(messageId: String): Result<Unit> {
+        Log.d(TAG, "Deleting message $messageId (moving to deleteditems)")
         return try {
-            Log.d(TAG, "Deleting message $messageId")
-            val endpoint = "$MS_GRAPH_ROOT_ENDPOINT/me/messages/$messageId"
-            val response = httpClient.delete(endpoint)
-            if (response.status.isSuccess()) {
-                Log.d(TAG, "Successfully deleted message $messageId")
-                Result.success(true)
+            val response: HttpResponse =
+                httpClient.post("$MS_GRAPH_ROOT_ENDPOINT/me/messages/$messageId/move") {
+                    setBody(buildJsonObject { put("destinationId", "deleteditems") })
+                    // NO explicit contentType(), headers{}, or accept() here.
+                    accept(ContentType.Application.Json) // Keeping accept for now, as it's separate from Content-Type for body
+                }
+            if (response.status.isSuccess()) { // isSuccess covers 2xx
+                Log.d(TAG, "Successfully deleted (moved to deleteditems) message $messageId")
+                Result.success(Unit)
             } else {
                 val errorBody = response.bodyAsText()
-                Log.e(
-                    TAG,
-                    "Error deleting message: ${response.status} - Error details in API response."
-                )
+                Log.e(TAG, "Error deleting message $messageId: ${response.status} - $errorBody")
                 Result.failure(errorMapper.mapHttpError(response.status.value, errorBody))
             }
         } catch (e: Exception) {
@@ -407,56 +407,73 @@ class GraphApiHelper @Inject constructor(
 
     override suspend fun moveMessage(
         messageId: String,
-        targetFolderId: String
-    ): Result<Boolean> {
+        currentFolderId: String,
+        destinationFolderId: String
+    ): Result<Unit> {
+        Log.d(TAG, "Moving message $messageId from $currentFolderId to $destinationFolderId")
         return try {
-            Log.d(TAG, "Moving message $messageId to folder $targetFolderId")
-            val endpoint = "$MS_GRAPH_ROOT_ENDPOINT/me/messages/$messageId/move"
-            val requestBody = buildJsonObject { put("destinationId", targetFolderId) }
-            val response = httpClient.post(endpoint) {
-                accept(Json)
-                setBody(requestBody)
+            val requestBody = buildJsonObject {
+                put("destinationId", destinationFolderId)
             }
-            if (response.status.isSuccess()) {
-                Log.d(TAG, "Successfully moved message $messageId to folder $targetFolderId")
-                Result.success(true)
+            val response: HttpResponse =
+                httpClient.post("$MS_GRAPH_ROOT_ENDPOINT/me/messages/$messageId/move") {
+                setBody(requestBody)
+                    // NO explicit contentType(), headers{}, or accept() here.
+                    accept(ContentType.Application.Json) // Keeping accept for now
+            }
+
+            if (response.status.isSuccess()) { // Graph move returns 201 Created on success
+                Log.d(TAG, "Successfully moved message $messageId to $destinationFolderId")
+                Result.success(Unit)
             } else {
                 val errorBody = response.bodyAsText()
-                Log.e(
-                    TAG,
-                    "Error moving message: ${response.status} - Error details in API response."
-                )
+                Log.e(TAG, "Error moving message $messageId: ${response.status} - $errorBody")
                 Result.failure(errorMapper.mapHttpError(response.status.value, errorBody))
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Exception moving message $messageId to folder $targetFolderId", e)
+            Log.e(TAG, "Exception moving message $messageId", e)
             Result.failure(errorMapper.mapExceptionToError(e))
         }
     }
 
     override suspend fun getMessagesForThread(
         threadId: String,
-        folderId: String // This parameter will be ignored for this specific Graph API call
+        folderId: String, // This parameter is used for logging context but ignored for Graph API endpoint
+        selectFields: List<String>, // Removed default value
+        maxResults: Int // Removed default value
     ): Result<List<Message>> {
         Log.d(
             TAG,
-            "GraphApiHelper: getMessagesForThread (Outlook) called for conversationId: $threadId. FolderId '$folderId' is ignored for global conversation fetch."
+            "GraphApiHelper: getMessagesForThread (Outlook) called for conversationId: $threadId. FolderId '$folderId' (context). MaxResults: $maxResults. SelectFields: $selectFields"
         )
         return try {
-            // Query the /me/messages endpoint and filter by conversationId for true cross-folder threading
+            val defaultRequiredFields = listOf(
+                "id",
+                "conversationId",
+                "receivedDateTime",
+                "sentDateTime",
+                "subject",
+                "bodyPreview",
+                "sender",
+                "from",
+                "isRead",
+                "parentFolderId"
+            )
+            val effectiveSelectFields =
+                (defaultRequiredFields + selectFields).distinct().joinToString(",")
+
             val response: HttpResponse =
-                httpClient.get("$MS_GRAPH_ROOT_ENDPOINT/me/messages") { // Changed from /me/mailFolders/$folderId/messages
+                httpClient.get("$MS_GRAPH_ROOT_ENDPOINT/me/messages") {
                 url {
                     parameters.append("\$filter", "conversationId eq '$threadId'")
+                    parameters.append("\$select", effectiveSelectFields)
+                    parameters.append("\$top", maxResults.toString())
                     parameters.append(
-                        "\$select",
-                        "id,conversationId,receivedDateTime,sentDateTime,subject,bodyPreview,sender,from,toRecipients,ccRecipients,bccRecipients,isRead,parentFolderId,hasAttachments,importance,inferenceClassification,internetMessageId,isDraft,isReadReceiptRequested,replyTo,flag"
-                    )
-                    parameters.append(
-                        "\$top",
-                        "100"
-                    ) // Max messages per conversation; consider pagination if needed for >100
+                        "\$orderby",
+                        "receivedDateTime asc"
+                    ) // Threads usually viewed oldest to newest
                 }
+                    // No accept(ContentType.Application.Json) here, assuming defaultRequest or ContentNegotiation handles it
             }
 
             if (response.status.isSuccess()) {
@@ -481,4 +498,233 @@ class GraphApiHelper @Inject constructor(
             Result.failure(errorMapper.mapExceptionToError(e))
         }
     }
+
+    // Added missing getMessageDetails implementation
+    override suspend fun getMessageDetails(messageId: String): Flow<Message?> = flow {
+        Log.d(TAG, "Fetching details for message ID: $messageId")
+        try {
+            val response: HttpResponse =
+                httpClient.get("$MS_GRAPH_ROOT_ENDPOINT/me/messages/$messageId") {
+                    url {
+                        parameters.append(
+                            "\$select",
+                            "id,conversationId,receivedDateTime,sentDateTime,subject,bodyPreview,sender,from,isRead,body"
+                        ) // Assuming 'body' is desired for details
+                    }
+                    // accept(ContentType.Application.Json) // Assuming defaultRequest or ContentNegotiation handles it
+                }
+
+            if (response.status.isSuccess()) {
+                val graphMessage =
+                    response.body<GraphMessage>() // Assuming GraphMessage can handle the 'body' field if present
+                val mappedMessage =
+                    mapGraphMessageToMessage(graphMessage) // mapGraphMessageToMessage needs to handle potential full body
+                // TODO: Enhance mapGraphMessageToMessage and core Message model if full body needs to be stored and propagated.
+                // For now, it will map based on existing fields.
+                emit(mappedMessage)
+            } else {
+                val errorBody = response.bodyAsText()
+                Log.e(
+                    TAG,
+                    "Error fetching message details for $messageId: ${response.status} - $errorBody"
+                )
+                emit(null)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception fetching message details for $messageId", e)
+            emit(null) 
+        }
+    }
+
+    // Start of added Thread operations
+    override suspend fun markThreadRead(threadId: String, isRead: Boolean): Result<Unit> {
+        Log.d(TAG, "Attempting to mark all messages in conversation $threadId as isRead=$isRead")
+        // Microsoft Graph does not have a direct "mark conversation as read" endpoint.
+        // This typically requires fetching all messages in the conversation and marking them individually or in batches.
+        // For this stub, we'll mimic a single conceptual operation, knowing it's more complex underneath.
+        // This is a placeholder to satisfy the interface and for basic testing.
+        // Actual implementation would involve logic similar to getMessagesForThread and then batching markMessageRead calls.
+
+        // Simulate a conceptual PATCH request to the thread (this endpoint doesn't actually exist for Graph threads)
+        // This is primarily to test if Ktor DSL for PATCH + setBody works without explicit Content-Type here.
+        return try {
+            buildJsonObject { put("isRead", isRead) } // Example body
+            // Using a placeholder endpoint for testing Ktor call structure, not a real Graph API endpoint for threads
+            "$MS_GRAPH_ROOT_ENDPOINT/me/mailFolders/inbox/messages?\$filter=conversationId eq '$threadId'" // Escaped $filter
+
+            // The following is a conceptual test of httpClient.patch with setBody
+            // It will likely fail at runtime if not a valid PATCH endpoint or if body is not right for such an endpoint.
+            // The goal here is to ensure it COMPILES without Ktor DSL unresolved reference errors.
+            Log.w(
+                TAG,
+                "markThreadRead: Using a conceptual PATCH for conversation $threadId. THIS IS A STUB AND WILL LIKELY FAIL AT RUNTIME IF ENDPOINT ISN'T CORRECT FOR PATCH."
+            )
+
+            // For Graph, one would typically fetch messages in the thread and mark them individually.
+            // This simplified call is a placeholder.
+            // Let's assume for now we get all messages and mark them one by one.
+            val messagesResult = getMessagesForThread(
+                threadId = threadId,
+                folderId = "inbox"
+            ) // Use a common folder like inbox for context
+            if (messagesResult.isSuccess) {
+                val messages = messagesResult.getOrThrow()
+                if (messages.isEmpty()) {
+                    Log.w(
+                        TAG,
+                        "No messages found for conversation $threadId to mark as read=$isRead"
+                    )
+                    return Result.success(Unit)
+                }
+                var allSuccessful = true
+                messages.forEach { message ->
+                    val markResult = markMessageRead(message.id, isRead)
+                    if (markResult.isFailure) {
+                        allSuccessful = false
+                        Log.e(
+                            TAG,
+                            "Failed to mark message ${message.id} in conversation $threadId. Error: ${markResult.exceptionOrNull()?.message}"
+                        )
+                        // Optionally, break or collect errors
+                    }
+                }
+                if (allSuccessful) {
+                    Log.d(
+                        TAG,
+                        "Successfully marked all ${messages.size} messages in conversation $threadId as isRead=$isRead"
+                    )
+                    Result.success(Unit)
+                } else {
+                    Result.failure(Exception("Failed to mark one or more messages in conversation $threadId"))
+                }
+            } else {
+                Log.e(
+                    TAG,
+                    "Failed to get messages for conversation $threadId to mark read. Error: ${messagesResult.exceptionOrNull()?.message}"
+                )
+                Result.failure(
+                    messagesResult.exceptionOrNull()
+                        ?: Exception("Failed to get messages for conversation $threadId")
+                )
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception in markThreadRead for $threadId", e)
+            Result.failure(errorMapper.mapExceptionToError(e))
+        }
+    }
+
+    override suspend fun deleteThread(threadId: String): Result<Unit> {
+        Log.d(TAG, "deleteThread called for conversationId: $threadId")
+        Log.e(
+            TAG,
+            "deleteThread for Microsoft Graph is complex and not fully implemented in this stub. It would involve fetching all messages in conversation $threadId and deleting them individually or batching."
+        )
+        try {
+            val messagesResult = getMessagesForThread(
+                threadId = threadId,
+                folderId = "inbox"
+            ) // Assuming inbox context
+            if (messagesResult.isSuccess) {
+                val messages = messagesResult.getOrThrow()
+                if (messages.isEmpty()) {
+                    Log.w(TAG, "No messages found for conversation $threadId to delete")
+                    return Result.success(Unit)
+                }
+                var allSuccessful = true
+                messages.forEach { message ->
+                    val deleteOp = deleteMessage(message.id) // deleteMessage moves to deleteditems
+                    if (deleteOp.isFailure) {
+                        allSuccessful = false
+                        Log.e(
+                            TAG,
+                            "Failed to delete message ${message.id} in conversation $threadId. Error: ${deleteOp.exceptionOrNull()?.message}"
+                        )
+                    }
+                }
+                return if (allSuccessful) {
+                    Log.d(
+                        TAG,
+                        "Successfully deleted all ${messages.size} messages in conversation $threadId"
+                    )
+                    Result.success(Unit)
+                } else {
+                    Result.failure(Exception("Failed to delete one or more messages in conversation $threadId"))
+                }
+            } else {
+                Log.e(
+                    TAG,
+                    "Failed to get messages for conversation $threadId to delete. Error: ${messagesResult.exceptionOrNull()?.message}"
+                )
+                return Result.failure(
+                    messagesResult.exceptionOrNull()
+                        ?: Exception("Failed to get messages for conversation $threadId")
+                )
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception in deleteThread for $threadId", e)
+            return Result.failure(errorMapper.mapExceptionToError(e))
+        }
+    }
+
+    override suspend fun moveThread(
+        threadId: String,
+        currentFolderId: String,
+        destinationFolderId: String
+    ): Result<Unit> {
+        Log.d(
+            TAG,
+            "moveThread called for conversationId: $threadId from $currentFolderId to $destinationFolderId"
+        )
+        Log.e(
+            TAG,
+            "moveThread for Microsoft Graph is complex and not fully implemented in this stub. It would involve fetching all messages in conversation $threadId from $currentFolderId and moving them individually or batching to $destinationFolderId."
+        )
+        try {
+            val messagesResult =
+                getMessagesForThread(threadId = threadId, folderId = currentFolderId)
+            if (messagesResult.isSuccess) {
+                val messages = messagesResult.getOrThrow()
+                if (messages.isEmpty()) {
+                    Log.w(
+                        TAG,
+                        "No messages found in folder $currentFolderId for conversation $threadId to move to $destinationFolderId"
+                    )
+                    return Result.success(Unit)
+                }
+                var allSuccessful = true
+                messages.forEach { message ->
+                    val moveOp = moveMessage(message.id, currentFolderId, destinationFolderId)
+                    if (moveOp.isFailure) {
+                        allSuccessful = false
+                        Log.e(
+                            TAG,
+                            "Failed to move message ${message.id} in conversation $threadId. Error: ${moveOp.exceptionOrNull()?.message}"
+                        )
+                    }
+                }
+                return if (allSuccessful) {
+                    Log.d(
+                        TAG,
+                        "Successfully moved all ${messages.size} messages in conversation $threadId to $destinationFolderId"
+                    )
+                    Result.success(Unit)
+                } else {
+                    Result.failure(Exception("Failed to move one or more messages in conversation $threadId to $destinationFolderId"))
+                }
+            } else {
+                Log.e(
+                    TAG,
+                    "Failed to get messages for conversation $threadId in folder $currentFolderId to move. Error: ${messagesResult.exceptionOrNull()?.message}"
+                )
+                return Result.failure(
+                    messagesResult.exceptionOrNull()
+                        ?: Exception("Failed to get messages for conversation $threadId in folder $currentFolderId")
+                )
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception in moveThread for $threadId", e)
+            return Result.failure(errorMapper.mapExceptionToError(e))
+        }
+    }
+    // End of added Thread operations
 }

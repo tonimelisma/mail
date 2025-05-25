@@ -3,23 +3,24 @@ package net.melisma.backend_google
 import android.util.Log
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
+import io.ktor.client.request.accept
 import io.ktor.client.request.get
-import io.ktor.client.request.headers
 import io.ktor.client.request.parameter
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
-import io.ktor.http.HttpHeaders
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.supervisorScope
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
-import kotlinx.serialization.json.putJsonObject
+import kotlinx.serialization.json.putJsonArray
 import net.melisma.backend_google.auth.GoogleNeedsReauthenticationException
 import net.melisma.backend_google.di.GoogleHttpClient
 import net.melisma.backend_google.model.GmailLabel
@@ -82,18 +83,17 @@ class GmailApiHelper @Inject constructor(
     override suspend fun getMailFolders(): Result<List<MailFolder>> {
         return try {
             Log.d(TAG, "Fetching Gmail labels from API...")
-            val response: HttpResponse = httpClient.get("$BASE_URL/labels")
+            val response: HttpResponse = httpClient.get("$BASE_URL/labels") {
+                accept(ContentType.Application.Json)
+            }
             val responseBodyText = response.bodyAsText()
 
             if (!response.status.isSuccess()) {
-                Log.e(
-                    TAG,
-                    "Error fetching labels: ${response.status} - Error details in API response."
-                )
+                Log.e(TAG, "Error fetching labels: ${response.status} - Body: $responseBodyText")
                 val httpEx =
                     io.ktor.client.plugins.ClientRequestException(response, responseBodyText)
                 val mappedDetails = errorMapper.mapExceptionToErrorDetails(httpEx)
-                return Result.failure(Exception(mappedDetails.message))
+                return Result.failure(Exception(mappedDetails.message, httpEx))
             }
 
             val labelList = jsonParser.decodeFromString<GmailLabelList>(responseBodyText)
@@ -119,7 +119,7 @@ class GmailApiHelper @Inject constructor(
         } catch (e: Exception) {
             Log.e(TAG, "Exception fetching mail folders", e)
             val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
-            Result.failure(Exception(mappedDetails.message))
+            Result.failure(Exception(mappedDetails.message, e))
         }
     }
 
@@ -250,39 +250,48 @@ class GmailApiHelper @Inject constructor(
 
     override suspend fun getMessagesForFolder(
         folderId: String,
-        selectFields: List<String>, // This 'selectFields' is not used by Gmail API in this way for messages.
-        // The equivalent is metadataHeaders in fetchMessageDetails.
-        maxResults: Int
+        selectFields: List<String>, // Removed default. Gmail uses 'format' and 'metadataHeaders', not direct 'selectFields' for message list.
+        maxResults: Int // Removed default
     ): Result<List<Message>> {
         return try {
-            Log.d(TAG, "getMessagesForFolder: Fetching message IDs for folderId: $folderId")
+            Log.d(
+                TAG,
+                "getMessagesForFolder: Fetching message IDs for folderId: $folderId, maxResults: $maxResults. `selectFields` param is noted but not directly used by Gmail list API in this way."
+            )
             val messageIdsResponse = httpClient.get("$BASE_URL/messages") {
+                accept(ContentType.Application.Json)
                 parameter("maxResults", maxResults)
                 parameter("labelIds", folderId)
-                // Consider adding `q` parameter for filtering if needed in future, e.g., unread messages
+                // Fields for list are minimal (id, threadId). Full details fetched per message.
             }
             if (!messageIdsResponse.status.isSuccess()) {
                 val errorBody = messageIdsResponse.bodyAsText()
                 Log.e(
                     TAG,
-                    "Error fetching message list for $folderId: ${messageIdsResponse.status} - Error details in API response."
+                    "Error fetching message list for $folderId: ${messageIdsResponse.status} - $errorBody"
                 )
                 val httpEx =
                     io.ktor.client.plugins.ClientRequestException(messageIdsResponse, errorBody)
                 val mappedDetails = errorMapper.mapExceptionToErrorDetails(httpEx)
-                return Result.failure(Exception(mappedDetails.message))
+                return Result.failure(Exception(mappedDetails.message, httpEx))
             }
 
             val messageList = messageIdsResponse.body<GmailMessageList>()
-            if (messageList.messages.isEmpty()) {
+            if (messageList.messages.isNullOrEmpty()) { // Check for null as well
                 Log.d(TAG, "No messages found for folder (label): $folderId")
                 return Result.success(emptyList())
             }
             Log.d(TAG, "Fetched ${messageList.messages.size} message IDs. Now fetching details.")
 
+            // Use supervisorScope for fetching details concurrently
             val messages = supervisorScope {
                 messageList.messages.map { messageIdentifier ->
-                    async { fetchMessageDetails(messageIdentifier.id) }
+                    async {
+                        internalFetchMessageDetails(
+                            messageIdentifier.id,
+                            selectFields
+                        )
+                    } // Pass selectFields for potential use
                 }.awaitAll().filterNotNull()
             }
             Log.d(
@@ -301,55 +310,48 @@ class GmailApiHelper @Inject constructor(
         } catch (e: Exception) {
             Log.e(TAG, "Exception fetching messages for folder $folderId", e)
             val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
-            Result.failure(Exception(mappedDetails.message))
+            Result.failure(Exception(mappedDetails.message, e))
         }
     }
 
-    private suspend fun fetchMessageDetails(messageId: String): Message? {
-        Log.d(TAG, "fetchMessageDetails: Fetching details for messageId: $messageId")
+    // Renamed to avoid conflict if a public getMessageDetails(Flow) is added.
+    // `selectFields` param added for consistency, though Gmail API uses metadataHeaders for finer control
+    private suspend fun internalFetchMessageDetails(
+        messageId: String,
+        selectFields: List<String> = emptyList()
+    ): Message? {
+        Log.d(
+            TAG,
+            "internalFetchMessageDetails: Fetching details for messageId: $messageId. SelectFields (metadata hint): $selectFields"
+        )
         return try {
             val response: HttpResponse = httpClient.get("$BASE_URL/messages/$messageId") {
-                parameter("format", "FULL")
-                // parameter("metadataHeaders", "Subject,From,Date,To,Cc,Bcc") // Added To,Cc,Bcc for completeness
+                accept(ContentType.Application.Json)
+                parameter("format", "FULL") // FULL provides payload, headers, body, snippet, etc.
+                // if (selectFields.isNotEmpty()) { // Example of how selectFields MIGHT map to metadataHeaders
+                //     parameter("metadataHeaders", selectFields.joinToString(","))
+                // }
             }
 
             if (!response.status.isSuccess()) {
                 Log.w(
                     TAG,
-                    "Error fetching details for message $messageId: ${response.status} - Error details in API response."
+                    "Error fetching details for message $messageId: ${response.status} - ${response.bodyAsText()}"
                 )
                 return null
             }
 
-            val rawJsonResponse = response.bodyAsText()
-
-            val gmailMessage = jsonParser.decodeFromString<GmailMessage>(rawJsonResponse)
-
-            Log.d(
-                TAG,
-                "Fetched (parsed) GmailMessage ID: ${gmailMessage.id}, Payload null? = ${gmailMessage.payload == null}, Top-level Headers count: ${gmailMessage.payload?.headers?.size}"
-            )
-            gmailMessage.payload?.headers?.let { hs ->
-                Log.d(
-                    TAG,
-                    "Actual Top-Level Headers: ${hs.joinToString { h -> "${h.name}:${h.value}" }}"
-                )
-            }
-            if (gmailMessage.payload?.parts?.isNotEmpty() == true) {
-                Log.d(
-                    TAG,
-                    "Message ID: ${gmailMessage.id} has ${gmailMessage.payload.parts?.size} parts. First part headers count: ${gmailMessage.payload.parts?.firstOrNull()?.headers?.size}"
-                )
-            }
-
-
+            val gmailMessage = response.body<GmailMessage>()
             mapGmailMessageToMessage(gmailMessage)
-        } catch (e: Exception) {
-            Log.e(
+        } catch (e: GoogleNeedsReauthenticationException) {
+            Log.w(
                 TAG,
-                "Exception in fetchMessageDetails for ID: $messageId (Could be network or deserialization)",
+                "Google account ${e.accountId} needs re-authentication during internalFetchMessageDetails (message: $messageId).",
                 e
             )
+            null // Or rethrow / handle specifically
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception in internalFetchMessageDetails for ID: $messageId", e)
             null
         }
     }
@@ -529,31 +531,35 @@ class GmailApiHelper @Inject constructor(
 
     // --- Other MailApiService methods (markMessageRead, deleteMessage, moveMessage) ---
     // Ensure they use the TAG for logging as well if you add logs there.
-    override suspend fun markMessageRead(messageId: String, isRead: Boolean): Result<Boolean> {
+    override suspend fun markMessageRead(
+        messageId: String,
+        isRead: Boolean
+    ): Result<Unit> { // Changed to Result<Unit>
         Log.d(TAG, "markMessageRead: messageId='$messageId', isRead=$isRead")
         return try {
-            val endpoint = "$BASE_URL/messages/$messageId/modify"
             val requestBody = buildJsonObject {
                 if (isRead) {
-                    putJsonObject("removeLabelIds") { put("0", "UNREAD") }
+                    putJsonArray("removeLabelIds") { add("UNREAD") }
                 } else {
-                    putJsonObject("addLabelIds") { put("0", "UNREAD") }
+                    putJsonArray("addLabelIds") { add("UNREAD") }
                 }
             }
-            val response: HttpResponse = httpClient.post(endpoint) {
-                headers { append(HttpHeaders.ContentType, ContentType.Application.Json.toString()) }
-                setBody(requestBody.toString())
+            val response: HttpResponse = httpClient.post("$BASE_URL/messages/$messageId/modify") {
+                // Removed explicit Content-Type header. Relying on ContentNegotiation.
+                accept(ContentType.Application.Json)
+                setBody(requestBody) // Send JsonObject directly
             }
-            if (response.status.isSuccess()) Result.success(true)
-            else {
+            if (response.status.isSuccess()) {
+                Result.success(Unit) // Changed to Unit
+            } else {
                 val errorBody = response.bodyAsText()
                 Log.e(
                     TAG,
-                    "Error marking message read/unread for $messageId: ${response.status} - Error details in API response."
+                    "Error marking message read/unread for $messageId: ${response.status} - $errorBody"
                 )
                 val httpEx = io.ktor.client.plugins.ClientRequestException(response, errorBody)
                 val mappedDetails = errorMapper.mapExceptionToErrorDetails(httpEx)
-                Result.failure(Exception(mappedDetails.message))
+                Result.failure(Exception(mappedDetails.message, httpEx))
             }
         } catch (e: GoogleNeedsReauthenticationException) {
             Log.w(
@@ -566,25 +572,29 @@ class GmailApiHelper @Inject constructor(
         } catch (e: Exception) {
             Log.e(TAG, "Exception in markMessageRead for $messageId", e)
             val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
-            Result.failure(Exception(mappedDetails.message))
+            Result.failure(Exception(mappedDetails.message, e))
         }
     }
 
-    override suspend fun deleteMessage(messageId: String): Result<Boolean> {
+    override suspend fun deleteMessage(messageId: String): Result<Unit> { // Changed to Result<Unit>
         Log.d(TAG, "deleteMessage: messageId='$messageId'")
         return try {
-            val endpoint = "$BASE_URL/messages/$messageId/trash" // Correct endpoint for trashing
-            val response: HttpResponse = httpClient.post(endpoint) // No body needed for trash
-            if (response.status.isSuccess()) Result.success(true)
-            else {
+            // Gmail API for trashing a message is a POST request with no body.
+            val response: HttpResponse = httpClient.post("$BASE_URL/messages/$messageId/trash") {
+                accept(ContentType.Application.Json)
+                // No setBody needed
+            }
+            if (response.status.isSuccess()) {
+                Result.success(Unit) // Changed to Unit
+            } else {
                 val errorBody = response.bodyAsText()
                 Log.e(
                     TAG,
-                    "Error deleting (trashing) message $messageId: ${response.status} - Error details in API response."
+                    "Error deleting (trashing) message $messageId: ${response.status} - $errorBody"
                 )
                 val httpEx = io.ktor.client.plugins.ClientRequestException(response, errorBody)
                 val mappedDetails = errorMapper.mapExceptionToErrorDetails(httpEx)
-                Result.failure(Exception(mappedDetails.message))
+                Result.failure(Exception(mappedDetails.message, httpEx))
             }
         } catch (e: GoogleNeedsReauthenticationException) {
             Log.w(
@@ -597,121 +607,110 @@ class GmailApiHelper @Inject constructor(
         } catch (e: Exception) {
             Log.e(TAG, "Exception in deleteMessage for $messageId", e)
             val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
-            Result.failure(Exception(mappedDetails.message))
+            Result.failure(Exception(mappedDetails.message, e))
         }
     }
 
-    override suspend fun moveMessage(messageId: String, targetFolderId: String): Result<Boolean> {
-        Log.d(TAG, "moveMessage: messageId='$messageId', targetFolderId='$targetFolderId'")
+    override suspend fun moveMessage(
+        messageId: String,
+        currentFolderId: String,
+        destinationFolderId: String
+    ): Result<Unit> { // Changed to Result<Unit>
+        Log.d(
+            TAG,
+            "moveMessage: messageId='$messageId', from '$currentFolderId' to '$destinationFolderId'"
+        )
         return try {
-            // First, get the current labels of the message
-            val messageDetailsResponse = httpClient.get("$BASE_URL/messages/$messageId") {
-                parameter("format", "metadata")
-                parameter(
-                    "metadataHeaders",
-                    " "
-                ) // We only need labelIds, but metadataHeaders is required by API for metadata format.
-                // Sending a space or a common header like 'Subject' should be fine.
-            }
-
-            if (!messageDetailsResponse.status.isSuccess()) {
-                val errorBody = messageDetailsResponse.bodyAsText()
-                Log.e(
-                    TAG,
-                    "Error fetching message details for move operation ($messageId): ${messageDetailsResponse.status} - Error details in API response."
-                )
-                return Result.failure(Exception("Failed to get message details before move: ${errorBody}"))
-            }
-            val gmailMessage = messageDetailsResponse.body<GmailMessage>()
-            val currentLabelIds = gmailMessage.labelIds.toMutableList()
-            Log.d(TAG, "Current labels for message $messageId: $currentLabelIds")
-
-
             val addLabelIds = mutableListOf<String>()
             val removeLabelIds = mutableListOf<String>()
 
-            if (targetFolderId.equals("ARCHIVE", ignoreCase = true)) {
-                // Archiving means removing INBOX (if present) and not adding any specific folder label unless it's already there
-                if (currentLabelIds.contains("INBOX")) {
-                    removeLabelIds.add("INBOX")
+            if (destinationFolderId.equals("ARCHIVE", ignoreCase = true)) {
+                // Archiving in Gmail typically means removing INBOX and other specific folder-like labels
+                // This could be expanded to remove other user-defined labels if truly mimicking a "move to archive"
+                if (currentFolderId.equals(
+                        GMAIL_LABEL_ID_INBOX,
+                        ignoreCase = true
+                    ) || currentFolderId.isBlank()
+                ) { // If current is inbox or unknown, assume it might be in inbox
+                    removeLabelIds.add(GMAIL_LABEL_ID_INBOX)
                 }
+                // If it's already in a non-Inbox user label (currentFolderId), and we archive, we might want to remove that too.
+                // For now, simple archive just removes INBOX.
                 Log.d(TAG, "Archiving message $messageId. Will remove INBOX if present.")
             } else {
-                // Moving to a specific folder/label
-                addLabelIds.add(targetFolderId)
-                // If it was in INBOX and not being moved to INBOX, remove INBOX.
-                // Also, remove other 'folder-like' labels if it's a true move, not just adding a label.
-                // This logic might need refinement based on how Gmail handles multiple labels vs folders.
-                // For simplicity, if moving to a new folder, we often want to remove it from the old one (e.g. INBOX).
-                if (currentLabelIds.contains("INBOX") && !targetFolderId.equals(
-                        "INBOX",
+                addLabelIds.add(destinationFolderId) // Add the target folder's label
+                // If moving from INBOX to another specific label (not archive), remove INBOX.
+                if (currentFolderId.equals(
+                        GMAIL_LABEL_ID_INBOX,
                         ignoreCase = true
-                    )
+                    ) && !destinationFolderId.equals(GMAIL_LABEL_ID_INBOX, ignoreCase = true)
                 ) {
-                    removeLabelIds.add("INBOX")
+                    removeLabelIds.add(GMAIL_LABEL_ID_INBOX)
                 }
-                // Potentially remove other user labels if this is an exclusive move. For now, just INBOX.
-            }
-
-
-            // Ensure no redundant operations
-            val finalAddLabels = addLabelIds.filter { it !in currentLabelIds }.distinct()
-            val finalRemoveLabels = removeLabelIds.filter { it in currentLabelIds }.distinct()
-
-            if (finalAddLabels.isEmpty() && finalRemoveLabels.isEmpty()) {
-                Log.d(
-                    TAG,
-                    "No actual label changes required for message $messageId to $targetFolderId. Already in desired state."
-                )
-                return Result.success(true) // No change needed
-            }
-
-            Log.d(
-                TAG,
-                "Message $messageId: Adding labels: $finalAddLabels, Removing labels: $finalRemoveLabels"
-            )
-
-
-            val endpoint = "$BASE_URL/messages/$messageId/modify"
-            val requestBodyJson = buildJsonObject {
-                if (finalAddLabels.isNotEmpty()) {
-                    putJsonObject("addLabelIds") {
-                        finalAddLabels.forEachIndexed { i, id ->
-                            put(
-                                i.toString(),
-                                id
-                            )
-                        } // Using index as key for JSON array elements
-                    }
-                }
-                if (finalRemoveLabels.isNotEmpty()) {
-                    putJsonObject("removeLabelIds") {
-                        finalRemoveLabels.forEachIndexed { i, id -> put(i.toString(), id) }
-                    }
+                // More complex scenarios: if moving from UserLabelA to UserLabelB, should UserLabelA be removed?
+                // Gmail allows multiple labels. For a "move" semantic, one might remove the source label.
+                // For now, only INBOX is explicitly removed when moving to another destination.
+                if (currentFolderId.isNotBlank() &&
+                    !currentFolderId.equals(GMAIL_LABEL_ID_INBOX, ignoreCase = true) && // Not INBOX
+                    !currentFolderId.equals(
+                        destinationFolderId,
+                        ignoreCase = true
+                    ) && // Not already the destination
+                    !destinationFolderId.equals("ARCHIVE", ignoreCase = true)
+                ) { // And not archiving
+                    // Potentially remove currentFolderId if it's a user label and we are "moving"
+                    // removeLabelIds.add(currentFolderId)
+                    // Log.d(TAG, "Considering removal of source label '$currentFolderId' for a move.")
                 }
             }
 
+            // Fetch current labels to avoid redundant operations / ensure correctness
+            // val messageDetails = internalFetchMessageDetails(messageId) // Temporarily comment out
+            // val labelsListRaw: List<String>? = messageDetails?.labelIds // Temporarily comment out
+            // val labelsSetProvisional: Set<String>? = labelsListRaw?.toSet() // Temporarily comment out
+            // val currentLabels: Set<String> = labelsSetProvisional ?: emptySet() // Temporarily comment out
 
-            val response: HttpResponse = httpClient.post(endpoint) {
-                headers { append(HttpHeaders.ContentType, ContentType.Application.Json.toString()) }
-                setBody(requestBodyJson.toString())
+            // val finalAddLabels = addLabelIds.filter { it !in currentLabels }.distinct() // Temporarily comment out
+            // val finalRemoveLabels = removeLabelIds.filter { it in currentLabels }.distinct() // Temporarily comment out
+
+            // if (finalAddLabels.isEmpty() && finalRemoveLabels.isEmpty()) { // Temporarily comment out
+            //     Log.d(TAG, "No actual label changes required for message $messageId to '$destinationFolderId' (from '$currentFolderId'). Already in desired state or no-op.")
+            //     return Result.success(Unit) 
+            // }
+
+            // Log.d(TAG, "Message $messageId: Final Add labels: $finalAddLabels, Final Remove labels: $finalRemoveLabels") // Temporarily comment out
+
+            // Fallback to original addLabelIds and removeLabelIds if currentLabels logic is commented out
+            val requestBody = buildJsonObject {
+                if (addLabelIds.isNotEmpty()) { // Use original addLabelIds
+                    putJsonArray("addLabelIds") { addLabelIds.forEach { add(it) } }
+                }
+                if (removeLabelIds.isNotEmpty()) { // Use original removeLabelIds
+                    putJsonArray("removeLabelIds") { removeLabelIds.forEach { add(it) } }
+                }
+            }
+
+            val response: HttpResponse = httpClient.post("$BASE_URL/messages/$messageId/modify") {
+                // Removed explicit Content-Type header. Relying on ContentNegotiation.
+                accept(ContentType.Application.Json)
+                setBody(requestBody) // Send JsonObject directly
             }
 
             if (response.status.isSuccess()) {
                 Log.i(
                     TAG,
-                    "Successfully moved/modified labels for message $messageId to $targetFolderId"
+                    "Successfully moved/modified labels for message $messageId to '$destinationFolderId'"
                 )
-                Result.success(true)
+                Result.success(Unit) // Changed to Unit
             } else {
                 val errorBody = response.bodyAsText()
                 Log.e(
                     TAG,
-                    "Error moving message $messageId (modifying labels): ${response.status} - Error details in API response."
+                    "Error moving message $messageId (modifying labels): ${response.status} - $errorBody"
                 )
                 val httpEx = io.ktor.client.plugins.ClientRequestException(response, errorBody)
                 val mappedDetails = errorMapper.mapExceptionToErrorDetails(httpEx)
-                Result.failure(Exception(mappedDetails.message))
+                Result.failure(Exception(mappedDetails.message, httpEx))
             }
         } catch (e: GoogleNeedsReauthenticationException) {
             Log.w(
@@ -722,26 +721,47 @@ class GmailApiHelper @Inject constructor(
             val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
             Result.failure(Exception("Re-authentication required: ${mappedDetails.message}", e))
         } catch (e: Exception) {
-            Log.e(TAG, "Exception in moveMessage for $messageId to $targetFolderId", e)
+            Log.e(TAG, "Exception in moveMessage for $messageId to $destinationFolderId", e)
             val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
-            Result.failure(Exception(mappedDetails.message))
+            Result.failure(Exception(mappedDetails.message, e))
         }
     }
 
     override suspend fun getMessagesForThread(
         threadId: String,
-        folderId: String // Added folderId to match interface, though Gmail API doesn't use it for threads.get
+        folderId: String, // Added folderId (context for client, Gmail API for threads.get doesn't use it)
+        selectFields: List<String>, // Added selectFields
+        maxResults: Int // Added maxResults
     ): Result<List<Message>> {
         return try {
-            Log.d(TAG, "Fetching messages for thread ID: $threadId (original folder: $folderId)")
-            // The 'folderId' is less relevant for Gmail's threads.get API but kept for interface consistency.
+            Log.d(
+                TAG,
+                "Fetching messages for thread ID: $threadId (original folder: $folderId, maxResults: $maxResults). selectFields noted: $selectFields"
+            )
+            // Gmail threads.get fetches all messages in a thread. maxResults isn't directly applicable here.
+            // selectFields can inform what details to fetch per message if we refine internalFetchMessageDetails
             val response = httpClient.get("$BASE_URL/threads/$threadId") {
-                // You might want to control the format (e.g., "full", "metadata") if needed
-                // parameter("format", "full") // "full" is often default and includes payload
+                accept(ContentType.Application.Json)
+                // format=FULL is usually default for threads.get and includes messages with their payloads
+                // If specific fields were needed, one might fetch metadata first, then individual messages.
+                // parameter("format", "FULL") // Could be explicit
             }
+
+            if (!response.status.isSuccess()) {
+                val errorBody = response.bodyAsText()
+                Log.e(TAG, "Error fetching thread $threadId: ${response.status} - $errorBody")
+                val httpEx = io.ktor.client.plugins.ClientRequestException(response, errorBody)
+                val mappedDetails = errorMapper.mapExceptionToErrorDetails(httpEx)
+                return Result.failure(Exception(mappedDetails.message, httpEx))
+            }
+            
             val gmailThread = response.body<GmailThread>()
 
-            val messages = gmailThread.messages.map { mapGmailMessageToMessage(it) }
+            // The messages within GmailThread are already somewhat populated.
+            // We could pass selectFields to mapGmailMessageToMessage if it's adapted to use them for richer mapping.
+            val messages =
+                gmailThread.messages?.mapNotNull { mapGmailMessageToMessage(it) } ?: emptyList()
+
             Log.d(
                 TAG,
                 "Successfully fetched and mapped ${messages.size} messages for thread ID: $threadId"
@@ -758,7 +778,240 @@ class GmailApiHelper @Inject constructor(
         } catch (e: Exception) {
             Log.e(TAG, "Error fetching messages for thread ID: $threadId", e)
             val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
-            Result.failure(Exception(mappedDetails.message))
+            Result.failure(Exception(mappedDetails.message, e))
+        }
+    }
+
+    // Added missing getMessageDetails
+    override suspend fun getMessageDetails(messageId: String): Flow<Message?> = flow {
+        Log.d(TAG, "getMessageDetails: Flow for messageId: $messageId")
+        // Using internalFetchMessageDetails which already handles exceptions and returns Message?
+        emit(internalFetchMessageDetails(messageId))
+    }
+
+    // Added missing markThreadRead
+    override suspend fun markThreadRead(threadId: String, isRead: Boolean): Result<Unit> {
+        Log.d(TAG, "markThreadRead for thread $threadId to isRead=$isRead")
+        // Gmail API does not have a direct "mark thread as read" endpoint.
+        // This requires fetching all messages in the thread and marking them individually.
+        try {
+            val threadMessagesResult = getMessagesForThread(
+                threadId = threadId,
+                folderId = "",
+                selectFields = listOf("id"),
+                maxResults = 1000
+            ) // folderId not critical, get all messages
+            if (threadMessagesResult.isFailure) {
+                Log.e(
+                    TAG,
+                    "Failed to get messages for thread $threadId to mark read. Error: ${threadMessagesResult.exceptionOrNull()?.message}"
+                )
+                return Result.failure(
+                    threadMessagesResult.exceptionOrNull()
+                        ?: Exception("Failed to get messages for thread $threadId")
+                )
+            }
+
+            val messages = threadMessagesResult.getOrThrow() // This is List<Message> from core-data
+            if (messages.isEmpty()) {
+                Log.w(TAG, "No messages found in thread $threadId to mark as read=$isRead.")
+                return Result.success(Unit)
+            }
+
+            var allSuccessful = true
+
+            for (message in messages) { // message is of type net.melisma.core_data.model.Message
+                // Check if action is even needed for this message based on its current isRead status
+                val messageIsCurrentlyRead = message.isRead
+                val actionRequired = (isRead != messageIsCurrentlyRead)
+
+                if (actionRequired) {
+                    val markResult = markMessageRead(
+                        message.id,
+                        isRead
+                    ) // This API call internally handles Gmail labels
+                    if (markResult.isFailure) {
+                        allSuccessful = false
+                        Log.e(
+                            TAG,
+                            "Failed to mark message ${message.id} in thread $threadId. Error: ${markResult.exceptionOrNull()?.message}"
+                        )
+                        // Optionally break or collect all errors
+                    }
+                } else {
+                    Log.d(
+                        TAG,
+                        "Message ${message.id} in thread $threadId already in desired read state (isRead=$isRead). Skipping."
+                    )
+                }
+            }
+
+            return if (allSuccessful) {
+                Log.d(
+                    TAG,
+                    "Successfully processed all messages in thread $threadId for isRead=$isRead"
+                )
+                Result.success(Unit)
+            } else {
+                Result.failure(Exception("Failed to mark one or more messages in thread $threadId"))
+            }
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception in markThreadRead for $threadId", e)
+            return Result.failure(
+                errorMapper.mapExceptionToErrorDetails(e).let { Exception(it.message, e) })
+        }
+    }
+
+    // Added missing deleteThread
+    override suspend fun deleteThread(threadId: String): Result<Unit> {
+        Log.d(TAG, "deleteThread for thread $threadId")
+        // Gmail API: delete thread is POST /gmail/v1/users/me/threads/{threadId}/trash
+        // This is simpler than Outlook's per-message deletion for threads.
+        return try {
+            val response: HttpResponse = httpClient.post("$BASE_URL/threads/$threadId/trash") {
+                accept(ContentType.Application.Json)
+                // No body needed
+            }
+            if (response.status.isSuccess()) {
+                Log.d(TAG, "Successfully trashed thread $threadId")
+                Result.success(Unit)
+            } else {
+                val errorBody = response.bodyAsText()
+                Log.e(TAG, "Error trashing thread $threadId: ${response.status} - $errorBody")
+                val httpEx = io.ktor.client.plugins.ClientRequestException(response, errorBody)
+                val mappedDetails = errorMapper.mapExceptionToErrorDetails(httpEx)
+                Result.failure(Exception(mappedDetails.message, httpEx))
+            }
+        } catch (e: GoogleNeedsReauthenticationException) {
+            Log.w(
+                TAG,
+                "Google account ${e.accountId} needs re-authentication during deleteThread (thread: $threadId).",
+                e
+            )
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(Exception("Re-authentication required: ${mappedDetails.message}", e))
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception in deleteThread for $threadId", e)
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(Exception(mappedDetails.message, e))
+        }
+    }
+
+    // Added missing moveThread
+    override suspend fun moveThread(
+        threadId: String,
+        currentFolderId: String,
+        destinationFolderId: String
+    ): Result<Unit> {
+        Log.d(
+            TAG,
+            "moveThread for thread $threadId from '$currentFolderId' to '$destinationFolderId'"
+        )
+        // Gmail API: modify labels for the entire thread.
+        // POST /gmail/v1/users/me/threads/{threadId}/modify
+        // Body: { "addLabelIds": ["labelIdToAdd"], "removeLabelIds": ["labelIdToRemove"] }
+        return try {
+            val addLabelIds = mutableListOf<String>()
+            val removeLabelIds = mutableListOf<String>()
+
+            if (destinationFolderId.equals("ARCHIVE", ignoreCase = true)) {
+                if (currentFolderId.equals(
+                        GMAIL_LABEL_ID_INBOX,
+                        ignoreCase = true
+                    ) || currentFolderId.isBlank()
+                ) {
+                    removeLabelIds.add(GMAIL_LABEL_ID_INBOX)
+                }
+                // Potentially remove currentFolderId if it's a user label being "archived"
+                if (currentFolderId.isNotBlank() && !listOf(
+                        GMAIL_LABEL_ID_INBOX,
+                        GMAIL_LABEL_ID_SENT,
+                        GMAIL_LABEL_ID_DRAFT,
+                        GMAIL_LABEL_ID_SPAM,
+                        GMAIL_LABEL_ID_TRASH
+                    ).contains(currentFolderId.uppercase())
+                ) {
+                    // removeLabelIds.add(currentFolderId) // Example: if archiving from a user label, remove it
+                }
+            } else {
+                addLabelIds.add(destinationFolderId)
+                if (currentFolderId.equals(
+                        GMAIL_LABEL_ID_INBOX,
+                        ignoreCase = true
+                    ) && !destinationFolderId.equals(GMAIL_LABEL_ID_INBOX, ignoreCase = true)
+                ) {
+                    removeLabelIds.add(GMAIL_LABEL_ID_INBOX)
+                }
+                // If moving from UserLabelA to UserLabelB, and UserLabelA is currentFolderId
+                if (currentFolderId.isNotBlank() &&
+                    !currentFolderId.equals(GMAIL_LABEL_ID_INBOX, ignoreCase = true) &&
+                    !currentFolderId.equals(destinationFolderId, ignoreCase = true) &&
+                    !destinationFolderId.equals("ARCHIVE", ignoreCase = true)
+                ) {
+                    // removeLabelIds.add(currentFolderId) // This would make it a "true" move from a user label
+                }
+            }
+
+            // No need to fetch current labels for the thread for this API, as modify adds/removes regardless.
+            // However, filtering out redundant operations based on known currentFolderId can be smart.
+            // For simplicity, the API handles no-ops gracefully.
+
+            if (addLabelIds.isEmpty() && removeLabelIds.isEmpty()) {
+                Log.d(
+                    TAG,
+                    "No actual label changes required for thread $threadId to '$destinationFolderId' (from '$currentFolderId'). No-op."
+                )
+                return Result.success(Unit)
+            }
+
+            Log.d(
+                TAG,
+                "Thread $threadId: Modifying labels - Add: $addLabelIds, Remove: $removeLabelIds"
+            )
+
+            val requestBody = buildJsonObject {
+                if (addLabelIds.isNotEmpty()) {
+                    putJsonArray("addLabelIds") { addLabelIds.forEach { add(it) } }
+                }
+                if (removeLabelIds.isNotEmpty()) {
+                    putJsonArray("removeLabelIds") { removeLabelIds.forEach { add(it) } }
+                }
+            }
+
+            val response: HttpResponse = httpClient.post("$BASE_URL/threads/$threadId/modify") {
+                accept(ContentType.Application.Json)
+                setBody(requestBody)
+            }
+
+            if (response.status.isSuccess()) {
+                Log.d(
+                    TAG,
+                    "Successfully modified labels for thread $threadId (moved to '$destinationFolderId')"
+                )
+                Result.success(Unit)
+            } else {
+                val errorBody = response.bodyAsText()
+                Log.e(
+                    TAG,
+                    "Error modifying labels for thread $threadId: ${response.status} - $errorBody"
+                )
+                val httpEx = io.ktor.client.plugins.ClientRequestException(response, errorBody)
+                val mappedDetails = errorMapper.mapExceptionToErrorDetails(httpEx)
+                Result.failure(Exception(mappedDetails.message, httpEx))
+            }
+        } catch (e: GoogleNeedsReauthenticationException) {
+            Log.w(
+                TAG,
+                "Google account ${e.accountId} needs re-authentication during moveThread (thread: $threadId).",
+                e
+            )
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(Exception("Re-authentication required: ${mappedDetails.message}", e))
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception in moveThread for $threadId", e)
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(Exception(mappedDetails.message, e))
         }
     }
 }

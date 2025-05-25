@@ -11,6 +11,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
@@ -24,6 +25,7 @@ import net.melisma.core_data.model.MailFolder
 import net.melisma.core_data.model.MailThread
 import net.melisma.core_data.model.Message
 import net.melisma.core_data.model.ThreadDataState
+import net.melisma.core_data.repository.AccountRepository
 import net.melisma.core_data.repository.ThreadRepository
 import java.text.ParseException
 import java.text.SimpleDateFormat
@@ -39,7 +41,8 @@ class DefaultThreadRepository @Inject constructor(
     private val mailApiServices: Map<String, @JvmSuppressWildcards MailApiService>,
     @Dispatcher(MailDispatchers.IO) private val ioDispatcher: CoroutineDispatcher,
     @ApplicationScope private val externalScope: CoroutineScope,
-    private val errorMappers: Map<String, @JvmSuppressWildcards ErrorMapperService>
+    private val errorMappers: Map<String, @JvmSuppressWildcards ErrorMapperService>,
+    private val accountRepository: AccountRepository // To get account for provider type
 ) : ThreadRepository {
 
     private val TAG = "DefaultThreadRepo"
@@ -373,5 +376,95 @@ class DefaultThreadRepository @Inject constructor(
         }
         fetchJob = null
         Log.d(TAG, "cancelAndClearJob: Cleared fetchJob. Reason: $reason")
+    }
+
+    override suspend fun markThreadRead(
+        account: Account,
+        threadId: String,
+        isRead: Boolean
+    ): Result<Unit> {
+        Log.d(
+            TAG,
+            "markThreadRead called for thread: $threadId, account: ${account.username}, isRead: $isRead"
+        )
+        val apiService = mailApiServices[account.providerType.uppercase()]
+            ?: return Result.failure(NotImplementedError("markThreadRead not implemented for account ${account.providerType}"))
+
+        val result = apiService.markThreadRead(threadId, isRead)
+        if (result.isSuccess) {
+            _threadDataState.update { currentState ->
+                if (currentState is ThreadDataState.Success) {
+                    val updatedThreads = currentState.threads.map { mailThread ->
+                        if (mailThread.id == threadId) {
+                            val updatedMessages =
+                                mailThread.messages.map { it.copy(isRead = isRead) }
+                            val newUnreadCount =
+                                if (isRead) 0 else mailThread.totalMessageCount // Simplified
+                            mailThread.copy(
+                                messages = updatedMessages,
+                                unreadMessageCount = newUnreadCount
+                                // Removed non-existent isRead = isRead
+                            )
+                        } else mailThread
+                    }
+                    currentState.copy(threads = updatedThreads)
+                } else {
+                    currentState
+                }
+            }
+        }
+        return result
+    }
+
+    override suspend fun deleteThread(account: Account, threadId: String): Result<Unit> {
+        Log.d(TAG, "deleteThread called for thread: $threadId, account: ${account.username}")
+        val apiService = mailApiServices[account.providerType.uppercase()]
+            ?: return Result.failure(NotImplementedError("deleteThread not implemented for account ${account.providerType}"))
+
+        val result = apiService.deleteThread(threadId)
+        if (result.isSuccess) {
+            _threadDataState.update { currentState ->
+                if (currentState is ThreadDataState.Success) {
+                    currentState.copy(threads = currentState.threads.filterNot { it.id == threadId })
+                } else {
+                    currentState
+                }
+            }
+        }
+        return result
+    }
+
+    override suspend fun moveThread(
+        account: Account,
+        threadId: String,
+        destinationFolderId: String
+    ): Result<Unit> {
+        Log.d(
+            TAG,
+            "moveThread called for thread: $threadId, to folder: $destinationFolderId, account: ${account.username}"
+        )
+        val apiService = mailApiServices[account.providerType.uppercase()]
+            ?: return Result.failure(NotImplementedError("moveThread not implemented for account ${account.providerType}"))
+
+        val currentFolderId = currentTargetFolder?.id
+        if (currentFolderId == null) {
+            Log.e(
+                TAG,
+                "moveThread: currentFolderId is null, cannot determine source folder for API call."
+            )
+            return Result.failure(IllegalStateException("Current folder not set, cannot move thread."))
+        }
+
+        val result = apiService.moveThread(threadId, currentFolderId, destinationFolderId)
+        if (result.isSuccess) {
+            _threadDataState.update { currentState ->
+                if (currentState is ThreadDataState.Success) {
+                    currentState.copy(threads = currentState.threads.filterNot { it.id == threadId })
+                } else {
+                    currentState
+                }
+            }
+        }
+        return result
     }
 } 

@@ -49,4 +49,16 @@ interface MessageRepository {
         messageId: String,
         destinationFolderId: String
     ): Result<Unit>
+
+    /**
+     * Fetches the details for a specific message.
+     *
+     * @param messageId The ID of the message to fetch.
+     * @param accountId The ID of the account to which the message belongs.
+     * @return A Flow emitting the Message object, or null if not found or an error occurs.
+     */
+    suspend fun getMessageDetails(
+        messageId: String,
+        accountId: String
+    ): kotlinx.coroutines.flow.Flow<net.melisma.core_data.model.Message?>
 }
