@@ -241,6 +241,14 @@ class AppAuthHelperService @Inject constructor(
     suspend fun refreshAccessToken(authState: AuthState): TokenResponse =
         suspendCancellableCoroutine { continuation ->
             Timber.d("Suspending: Attempting to refresh access token. Needs refresh: ${authState.needsTokenRefresh}")
+            Timber.tag(TAG)
+                .d("refreshAccessToken - Input AuthState JSON: ${authState.jsonSerializeString()}")
+            Timber.tag(TAG)
+                .d("refreshAccessToken - Input AuthState Config JSON: ${authState.authorizationServiceConfiguration?.toJsonString()}")
+            Timber.tag(TAG)
+                .d("refreshAccessToken - Input AuthState Last Auth Resp Config JSON: ${authState.lastAuthorizationResponse?.request?.configuration?.toJsonString()}")
+            Timber.tag(TAG)
+                .d("refreshAccessToken - Input AuthState Refresh Token Present: ${authState.refreshToken != null}")
 
             // Directly use NoClientAuthentication.INSTANCE for Google public client.
             val clientAuthentication: ClientAuthentication =

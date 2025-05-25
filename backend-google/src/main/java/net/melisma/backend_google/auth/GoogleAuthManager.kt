@@ -22,6 +22,7 @@ import net.openid.appauth.AuthState
 import net.openid.appauth.AuthorizationException
 import net.openid.appauth.AuthorizationResponse
 import net.openid.appauth.TokenResponse
+import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -446,6 +447,15 @@ class GoogleAuthManager @Inject constructor(
                 }
             }
 
+            Timber.tag(TAG)
+                .d("getFreshAccessToken - AccountID: $accountId - Retrieved AuthState JSON: ${currentAuthState.jsonSerializeString()}")
+            Timber.tag(TAG)
+                .d("getFreshAccessToken - AccountID: $accountId - Retrieved AuthState Config JSON: ${currentAuthState.authorizationServiceConfiguration?.toJsonString()}")
+            Timber.tag(TAG)
+                .d("getFreshAccessToken - AccountID: $accountId - Retrieved AuthState Last Auth Resp Config JSON: ${currentAuthState.lastAuthorizationResponse?.request?.configuration?.toJsonString()}")
+            Timber.tag(TAG)
+                .d("getFreshAccessToken - AccountID: $accountId - Retrieved AuthState Refresh Token Present: ${currentAuthState.refreshToken != null}")
+
             Log.i(
                 TAG,
                 "Access token needs refresh for account $accountId (or assumed to by compiler warning)."
@@ -455,6 +465,10 @@ class GoogleAuthManager @Inject constructor(
                     appAuthHelperService.refreshAccessToken(currentAuthState)
                 Log.d(TAG, "Token refreshed successfully for $accountId.")
                 currentAuthState.update(refreshedTokenResponse, null) // Update in place
+                Timber.tag(TAG)
+                    .d("getFreshAccessToken - AccountID: $accountId - AuthState after refresh update, Config JSON: ${currentAuthState.authorizationServiceConfiguration?.toJsonString()}")
+                Timber.tag(TAG)
+                    .d("getFreshAccessToken - AccountID: $accountId - AuthState after refresh update, JSON: ${currentAuthState.jsonSerializeString()}")
                 val updatedAuthState = currentAuthState // Use the modified currentAuthState
                 when (val updateResult =
                     tokenPersistenceService.updateAuthState(accountId, updatedAuthState)) {

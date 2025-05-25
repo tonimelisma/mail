@@ -46,7 +46,23 @@ class GoogleTokenPersistenceService @Inject constructor(
             val authState = AuthState(appAuthHelperService.serviceConfiguration)
             authState.update(tokenResponse, null)
 
+            Timber.tag(TAG).d(
+                "saveTokens - AccountID: %s - Initial AuthState Config JSON: %s",
+                accountId,
+                authState.authorizationServiceConfiguration?.toJsonString()
+            )
+            Timber.tag(TAG).d(
+                "saveTokens - AccountID: %s - Service Config JSON: %s",
+                accountId,
+                appAuthHelperService.serviceConfiguration.toJsonString()
+            )
             val authStateJson = authState.jsonSerializeString()
+            Timber.tag(TAG).d(
+                "saveTokens - AccountID: %s - Serialized AuthState JSON: %s",
+                accountId,
+                authStateJson
+            )
+
             val encryptedAuthStateJson = secureEncryptionService.encrypt(authStateJson)
             if (encryptedAuthStateJson == null) {
                 Timber.tag(TAG).e("Failed to encrypt AuthState for account ID: %s", accountId)
@@ -130,6 +146,21 @@ class GoogleTokenPersistenceService @Inject constructor(
 
             try {
                 val deserializedAuthState = AuthState.jsonDeserialize(authStateJson)
+                Timber.tag(TAG).d(
+                    "getAuthState - AccountID: %s - Deserialized AuthState JSON: %s",
+                    accountId,
+                    deserializedAuthState.jsonSerializeString()
+                )
+                Timber.tag(TAG).d(
+                    "getAuthState - AccountID: %s - Deserialized AuthState Config JSON: %s",
+                    accountId,
+                    deserializedAuthState.authorizationServiceConfiguration?.toJsonString()
+                )
+                Timber.tag(TAG).d(
+                    "getAuthState - AccountID: %s - Deserialized AuthState Last Auth Resp Config JSON: %s",
+                    accountId,
+                    deserializedAuthState.lastAuthorizationResponse?.request?.configuration?.toJsonString()
+                )
                 Timber.tag(TAG)
                     .d("Successfully retrieved and decrypted AuthState for ID: %s", accountId)
                 return@withContext PersistenceResult.Success(deserializedAuthState)
@@ -327,11 +358,21 @@ class GoogleTokenPersistenceService @Inject constructor(
                         "Failed to encrypt AuthState for account ID during update: %s",
                         accountId
                     )
+                    Timber.tag(TAG).d(
+                        "updateAuthState - AccountID: %s - AuthState to encrypt JSON: %s",
+                        accountId,
+                        newAuthStateJson
+                    )
                     return@withContext PersistenceResult.Failure<GooglePersistenceErrorType>(
                         GooglePersistenceErrorType.ENCRYPTION_FAILED,
                         "Failed to encrypt AuthState during update for ID: $accountId"
                     )
                 }
+                Timber.tag(TAG).d(
+                    "updateAuthState - AccountID: %s - Encrypted AuthState to save: %s",
+                    accountId,
+                    encryptedAuthStateJson
+                )
 
                 val existingEmail = accountManager.getUserData(account, KEY_USER_EMAIL)
                 val existingDisplayName = accountManager.getUserData(account, KEY_USER_DISPLAY_NAME)
