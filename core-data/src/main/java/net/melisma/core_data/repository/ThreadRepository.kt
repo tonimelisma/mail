@@ -29,6 +29,7 @@ interface ThreadRepository {
     suspend fun moveThread(
         account: Account,
         threadId: String,
+        currentFolderId: String,
         destinationFolderId: String
     ): Result<Unit>
 } 

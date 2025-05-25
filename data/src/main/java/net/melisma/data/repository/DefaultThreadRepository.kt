@@ -437,22 +437,22 @@ class DefaultThreadRepository @Inject constructor(
     override suspend fun moveThread(
         account: Account,
         threadId: String,
+        currentFolderId: String,
         destinationFolderId: String
     ): Result<Unit> {
         Log.d(
             TAG,
-            "moveThread called for thread: $threadId, to folder: $destinationFolderId, account: ${account.username}"
+            "moveThread called for thread: $threadId, from folder: $currentFolderId, to folder: $destinationFolderId, account: ${account.username}"
         )
         val apiService = mailApiServices[account.providerType.uppercase()]
             ?: return Result.failure(NotImplementedError("moveThread not implemented for account ${account.providerType}"))
 
-        val currentFolderId = currentTargetFolder?.id
-        if (currentFolderId == null) {
+        if (currentFolderId.isBlank()) {
             Log.e(
                 TAG,
-                "moveThread: currentFolderId is null, cannot determine source folder for API call."
+                "moveThread: provided currentFolderId is blank. This is required."
             )
-            return Result.failure(IllegalStateException("Current folder not set, cannot move thread."))
+            return Result.failure(IllegalArgumentException("currentFolderId cannot be blank."))
         }
 
         val result = apiService.moveThread(threadId, currentFolderId, destinationFolderId)

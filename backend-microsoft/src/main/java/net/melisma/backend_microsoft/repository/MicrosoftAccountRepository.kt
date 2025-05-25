@@ -361,31 +361,28 @@ class MicrosoftAccountRepository @Inject constructor(
     override fun observeActionMessages(): Flow<String?> = _accountActionMessage.asSharedFlow()
 
     override fun clearActionMessage() {
-        Timber.tag(TAG).d("clearActionMessage called.")
         _accountActionMessage.tryEmit(null)
     }
 
     override suspend fun markAccountForReauthentication(accountId: String, providerType: String) {
-        Timber.tag(TAG)
-            .i("Marking MS account $accountId (provider: $providerType) for re-authentication.")
-        val currentAccounts = _msAccounts.value.toMutableList()
-        val accountIndex =
-            currentAccounts.indexOfFirst { it.id == accountId && it.providerType == providerType }
-
-        if (accountIndex != -1) {
-            val accountToUpdate = currentAccounts[accountIndex]
-            if (!accountToUpdate.needsReauthentication) {
-                currentAccounts[accountIndex] = accountToUpdate.copy(needsReauthentication = true)
-                _msAccounts.value = currentAccounts
-                Timber.tag(TAG).d("Account $accountId marked for re-authentication in _msAccounts.")
-                updateOverallApplicationAuthState()
-            } else {
-                Timber.tag(TAG).d("Account $accountId was already marked for re-authentication.")
-            }
-        } else {
-            Timber.tag(TAG)
-                .w("Account $accountId not found in _msAccounts to mark for re-authentication.")
+        if (providerType != Account.PROVIDER_TYPE_MS) return
+        val currentList = _msAccounts.value
+        _msAccounts.value = currentList.map { account ->
+            if (account.id == accountId) account.copy(needsReauthentication = true) else account
         }
+
+        updateOverallApplicationAuthState()
+        // Potentially call microsoftAuthManager.signOut(accountId, true) // if a soft sign-out/reauth is needed
+        Timber.tag(TAG).i("Account $accountId marked for re-authentication.")
+    }
+
+    // Stub implementation for new method
+    override suspend fun syncAccount(accountId: String): Result<Unit> {
+        Timber.tag(TAG)
+            .d("syncAccount called for accountId: $accountId in MicrosoftAccountRepository")
+        // This would trigger specific Microsoft sync/refresh mechanisms if available.
+        // For now, just a placeholder.
+        return Result.success(Unit) // Or Result.failure(NotImplementedError("syncAccount for MS not implemented"))
     }
 
     private fun updateOverallApplicationAuthState() {

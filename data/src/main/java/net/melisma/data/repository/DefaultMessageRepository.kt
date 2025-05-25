@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -24,6 +25,8 @@ import net.melisma.core_data.model.Account
 import net.melisma.core_data.model.MailFolder
 import net.melisma.core_data.model.Message
 import net.melisma.core_data.model.MessageDataState
+import net.melisma.core_data.model.MessageDraft
+import net.melisma.core_data.model.Attachment
 import net.melisma.core_data.repository.AccountRepository
 import net.melisma.core_data.repository.MessageRepository
 import javax.inject.Inject
@@ -258,7 +261,8 @@ class DefaultMessageRepository @Inject constructor(
         if (result.isSuccess) {
             _messageDataState.update { currentState ->
                 if (currentState is MessageDataState.Success) {
-                    currentState.copy(messages = currentState.messages.filterNot { it.id == messageId })
+                    val updatedMessages = currentState.messages.filterNot { it.id == messageId }
+                    currentState.copy(messages = updatedMessages)
                 } else {
                     currentState
                 }
@@ -270,34 +274,109 @@ class DefaultMessageRepository @Inject constructor(
     override suspend fun moveMessage(
         account: Account,
         messageId: String,
+        currentFolderId: String,
         destinationFolderId: String
     ): Result<Unit> {
         Log.d(
             TAG,
-            "moveMessage called for id: $messageId, to folder: $destinationFolderId, account: ${account.username}"
+            "moveMessage: id=$messageId, acc=${account.username}, from=$currentFolderId, to=$destinationFolderId"
         )
         val apiService = mailApiServices[account.providerType.uppercase()]
             ?: return Result.failure(NotImplementedError("moveMessage not implemented for account ${account.providerType}"))
 
-        val currentFolderId = currentTargetFolder?.id
-        if (currentFolderId == null) {
-            Log.e(
-                TAG,
-                "moveMessage: currentFolderId is null, cannot determine source folder for API call."
-            )
-            return Result.failure(IllegalStateException("Current folder not set, cannot move message."))
-        }
-
-        val result = apiService.moveMessage(messageId, currentFolderId, destinationFolderId)
+        val result = apiService.moveMessage(messageId, destinationFolderId, currentFolderId)
         if (result.isSuccess) {
             _messageDataState.update { currentState ->
-                if (currentState is MessageDataState.Success) {
-                    currentState.copy(messages = currentState.messages.filterNot { it.id == messageId })
+                if (currentState is MessageDataState.Success && currentTargetFolder?.id == currentFolderId) {
+                    val updatedMessages = currentState.messages.filterNot { it.id == messageId }
+                    currentState.copy(messages = updatedMessages)
                 } else {
+                    // If not the current folder, or not success state, or if a refresh is preferred after move
+                    // consider triggering refreshMessages() if the moved-from folder is the current one
+                    // For now, just pass through the current state
                     currentState
                 }
             }
         }
         return result
+    }
+
+    // Stub implementations for new methods
+    override suspend fun createDraftMessage(
+        accountId: String,
+        draftDetails: MessageDraft
+    ): Result<Message> {
+        Log.d(
+            TAG,
+            "createDraftMessage called for accountId: $accountId, draftDetails: $draftDetails"
+        )
+        // val account = accountRepository.getAccounts().firstOrNull()?.find { it.id == accountId }
+        // val apiService = account?.providerType?.uppercase()?.let { mailApiServices[it] }
+        // apiService?.createDraftMessage(draftDetails) // Actual call commented for stub
+        return Result.failure(NotImplementedError("createDraftMessage not implemented"))
+    }
+
+    override suspend fun updateDraftMessage(
+        accountId: String,
+        messageId: String,
+        draftDetails: MessageDraft
+    ): Result<Message> {
+        Log.d(
+            TAG,
+            "updateDraftMessage called for accountId: $accountId, messageId: $messageId, draftDetails: $draftDetails"
+        )
+        // val account = accountRepository.getAccounts().firstOrNull()?.find { it.id == accountId }
+        // val apiService = account?.providerType?.uppercase()?.let { mailApiServices[it] }
+        // apiService?.updateDraftMessage(messageId, draftDetails) // Actual call commented for stub
+        return Result.failure(NotImplementedError("updateDraftMessage not implemented"))
+    }
+
+    override suspend fun sendMessage(accountId: String, messageId: String): Result<Unit> {
+        Log.d(TAG, "sendMessage called for accountId: $accountId, messageId: $messageId")
+        // val account = accountRepository.getAccounts().firstOrNull()?.find { it.id == accountId }
+        // val apiService = account?.providerType?.uppercase()?.let { mailApiServices[it] }
+        // apiService?.sendMessage(messageId) // Actual call commented for stub
+        return Result.failure(NotImplementedError("sendMessage not implemented"))
+    }
+
+    override fun searchMessages(
+        accountId: String,
+        query: String,
+        folderId: String?
+    ): Flow<List<Message>> {
+        Log.d(
+            TAG,
+            "searchMessages called for accountId: $accountId, query: $query, folderId: $folderId"
+        )
+        // val account = accountRepository.getAccounts().firstOrNull()?.find { it.id == accountId }
+        // val apiService = account?.providerType?.uppercase()?.let { mailApiServices[it] }
+        // apiService?.searchMessages(query, folderId) // Actual call commented for stub
+        return flowOf(emptyList())
+    }
+
+    override fun getMessageAttachments(
+        accountId: String,
+        messageId: String
+    ): Flow<List<Attachment>> {
+        Log.d(TAG, "getMessageAttachments called for accountId: $accountId, messageId: $messageId")
+        // val account = accountRepository.getAccounts().firstOrNull()?.find { it.id == accountId }
+        // val apiService = account?.providerType?.uppercase()?.let { mailApiServices[it] }
+        // apiService?.getMessageAttachments(messageId) // Actual call commented for stub
+        return flowOf(emptyList())
+    }
+
+    override suspend fun downloadAttachment(
+        accountId: String,
+        messageId: String,
+        attachmentId: String
+    ): Result<ByteArray> {
+        Log.d(
+            TAG,
+            "downloadAttachment called for accountId: $accountId, messageId: $messageId, attachmentId: $attachmentId"
+        )
+        // val account = accountRepository.getAccounts().firstOrNull()?.find { it.id == accountId }
+        // val apiService = account?.providerType?.uppercase()?.let { mailApiServices[it] }
+        // apiService?.downloadAttachment(messageId, attachmentId) // Actual call commented for stub
+        return Result.failure(NotImplementedError("downloadAttachment not implemented"))
     }
 }

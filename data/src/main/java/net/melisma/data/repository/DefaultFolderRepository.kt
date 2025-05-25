@@ -20,11 +20,14 @@ import net.melisma.core_data.di.MailDispatchers
 import net.melisma.core_data.errors.ErrorMapperService
 import net.melisma.core_data.model.Account
 import net.melisma.core_data.model.FolderFetchState
+import net.melisma.core_data.model.MailThread
+import net.melisma.core_data.model.Message
 import net.melisma.core_data.repository.FolderRepository
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.flow.flowOf
 
 @Singleton
 class DefaultFolderRepository @Inject constructor(
@@ -253,91 +256,106 @@ class DefaultFolderRepository @Inject constructor(
             "launchFolderFetchJob: Launching actual job for account '${account.username}' (ID: $accountId). Provider: $providerType, Initial: $isInitialLoad"
         )
         folderFetchJobs[accountId] = externalScope.launch(ioDispatcher) {
-            Log.i(TAG, "launchFolderFetchJob: Coroutine started for account '${account.username}'.")
+            Log.i(
+                TAG,
+                "Folder fetch job started for account ${account.username} (ID: $accountId). Reason: $reasonSuffix."
+            )
             try {
                 val foldersResult = mailApiService.getMailFolders()
-                ensureActive()
+                ensureActive() // Check for cancellation
 
                 if (foldersResult.isSuccess) {
-                    val folders = foldersResult.getOrNull() ?: emptyList()
-                    if (!isActive) {
-                        Log.i(
-                            TAG,
-                            "launchFolderFetchJob: Scope became inactive during fetch for '${account.username}'. Job cancelled by parent scope perhaps."
-                        )
-                        return@launch
-                    }
+                    val folders = foldersResult.getOrThrow()
                     Log.i(
                         TAG,
-                        "launchFolderFetchJob: Successfully fetched ${folders.size} folders for account '${account.username}'."
+                        "Successfully fetched ${folders.size} folders for account ${account.username}."
                     )
                     _folderStates.update { currentMap ->
                         currentMap + (accountId to FolderFetchState.Success(folders))
                     }
                 } else {
                     val exception = foldersResult.exceptionOrNull()
-                        ?: IllegalStateException("Unknown error fetching folders")
-                    Log.w(
+                    val errorDetails = errorMapper.mapExceptionToErrorDetails(exception)
+                    Log.e(
                         TAG,
-                        "launchFolderFetchJob: Failed to fetch folders for account '${account.username}'.",
+                        "Error fetching folders for account ${account.username}: ${errorDetails.message}",
                         exception
                     )
-                    val details = errorMapper.mapExceptionToErrorDetails(exception)
-                    _folderStates.update {
-                        it + (accountId to FolderFetchState.Error(details.message))
+                    _folderStates.update { currentMap ->
+                        currentMap + (accountId to FolderFetchState.Error(errorDetails.message))
                     }
                 }
             } catch (e: CancellationException) {
-                ensureActive() // Re-throw if the scope itself is cancelled
-                Log.i(
+                Log.w(
                     TAG,
-                    "launchFolderFetchJob: Folder fetch cancelled for account '${account.username}'.",
+                    "Folder fetch job cancelled for account ${account.username} (ID: $accountId).",
                     e
                 )
+                if (isActive && _folderStates.value[accountId] is FolderFetchState.Loading) {
+                    _folderStates.update { currentMap ->
+                        currentMap + (accountId to FolderFetchState.Error("Folder loading cancelled."))
+                    }
+                }
             } catch (e: Exception) {
                 Log.e(
                     TAG,
-                    "launchFolderFetchJob: Exception fetching folders for account '${account.username}'.",
+                    "Exception during folder fetch for account ${account.username} (ID: $accountId)",
                     e
                 )
-                ensureActive()
-                val details = errorMapper.mapExceptionToErrorDetails(e)
-                _folderStates.update {
-                    it + (accountId to FolderFetchState.Error(details.message))
+                if (isActive) { // Only update if the job is still supposed to be active for this accountId
+                    val details = errorMapper.mapExceptionToErrorDetails(e)
+                    _folderStates.update { currentMap ->
+                        currentMap + (accountId to FolderFetchState.Error(details.message))
+                    }
                 }
             } finally {
-                if (isActive) {
+                if (folderFetchJobs[accountId] == coroutineContext[Job]) {
+                    folderFetchJobs.remove(accountId)
                     Log.d(
                         TAG,
-                        "launchFolderFetchJob: Coroutine finished for account '${account.username}'. Removing job from map."
+                        "Folder fetch job completed and removed for account ${account.username} (ID: $accountId)."
                     )
                 }
-                folderFetchJobs.remove(accountId)
             }
         }
-        Log.d(TAG, "launchFolderFetchJob: Job launched for account '${account.username}'.")
     }
 
     private fun cancelAndRemoveJob(accountId: String, reason: String) {
-        val jobToCancel = folderFetchJobs[accountId]
-        if (jobToCancel != null) {
-            Log.d(
-                TAG,
-                "cancelAndRemoveJob for accountId '$accountId'. Reason: '$reason'. Current job active: ${jobToCancel.isActive}. Hash: ${jobToCancel.hashCode()}"
-            )
-            folderFetchJobs.remove(accountId) // Remove first to prevent re-assignment issues in racing conditions
-            if (jobToCancel.isActive) {
-                jobToCancel.cancel(CancellationException("Job cancelled for account $accountId: $reason"))
-                Log.i(
+        folderFetchJobs[accountId]?.let {
+            if (it.isActive) {
+                Log.d(
                     TAG,
-                    "Previous folder fetch job (Hash: ${jobToCancel.hashCode()}) for account '$accountId' cancelled due to: $reason"
+                    "Cancelling folder fetch job for account $accountId. Reason: $reason. Hash: ${it.hashCode()}"
                 )
+                it.cancel(CancellationException("Job cancelled: $reason"))
             }
-        } else {
-            Log.d(
-                TAG,
-                "cancelAndRemoveJob for accountId '$accountId'. Reason: '$reason'. No active job to cancel."
-            )
         }
+        folderFetchJobs.remove(accountId)
+        Log.d(TAG, "cancelAndRemoveJob: Removed job for account $accountId. Reason: $reason")
+    }
+
+    // Stub implementations for new methods
+    override suspend fun syncFolderContents(accountId: String, folderId: String): Result<Unit> {
+        Log.d(TAG, "syncFolderContents called for accountId: $accountId, folderId: $folderId")
+        // val account = observedAccounts[accountId]
+        // val apiService = account?.providerType?.uppercase()?.let { mailApiServices[it] }
+        // apiService?.syncFolderContents(folderId) // Actual call commented for stub
+        return Result.failure(NotImplementedError("syncFolderContents not implemented"))
+    }
+
+    override fun getThreadsInFolder(accountId: String, folderId: String): Flow<List<MailThread>> {
+        Log.d(TAG, "getThreadsInFolder called for accountId: $accountId, folderId: $folderId")
+        // val account = observedAccounts[accountId]
+        // val apiService = account?.providerType?.uppercase()?.let { mailApiServices[it] }
+        // apiService?.getThreadsInFolder(folderId) // Actual call commented for stub
+        return flowOf(emptyList())
+    }
+
+    override fun getMessagesInFolder(accountId: String, folderId: String): Flow<List<Message>> {
+        Log.d(TAG, "getMessagesInFolder called for accountId: $accountId, folderId: $folderId")
+        // val account = observedAccounts[accountId]
+        // val apiService = account?.providerType?.uppercase()?.let { mailApiServices[it] }
+        // apiService?.getMessagesForFolder(folderId) // Actual call commented for stub
+        return flowOf(emptyList())
     }
 }

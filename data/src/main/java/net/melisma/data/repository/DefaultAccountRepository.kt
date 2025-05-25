@@ -4,6 +4,7 @@ package net.melisma.data.repository
 import android.app.Activity
 import android.content.Intent
 import android.net.Uri
+import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
@@ -809,6 +810,17 @@ class DefaultAccountRepository @Inject constructor(
             GooglePersistenceErrorType.UNKNOWN_ERROR,
             GooglePersistenceErrorType.AUTH_STATE_SERIALIZATION_FAILED -> GenericAuthErrorType.UNKNOWN_ERROR
         }
+    }
+
+    // Stub implementation for new method
+    override suspend fun syncAccount(accountId: String): Result<Unit> {
+        Log.d(TAG, "syncAccount called for accountId: $accountId")
+        // val account = _accounts.value.find { it.id == accountId }
+        // val apiService = account?.providerType?.uppercase()?.let { mailApiServices[it] } // This repo doesn't have direct apiService access
+        // This would likely delegate to the specific provider's sync mechanism if available,
+        // or trigger a series of refreshes (folders, etc.)
+        Timber.tag(TAG).w("syncAccount for $accountId not fully implemented. Placeholder.")
+        return Result.failure(NotImplementedError("syncAccount not implemented"))
     }
 }
 

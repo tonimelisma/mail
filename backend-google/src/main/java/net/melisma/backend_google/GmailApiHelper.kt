@@ -324,34 +324,35 @@ class GmailApiHelper @Inject constructor(
             TAG,
             "internalFetchMessageDetails: Fetching details for messageId: $messageId. SelectFields (metadata hint): $selectFields"
         )
+        val gmailMessage = fetchRawGmailMessage(messageId)
+        return gmailMessage?.let { mapGmailMessageToMessage(it) }
+    }
+
+    private suspend fun fetchRawGmailMessage(messageId: String): GmailMessage? {
+        Log.d(TAG, "fetchRawGmailMessage: Fetching raw GmailMessage for id: $messageId")
         return try {
             val response: HttpResponse = httpClient.get("$BASE_URL/messages/$messageId") {
                 accept(ContentType.Application.Json)
                 parameter("format", "FULL") // FULL provides payload, headers, body, snippet, etc.
-                // if (selectFields.isNotEmpty()) { // Example of how selectFields MIGHT map to metadataHeaders
-                //     parameter("metadataHeaders", selectFields.joinToString(","))
-                // }
             }
 
             if (!response.status.isSuccess()) {
                 Log.w(
                     TAG,
-                    "Error fetching details for message $messageId: ${response.status} - ${response.bodyAsText()}"
+                    "Error fetching raw gmail message $messageId: ${response.status} - ${response.bodyAsText()}"
                 )
                 return null
             }
-
-            val gmailMessage = response.body<GmailMessage>()
-            mapGmailMessageToMessage(gmailMessage)
+            response.body<GmailMessage>()
         } catch (e: GoogleNeedsReauthenticationException) {
             Log.w(
                 TAG,
-                "Google account ${e.accountId} needs re-authentication during internalFetchMessageDetails (message: $messageId).",
+                "Google account ${e.accountId} needs re-authentication during fetchRawGmailMessage (message: $messageId).",
                 e
             )
-            null // Or rethrow / handle specifically
+            throw e // Rethrow to be handled by the caller, or map to a specific error if preferred
         } catch (e: Exception) {
-            Log.e(TAG, "Exception in internalFetchMessageDetails for ID: $messageId", e)
+            Log.e(TAG, "Exception in fetchRawGmailMessage for ID: $messageId", e)
             null
         }
     }
@@ -664,29 +665,41 @@ class GmailApiHelper @Inject constructor(
                 }
             }
 
-            // Fetch current labels to avoid redundant operations / ensure correctness
-            // val messageDetails = internalFetchMessageDetails(messageId) // Temporarily comment out
-            // val labelsListRaw: List<String>? = messageDetails?.labelIds // Temporarily comment out
-            // val labelsSetProvisional: Set<String>? = labelsListRaw?.toSet() // Temporarily comment out
-            // val currentLabels: Set<String> = labelsSetProvisional ?: emptySet() // Temporarily comment out
-
-            // val finalAddLabels = addLabelIds.filter { it !in currentLabels }.distinct() // Temporarily comment out
-            // val finalRemoveLabels = removeLabelIds.filter { it in currentLabels }.distinct() // Temporarily comment out
-
-            // if (finalAddLabels.isEmpty() && finalRemoveLabels.isEmpty()) { // Temporarily comment out
-            //     Log.d(TAG, "No actual label changes required for message $messageId to '$destinationFolderId' (from '$currentFolderId'). Already in desired state or no-op.")
-            //     return Result.success(Unit) 
-            // }
-
-            // Log.d(TAG, "Message $messageId: Final Add labels: $finalAddLabels, Final Remove labels: $finalRemoveLabels") // Temporarily comment out
-
             // Fallback to original addLabelIds and removeLabelIds if currentLabels logic is commented out
+            val rawGmailMessage = fetchRawGmailMessage(messageId) // Fetch the raw GmailMessage
+
+            if (rawGmailMessage == null) {
+                Log.e(
+                    TAG,
+                    "Failed to fetch message details for $messageId to determine current labels. Aborting move."
+                )
+                return Result.failure(Exception("Failed to fetch message details for $messageId"))
+            }
+
+            val currentLabels: Set<String> = rawGmailMessage.labelIds.toSet()
+
+            val finalAddLabels = addLabelIds.filter { it !in currentLabels }.distinct()
+            val finalRemoveLabels = removeLabelIds.filter { it in currentLabels }.distinct()
+
+            if (finalAddLabels.isEmpty() && finalRemoveLabels.isEmpty()) {
+                Log.d(
+                    TAG,
+                    "No actual label changes required for message $messageId to '$destinationFolderId' (from '$currentFolderId'). Already in desired state or no-op."
+                )
+                return Result.success(Unit)
+            }
+
+            Log.d(
+                TAG,
+                "Message $messageId: Final Add labels: $finalAddLabels, Final Remove labels: $finalRemoveLabels"
+            )
+
             val requestBody = buildJsonObject {
-                if (addLabelIds.isNotEmpty()) { // Use original addLabelIds
-                    putJsonArray("addLabelIds") { addLabelIds.forEach { add(it) } }
+                if (finalAddLabels.isNotEmpty()) { // Use calculated finalAddLabels
+                    putJsonArray("addLabelIds") { finalAddLabels.forEach { add(it) } }
                 }
-                if (removeLabelIds.isNotEmpty()) { // Use original removeLabelIds
-                    putJsonArray("removeLabelIds") { removeLabelIds.forEach { add(it) } }
+                if (finalRemoveLabels.isNotEmpty()) { // Use calculated finalRemoveLabels
+                    putJsonArray("removeLabelIds") { finalRemoveLabels.forEach { add(it) } }
                 }
             }
 

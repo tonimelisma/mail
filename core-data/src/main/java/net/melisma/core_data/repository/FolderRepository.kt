@@ -4,6 +4,8 @@ import android.app.Activity
 import kotlinx.coroutines.flow.Flow
 import net.melisma.core_data.model.Account // Updated import
 import net.melisma.core_data.model.FolderFetchState // Updated import
+import net.melisma.core_data.model.MailThread // Added import
+import net.melisma.core_data.model.Message // Added import
 
 /**
  * Interface defining the contract for managing mail folders for user accounts.
@@ -40,4 +42,8 @@ interface FolderRepository {
      */
     suspend fun refreshAllFolders(activity: Activity? = null)
 
+    // New methods
+    suspend fun syncFolderContents(accountId: String, folderId: String): Result<Unit>
+    fun getThreadsInFolder(accountId: String, folderId: String): Flow<List<MailThread>>
+    fun getMessagesInFolder(accountId: String, folderId: String): Flow<List<Message>>
 }

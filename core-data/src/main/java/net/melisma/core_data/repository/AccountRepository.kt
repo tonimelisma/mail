@@ -55,6 +55,9 @@ interface AccountRepository {
 
     suspend fun markAccountForReauthentication(accountId: String, providerType: String)
     // ... other necessary generic account methods
+
+    // New method
+    suspend fun syncAccount(accountId: String): Result<Unit>
 }
 
 enum class OverallApplicationAuthState {

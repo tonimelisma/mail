@@ -5,6 +5,10 @@ import kotlinx.coroutines.flow.StateFlow
 import net.melisma.core_data.model.Account // Updated import
 import net.melisma.core_data.model.MailFolder // Updated import
 import net.melisma.core_data.model.MessageDataState // Updated import
+import net.melisma.core_data.model.MessageDraft // Added import
+import net.melisma.core_data.model.Attachment // Added import
+import net.melisma.core_data.model.Message // Added import for return type
+import kotlinx.coroutines.flow.Flow // Added import for Flow
 
 /**
  * Interface defining the contract for managing mail messages within specific folders.
@@ -47,6 +51,7 @@ interface MessageRepository {
     suspend fun moveMessage(
         account: Account,
         messageId: String,
+        currentFolderId: String,
         destinationFolderId: String
     ): Result<Unit>
 
@@ -61,4 +66,29 @@ interface MessageRepository {
         messageId: String,
         accountId: String
     ): kotlinx.coroutines.flow.Flow<net.melisma.core_data.model.Message?>
+
+    // New methods for draft and message sending
+    suspend fun createDraftMessage(accountId: String, draftDetails: MessageDraft): Result<Message>
+    suspend fun updateDraftMessage(
+        accountId: String,
+        messageId: String,
+        draftDetails: MessageDraft
+    ): Result<Message>
+
+    suspend fun sendMessage(accountId: String, messageId: String): Result<Unit>
+
+    // New method for searching messages
+    fun searchMessages(
+        accountId: String,
+        query: String,
+        folderId: String? = null
+    ): Flow<List<Message>>
+
+    // New methods for attachments
+    fun getMessageAttachments(accountId: String, messageId: String): Flow<List<Attachment>>
+    suspend fun downloadAttachment(
+        accountId: String,
+        messageId: String,
+        attachmentId: String
+    ): Result<ByteArray>
 }
