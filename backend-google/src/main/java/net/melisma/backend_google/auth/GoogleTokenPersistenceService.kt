@@ -38,23 +38,27 @@ class GoogleTokenPersistenceService @Inject constructor(
         email: String?,
         displayName: String?,
         photoUrl: String?,
+        authResponse: net.openid.appauth.AuthorizationResponse,
         tokenResponse: TokenResponse
     ): PersistenceResult<Unit> = withContext(Dispatchers.IO) {
         Timber.tag(TAG)
             .d("Attempting to save tokens for Google account ID: %s, Email: %s", accountId, email)
         try {
-            val authState = AuthState(appAuthHelperService.serviceConfiguration)
-            authState.update(tokenResponse, null)
+            val authState = AuthState(
+                authResponse,
+                tokenResponse,
+                null /* No exception on successful exchange */
+            )
 
             Timber.tag(TAG).d(
-                "saveTokens - AccountID: %s - Initial AuthState Config JSON: %s",
+                "saveTokens - AccountID: %s - Constructed AuthState Config JSON: %s",
                 accountId,
                 authState.authorizationServiceConfiguration?.toJsonString()
             )
             Timber.tag(TAG).d(
-                "saveTokens - AccountID: %s - Service Config JSON: %s",
+                "saveTokens - AccountID: %s - Constructed AuthState Last Auth Resp Config JSON: %s",
                 accountId,
-                appAuthHelperService.serviceConfiguration.toJsonString()
+                authState.lastAuthorizationResponse?.request?.configuration?.toJsonString()
             )
             val authStateJson = authState.jsonSerializeString()
             Timber.tag(TAG).d(
@@ -146,6 +150,11 @@ class GoogleTokenPersistenceService @Inject constructor(
 
             try {
                 val deserializedAuthState = AuthState.jsonDeserialize(authStateJson)
+                Timber.tag(TAG).d(
+                    "getAuthState - AccountID: %s - Deserialized AuthState ID: %s",
+                    accountId,
+                    System.identityHashCode(deserializedAuthState)
+                )
                 Timber.tag(TAG).d(
                     "getAuthState - AccountID: %s - Deserialized AuthState JSON: %s",
                     accountId,

@@ -82,9 +82,9 @@ class AppAuthHelperService @Inject constructor(
             // "https://www.googleapis.com/auth/gmail.send",    // If sending mail is needed
             // "https://www.googleapis.com/auth/gmail.metadata", // If only metadata access is needed for some features
             "openid",
-            "email",
-            "profile",
-            "offline_access" // For refresh token
+            "https://www.googleapis.com/auth/userinfo.email", // Use full URL for email scope
+            "https://www.googleapis.com/auth/userinfo.profile" // Use full URL for profile scope
+            // "offline_access" // For refresh token -- REMOVED as per instruction, will use access_type parameter
         ).distinct() // Ensure no duplicates if scopes are combined programmatically later
 
         // GMAIL_SCOPES and MANDATORY_SCOPES are now consolidated into RequiredScopes
@@ -118,6 +118,10 @@ class AppAuthHelperService @Inject constructor(
             ResponseTypeValues.CODE, 
             redirectUri
         )
+
+        // Add access_type=offline for refresh token
+        val additionalParameters = mapOf("access_type" to "offline")
+        builder.setAdditionalParameters(additionalParameters)
 
         val combinedScopes = RequiredScopes.joinToString(" ") // Use the consolidated RequiredScopes
         Timber.d(
@@ -241,6 +245,8 @@ class AppAuthHelperService @Inject constructor(
     suspend fun refreshAccessToken(authState: AuthState): TokenResponse =
         suspendCancellableCoroutine { continuation ->
             Timber.d("Suspending: Attempting to refresh access token. Needs refresh: ${authState.needsTokenRefresh}")
+            Timber.tag(TAG)
+                .d("refreshAccessToken - Input AuthState ID: ${System.identityHashCode(authState)}")
             Timber.tag(TAG)
                 .d("refreshAccessToken - Input AuthState JSON: ${authState.jsonSerializeString()}")
             Timber.tag(TAG)

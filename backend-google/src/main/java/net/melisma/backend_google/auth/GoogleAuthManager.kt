@@ -255,6 +255,7 @@ class GoogleAuthManager @Inject constructor(
             email = parsedTokenInfo.email,
             displayName = parsedTokenInfo.displayName,
             photoUrl = parsedTokenInfo.picture,
+            authResponse = authResponse!!, // Pass the original authResponse
             tokenResponse = tokenResponse!! // tokenResponse is confirmed non-null
         )
         when (val opResult = persistenceOpResult) {
@@ -447,6 +448,11 @@ class GoogleAuthManager @Inject constructor(
                 }
             }
 
+            Timber.tag(TAG).d(
+                "getFreshAccessToken - AccountID: $accountId - Retrieved AuthState ID: ${
+                    System.identityHashCode(currentAuthState)
+                }"
+            )
             Timber.tag(TAG)
                 .d("getFreshAccessToken - AccountID: $accountId - Retrieved AuthState JSON: ${currentAuthState.jsonSerializeString()}")
             Timber.tag(TAG)
@@ -460,6 +466,13 @@ class GoogleAuthManager @Inject constructor(
                 TAG,
                 "Access token needs refresh for account $accountId (or assumed to by compiler warning)."
             )
+            Timber.tag(TAG).d(
+                "getFreshAccessToken - AccountID: $accountId - AuthState ID before refresh call: ${
+                    System.identityHashCode(currentAuthState)
+                }"
+            )
+            Timber.tag(TAG)
+                .d("getFreshAccessToken - AccountID: $accountId - AuthState Config JSON before refresh call: ${currentAuthState.authorizationServiceConfiguration?.toJsonString()}")
             try {
                 val refreshedTokenResponse =
                     appAuthHelperService.refreshAccessToken(currentAuthState)
