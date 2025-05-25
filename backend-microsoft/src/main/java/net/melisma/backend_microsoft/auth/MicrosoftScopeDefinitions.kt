@@ -25,10 +25,9 @@ object MicrosoftScopeDefinitions {
         CALENDARS_READ_WRITE,
         CONTACTS_READ_WRITE,
         OPENID,
-        PROFILE,
-        OFFLINE_ACCESS
+        PROFILE
     )
 
     // MinimumRequiredScopes has been removed to simplify scope management.
     // The application will now require all scopes defined in RequiredScopes.
-} 
+}

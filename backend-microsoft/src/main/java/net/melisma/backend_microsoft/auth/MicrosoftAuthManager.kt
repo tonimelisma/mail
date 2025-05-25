@@ -270,6 +270,15 @@ class MicrosoftAuthManager @Inject constructor(
                     Timber.tag(TAG)
                         .d("Granted scopes from MSAL: ${authenticationResult.scope?.joinToString()}")
 
+                    // Log refresh token availability (MSAL might not expose it directly)
+                    // MSAL typically handles refresh tokens internally.
+                    // We can check if the IAuthenticationResult contains any information related to it,
+                    // or if a new refresh token was issued. However, direct access is unlikely.
+                    // For now, logging the entire authenticationResult for inspection.
+                    Timber.tag(TAG).d("AuthenticationResult details: $authenticationResult")
+                    // You might need to inspect the authenticationResult object structure
+                    // or MSAL documentation to find specific refresh token indicators if any are available.
+
                     // Verify all requested scopes were granted
                     val requestedScopesSet = scopes.toSet()
                     val grantedScopesSet = authenticationResult.scope?.toSet() ?: emptySet()
