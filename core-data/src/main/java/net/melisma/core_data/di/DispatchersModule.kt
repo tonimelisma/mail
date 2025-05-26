@@ -5,6 +5,8 @@ import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
 import javax.inject.Singleton
 
 /**
@@ -30,6 +32,14 @@ object DispatchersModule { // 'object' for modules with only @Provides methods
     fun provideIoDispatcher(): CoroutineDispatcher {
         // Return the standard IO dispatcher from kotlinx.coroutines
         return kotlinx.coroutines.Dispatchers.IO
+    }
+
+    @Provides
+    @Singleton
+    fun provideExternalCoroutineScope(
+        @Dispatcher(MailDispatchers.IO) ioDispatcher: CoroutineDispatcher
+    ): CoroutineScope {
+        return CoroutineScope(SupervisorJob() + ioDispatcher)
     }
 
     // --- Optional: Example of providing other dispatchers if needed in the future ---

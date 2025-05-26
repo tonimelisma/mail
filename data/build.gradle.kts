@@ -62,6 +62,14 @@ dependencies {
     implementation(project(":backend-microsoft")) // For MS-specific components
     implementation(project(":backend-google")) // For Google-specific components
 
+    // --- Room --- 
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+
+    // --- Paging 3 ---
+    implementation(libs.androidx.paging.runtime) // Use -ktx version for coroutine support
+    // implementation(libs.androidx.paging.common.ktx) // common is usually transitive
+
     // --- Google Identity Library ---
     implementation(libs.google.id)
 

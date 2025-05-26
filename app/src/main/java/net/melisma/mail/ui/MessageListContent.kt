@@ -17,6 +17,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Email
+import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -82,10 +83,11 @@ fun MessageListContent(
                         message = initialLoadError.error.localizedMessage
                             ?: stringResource(R.string.unknown_error),
                         content = {
-                            ButtonPrimary(
-                                text = stringResource(id = R.string.action_retry),
+                            Button(
                                 onClick = onRetry
-                            )
+                            ) {
+                                Text(stringResource(id = R.string.action_retry))
+                            }
                         }
                     )
                 }

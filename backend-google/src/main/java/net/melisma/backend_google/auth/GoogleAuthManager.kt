@@ -364,10 +364,10 @@ class GoogleAuthManager @Inject constructor(
     }
 
     // Step 2.8: Implement GoogleAuthManager.signOut(managedAccount: ManagedGoogleAccount): Flow<GoogleSignOutResult>
-    fun signOut(managedAccount: ManagedGoogleAccount): Flow<GoogleSignOutResult> = flow {
-        Log.d(TAG, "Signing out account: ${managedAccount.accountId}")
+    fun signOut(accountId: String): Flow<GoogleSignOutResult> = flow {
+        Log.d(TAG, "Signing out account: $accountId")
 
-        val authStateResult = tokenPersistenceService.getAuthState(managedAccount.accountId)
+        val authStateResult = tokenPersistenceService.getAuthState(accountId)
         val authState: AuthState? = when (authStateResult) {
             is PersistenceResult.Success -> authStateResult.data
             is PersistenceResult.Failure<*> -> {
@@ -384,22 +384,22 @@ class GoogleAuthManager @Inject constructor(
 
         if (authState?.refreshToken != null) {
             try {
-                Log.d(TAG, "Attempting to revoke token for ${managedAccount.accountId}")
+                Log.d(TAG, "Attempting to revoke token for $accountId")
                 appAuthHelperService.revokeToken(authState.refreshToken!!) 
             } catch (e: Exception) {
-                Log.w(TAG, "Token revocation failed for ${managedAccount.accountId}", e)
+                Log.w(TAG, "Token revocation failed for $accountId", e)
             }
         }
 
         val clearTokenResult = tokenPersistenceService.clearTokens(
-            accountId = managedAccount.accountId,
+            accountId = accountId,
             removeAccountFromManagerFlag = true
         )
 
         when (val opResult = clearTokenResult) {
             is PersistenceResult.Success -> {
-                Log.d(TAG, "Tokens cleared successfully for ${managedAccount.accountId}")
-                if (activeGoogleAccountHolder.activeAccountId.value == managedAccount.accountId) {
+                Log.d(TAG, "Tokens cleared successfully for $accountId")
+                if (activeGoogleAccountHolder.activeAccountId.value == accountId) {
                     activeGoogleAccountHolder.setActiveAccountId(null)
                 }
                 emit(GoogleSignOutResult.Success)
@@ -415,7 +415,7 @@ class GoogleAuthManager @Inject constructor(
             }
         }
     }.flowOn(ioDispatcher).catch { e ->
-        Log.e(TAG, "Error in signOut flow for ${managedAccount.accountId}", e)
+        Log.e(TAG, "Error in signOut flow for $accountId", e)
         emit(GoogleSignOutResult.Error("Sign out failed: ${e.message}", e))
     }
 

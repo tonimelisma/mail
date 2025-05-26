@@ -10,6 +10,7 @@ import android.util.Log
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.paging.PagingConfig
 import androidx.paging.PagingData
 import androidx.paging.cachedIn
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -543,7 +544,7 @@ class MainViewModel @Inject constructor(
                 if (_uiState.value.messageSyncState !is MessageSyncState.Idle) {
                     messageRepository.setTargetFolder(null, null)
                 }
-                threadRepository.setTargetFolderForThreads(account, folder)
+                threadRepository.setTargetFolderForThreads(account, folder, null)
             } else {
                 Log.d(
                     TAG,
@@ -636,7 +637,6 @@ class MainViewModel @Inject constructor(
                     } else {
                         currentState.messageSyncState
                     },
-                    messages = if (newMode == ViewMode.THREADS) emptyList() else currentState.messages,
                     threadDataState = if (newMode == ViewMode.MESSAGES && currentState.threadDataState !is ThreadDataState.Initial) {
                         ThreadDataState.Initial
                     } else {
@@ -831,7 +831,9 @@ class MainViewModel @Inject constructor(
         // }
 
         if (_uiState.value.currentViewMode == MailViewModePreference.THREADS) {
-            threadRepository.setTargetFolderForThreads(account, folder, applicationContext)
+            viewModelScope.launch {
+                threadRepository.setTargetFolderForThreads(account, folder, null)
+            }
         }
     }
 

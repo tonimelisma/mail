@@ -15,6 +15,8 @@ import net.melisma.core_db.AppDatabase
 import net.melisma.core_db.entity.MessageEntity
 import net.melisma.data.mapper.toEntity
 import java.io.IOException
+import java.time.OffsetDateTime
+import java.time.ZoneOffset
 
 // Define a simple class to hold API response for paged messages
 data class PagedMessageResponse(
@@ -137,19 +139,28 @@ class MessageRemoteMediator(
                     for (i in 0 until pageSize) {
                         val currentItemIndex = itemOffset + i
                         if (currentItemIndex >= totalRemoteItems) break
+                        // Construct a proper ISO 8601 string for receivedDateTime
+                        val receivedDt = OffsetDateTime.now(ZoneOffset.UTC)
+                            .minusMinutes(currentItemIndex.toLong())
+                        val sentDt = receivedDt.minusHours(1) // Example for sentDateTime
+
                         simulatedMessages.add(
                             Message(
-                                messageId = "remote_${accountId}_${folderId}_${currentItemIndex}",
-                                accountId = accountId,
-                                folderId = folderId,
+                                id = "remote_${accountId}_${folderId}_${currentItemIndex}", // Changed from messageId
+                                threadId = "thread_${accountId}_${folderId}_${currentItemIndex % 5}", // Added example threadId
                                 subject = "Remote Message ${currentItemIndex + 1}",
-                                snippet = "This is a remote message snippet ${currentItemIndex + 1}.",
+                                bodyPreview = "This is a remote message snippet ${currentItemIndex + 1}.", // Changed from snippet
                                 senderName = "Remote Sender",
-                                timestamp = System.currentTimeMillis() - (currentItemIndex * 60000), // newer are smaller index
+                                senderAddress = "sender${currentItemIndex}@example.com", // Added example senderAddress
+                                timestamp = receivedDt.toInstant()
+                                    .toEpochMilli(), // Keep existing logic, or use Message.fromApi which derives it
+                                receivedDateTime = receivedDt.toString(), // Added
+                                sentDateTime = sentDt.toString(), // Added
                                 isRead = false,
-                                isStarred = false,
-                                hasAttachments = false,
-                                // other fields...
+                                isStarred = (currentItemIndex % 4 == 0), // Added example
+                                hasAttachments = (currentItemIndex % 3 == 0), // Added example
+                                recipientNames = listOf("Recipient ${currentItemIndex + 1}"), // Added example
+                                recipientAddresses = listOf("recipient${currentItemIndex + 1}@example.com") // Added example
                             )
                         )
                     }

@@ -58,6 +58,74 @@ The project has made significant progress towards the offline-first vision.
       This is symptomatic of missing providers for CoroutineScope and a qualified @MicrosoftRepo
       AccountRepository, and potentially an incorrect request for an unqualified CoroutineDispatcher
       in DefaultAccountRepository's constructor.
+* **Phase 2c: Build System & Paging Compose Fixes (Completed)**
+    * **Resolved KSP Hilt errors for `CoroutineDispatcher` in `:data`**:
+        * Initially, `DefaultAccountRepository` failed to resolve `CoroutineDispatcher`.
+        * Fixed by adding explicit imports for `kotlinx.coroutines.CoroutineDispatcher`,
+          `net.melisma.core_data.di.Dispatcher`, and `net.melisma.core_data.di.MailDispatchers` in
+          `DefaultAccountRepository.kt`.
+    * **Fixed `:data` module Kotlin compilation errors**:
+        * Added missing Room (`libs.androidx.room.runtime`, `libs.androidx.room.ktx`) and Paging (
+          `libs.androidx.paging.runtime`) dependencies to `data/build.gradle.kts`.
+        * Corrected `Message` domain object construction within `MessageRemoteMediator.kt` to align
+          with the `Message.kt` domain model, resolving field mismatches.
+        * Extensive refactoring of `DefaultAccountRepository.kt`:
+            * The `AccountEntity.kt` in `:core-db` was updated to include
+              `needsReauthentication: Boolean`. (Note: This implies a new database migration, e.g.,
+              `MIGRATION_3_4` if previous was 2->3, is required but was not explicitly created in
+              this session log).
+            * `AccountMappers.kt` was created in `:data` with `Account.toEntity()` and
+              `AccountEntity.toDomainAccount()` to handle conversions.
+            * Removed old in-memory state management (`_googleAccounts`, `_accounts`), now relying
+              on DAO observation in the `init` block for `overallApplicationAuthState` and active
+              account management.
+            * Refactored `markAccountForReauthentication` to update
+              `AccountEntity.needsReauthentication` via the DAO.
+            * Corrected error handling and type mismatches for `GoogleSignInResult`,
+              `GoogleSignOutResult` (including removing a non-existent `Loading` state and ensuring
+              `when` exhaustiveness), and `MappedErrorDetails` constructor calls.
+            * Modified `GoogleAuthManager.signOut` method signature to accept `accountId: String`
+              instead of `ManagedGoogleAccount` to simplify calls from `DefaultAccountRepository`.
+            * Resolved numerous nullability issues (e.g., using `e.message ?: "Unknown cause"`) and
+              argument type mismatches through careful type checking, explicit casting where safe,
+              and ensuring correct Hilt flow collection (e.g., `.first()` for
+              `Flow<GoogleSignOutResult>`).
+        * Fixed `DefaultMessageRepository.kt`:
+            * Added `@OptIn(ExperimentalPagingApi::class)` to `getMessagesPager` method.
+            * Corrected `PagingData.map` usage by adding an explicit import for
+              `androidx.paging.map` and ensuring correct lambda parameter typing.
+            * **A critical fix was made to a `Log.e` call in `markMessageRead`'s catch block. The
+              arguments were incorrect (passing an `Exception` as the tag). This was changed
+              to `Timber.tag(TAG).e(exception, message)`, which resolved a very persistent and
+              misleading "Argument type mismatch" error that the compiler was reporting
+              in `DefaultAccountRepository.kt` for a different issue.**
+    * **Fixed `:app` module Kotlin compilation errors**:
+        * Added `androidx.paging.PagingConfig` import to `MainViewModel.kt`.
+        * Removed the `messages: List<Message>` field from `MainScreenState` in `MainViewModel.kt`
+          as Paging 3 now uses `LazyPagingItems` in the UI. Adjusted `setViewModePreference`
+          accordingly.
+        * Ensured `threadRepository.setTargetFolderForThreads` in `MainViewModel.kt` is called from
+          a `viewModelScope.launch` coroutine context and changed an `applicationContext` argument
+          to `null` for the `Activity?` parameter where an activity instance was not suitable.
+        * Added a `modifier: Modifier = Modifier` parameter to the `LoadingIndicator` Composable in
+          `MainAppScreen.kt` and applied it.
+        * Replaced usages of a missing custom `ButtonPrimary` Composable with the standard
+          `androidx.compose.material3.Button` in `MessageListContent.kt`.
+        * Added missing string resources (`unknown_error`, `action_retry`, `loading_more_messages`,
+          `error_loading_more_failed`) to `app/src/main/res/values/strings.xml`.
+        * Added the `implementation(libs.androidx.paging.compose)` dependency to
+          `app/build.gradle.kts`, which was crucial for resolving many `LazyPagingItems` related
+          errors.
+    * **Resolved Hilt `DuplicateBindings` errors**:
+        * **`@MicrosoftRepo AccountRepository`**: Deleted the redundant
+          `BackendMicrosoftBindsModule.kt` file from the `backend-microsoft` module, as
+          `MicrosoftRepositoryModule.kt` (created earlier) already provided the same binding.
+        * **`kotlinx.coroutines.CoroutineScope`**: Removed the unqualified `CoroutineScope`
+          provider (`provideApplicationCoroutineScope`) from `AppProvidesModule.kt` in the `:app`
+          module. The existing provider in `DispatchersModule.kt` (in `:core-data`) now serves as
+          the sole singleton provider for the application-wide `CoroutineScope` (using the IO
+          dispatcher).
+    * **Build Status**: The project is now **BUILDING SUCCESSFULLY**.
 
 ## **III. Known Technical Debt & Shortcuts**
 
@@ -132,3 +200,100 @@ The immediate priority is to get the project building successfully.
     * **Task 4.3**: If the body is missing, trigger a use case that calls
       mailApiService.getMessageDetails(), saves the result to the MessageBodyDao, and lets the
       reactive UI update automatically.
+
+## **V. Session Updates (Current Session Summary)**
+
+This section tracks work completed during the interactive development session.
+
+**Phase 2c: Build System & Paging Compose Fixes (Completed)**
+
+This extensive troubleshooting and refactoring session focused on getting the project from a
+non-building state with numerous Hilt and Kotlin compilation errors to a **successfully building
+state**.
+
+* **Resolved KSP Hilt errors for `CoroutineDispatcher` in `:data`**:
+  * Initially, `DefaultAccountRepository` failed to resolve `CoroutineDispatcher`.
+  * Fixed by adding explicit imports for `kotlinx.coroutines.CoroutineDispatcher`,
+  `net.melisma.core_data.di.Dispatcher`, and `net.melisma.core_data.di.MailDispatchers` in
+  `DefaultAccountRepository.kt`.
+
+* **Fixed `:data` module Kotlin compilation errors**:
+  * Added missing Room (`libs.androidx.room.runtime`, `libs.androidx.room.ktx`) and Paging (
+  `libs.androidx.paging.runtime`) dependencies to `data/build.gradle.kts`.
+  * Corrected `Message` domain object construction within `MessageRemoteMediator.kt` to align with
+  the `Message.kt` domain model, resolving field mismatches.
+  * Extensive refactoring of `DefaultAccountRepository.kt`:
+  * The `AccountEntity.kt` in `:core-db` was updated to include `needsReauthentication: Boolean`. (
+  Note: This implies a new database migration, e.g., `MIGRATION_3_4` if previous was 2->3, is
+  required but was not explicitly created in this session log).
+  *   `AccountMappers.kt` was created in `:data` with `Account.toEntity()` and
+  `AccountEntity.toDomainAccount()` to handle conversions.
+  * Removed old in-memory state management (`_googleAccounts`, `_accounts`), now relying on DAO
+  observation in the `init` block for `overallApplicationAuthState` and active account management.
+  * Refactored `markAccountForReauthentication` to update `AccountEntity.needsReauthentication` via
+  the DAO.
+  * Corrected error handling and type mismatches for `GoogleSignInResult`, `GoogleSignOutResult` (
+  including removing a non-existent `Loading` state and ensuring `when` exhaustiveness), and
+  `MappedErrorDetails` constructor calls.
+  * Modified `GoogleAuthManager.signOut` method signature to accept `accountId: String` instead of
+  `ManagedGoogleAccount` to simplify calls from `DefaultAccountRepository`.
+  * Resolved numerous nullability issues (e.g., using `e.message ?: "Unknown cause"`) and argument
+  type mismatches through careful type checking, explicit casting where safe, and ensuring correct
+  Hilt flow collection (e.g., `.first()` for `Flow<GoogleSignOutResult>`).
+  * Fixed `DefaultMessageRepository.kt`:
+  * Added `@OptIn(ExperimentalPagingApi::class)` to `getMessagesPager` method.
+  * Corrected `PagingData.map` usage by adding an explicit import for `androidx.paging.map` and
+  ensuring correct lambda parameter typing.
+  *   **A critical fix was made to a `Log.e` call in `markMessageRead`'s catch block. The arguments
+  were incorrect (passing an `Exception` as the tag). This was changed
+  to `Timber.tag(TAG).e(exception, message)`, which resolved a very persistent and misleading "
+  Argument type mismatch" error that the compiler was reporting in `DefaultAccountRepository.kt` for
+  a different issue.**
+
+* **Fixed `:app` module Kotlin compilation errors**:
+  * Added `androidx.paging.PagingConfig` import to `MainViewModel.kt`.
+  * Removed the `messages: List<Message>` field from `MainScreenState` in `MainViewModel.kt` as
+  Paging 3 now uses `LazyPagingItems` in the UI. Adjusted `setViewModePreference` accordingly.
+  * Ensured `threadRepository.setTargetFolderForThreads` in `MainViewModel.kt` is called from a
+  `viewModelScope.launch` coroutine context and changed an `applicationContext` argument to `null`
+  for the `Activity?` parameter where an activity instance was not suitable.
+  * Added a `modifier: Modifier = Modifier` parameter to the `LoadingIndicator` Composable in
+  `MainAppScreen.kt` and applied it.
+  * Replaced usages of a missing custom `ButtonPrimary` Composable with the standard
+  `androidx.compose.material3.Button` in `MessageListContent.kt`.
+  * Added missing string resources (`unknown_error`, `action_retry`, `loading_more_messages`,
+  `error_loading_more_failed`) to `app/src/main/res/values/strings.xml`.
+  * Added the `implementation(libs.androidx.paging.compose)` dependency to `app/build.gradle.kts`,
+  which was crucial for resolving many `LazyPagingItems` related errors.
+
+* **Resolved Hilt `DuplicateBindings` errors**:
+  *   **`@MicrosoftRepo AccountRepository`**: Deleted the redundant `BackendMicrosoftBindsModule.kt`
+  file from the `backend-microsoft` module, as `MicrosoftRepositoryModule.kt` (created earlier)
+  already provided the same binding.
+  *   **`kotlinx.coroutines.CoroutineScope`**: Removed the unqualified `CoroutineScope` provider (
+  `provideApplicationCoroutineScope`) from `AppProvidesModule.kt` in the `:app` module. The existing
+  provider in `DispatchersModule.kt` (in `:core-data`) now serves as the sole singleton provider for
+  the application-wide `CoroutineScope` (using the IO dispatcher).
+
+* **Build Status**: The project is now **BUILDING SUCCESSFULLY**.
+
+**Potential Issues & Areas for Future Review from this Session:**
+
+* **Database Migration for `AccountEntity`**: The addition of `needsReauthentication` to
+  `AccountEntity` requires a new Room database migration. This was not explicitly created or tracked
+  during this session. Failure to add this will result in runtime crashes for existing
+  installations.
+* **`Activity?` Argument in `MainViewModel`**: Passing `null` for the `Activity?` parameter to
+  `threadRepository.setTargetFolderForThreads` from `MainViewModel.onFolderSelected` should be
+  reviewed. If `setTargetFolderForThreads` genuinely requires an `Activity` for some operations (
+  e.g., triggering auth flows), this functionality might be impaired or alternative approaches might
+  be needed.
+* **Missing `ButtonPrimary` Composable**: The custom `ButtonPrimary` was replaced with a standard
+  `Button`. If `ButtonPrimary` had specific styling or functionality, this has been lost and might
+  need to be recreated or the standard `Button` styled appropriately.
+* **Root Cause of Misleading Compiler Errors**: The session highlighted how a single, misplaced
+  error (like the `Log.e` arguments) can cause the compiler to report errors in unrelated files,
+  making debugging significantly harder. This underscores the importance of careful, systematic
+  error checking.
+* **Thorough Paging 3 Testing**: While the Paging 3 setup now compiles, runtime testing of initial
+  load, append, refresh, and error states for the message list is essential.

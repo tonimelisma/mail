@@ -5,17 +5,17 @@ import dagger.Module
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import net.melisma.backend_microsoft.repository.MicrosoftAccountRepository
-import net.melisma.core_data.di.MicrosoftRepo // Import the qualifier
+import net.melisma.core_data.di.MicrosoftRepo
 import net.melisma.core_data.repository.AccountRepository
 import javax.inject.Singleton
 
 @Module
 @InstallIn(SingletonComponent::class)
-abstract class BackendMicrosoftBindsModule {
+abstract class MicrosoftRepositoryModule {
 
     @Binds
     @Singleton
-    @MicrosoftRepo // Apply the qualifier
+    @MicrosoftRepo
     abstract fun bindMicrosoftAccountRepository(
         impl: MicrosoftAccountRepository
     ): AccountRepository

@@ -2,6 +2,7 @@ package net.melisma.data.repository
 
 import android.app.Activity
 import android.util.Log
+import androidx.paging.ExperimentalPagingApi
 import androidx.paging.Pager
 import androidx.paging.PagingConfig
 import androidx.paging.PagingData
@@ -36,6 +37,7 @@ import net.melisma.core_db.dao.MessageDao
 import net.melisma.data.mapper.toDomainModel
 import net.melisma.data.mapper.toEntity
 import net.melisma.data.paging.MessageRemoteMediator
+import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.cancellation.CancellationException
@@ -74,6 +76,7 @@ class DefaultMessageRepository @Inject constructor(
             .map { entities -> entities.map { it.toDomainModel() } }
     }
 
+    @OptIn(ExperimentalPagingApi::class)
     override fun getMessagesPager(
         accountId: String,
         folderId: String,
@@ -94,7 +97,7 @@ class DefaultMessageRepository @Inject constructor(
                 onSyncStateChanged = { syncState -> _messageSyncState.value = syncState }
             ),
             pagingSourceFactory = { messageDao.getMessagesPagingSource(accountId, folderId) }
-        ).flow.map { pagingDataEntity ->
+        ).flow.map { pagingDataEntity: PagingData<net.melisma.core_db.entity.MessageEntity> ->
             pagingDataEntity.map { messageEntity ->
                 messageEntity.toDomainModel()
             }
@@ -349,7 +352,8 @@ class DefaultMessageRepository @Inject constructor(
                 return Result.failure(NoSuchElementException("Message $messageId not found in DB"))
             }
         } catch (e: Exception) {
-            Log.e(e, "markMessageRead: Failed to update message $messageId read status in DB.")
+            Timber.tag(TAG)
+                .e(e, "markMessageRead: Failed to update message $messageId read status in DB.")
             return Result.failure(e)
         }
     }

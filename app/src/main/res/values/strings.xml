@@ -109,4 +109,10 @@
 
     <string name="cd_more_actions">More actions</string>
 
+    <!-- Added missing strings -->
+    <string name="unknown_error">An unknown error occurred.</string>
+    <string name="action_retry">Retry</string>
+    <string name="loading_more_messages">Loading more messages...</string>
+    <string name="error_loading_more_failed">Failed to load more: %1$s</string>
+
 </resources>

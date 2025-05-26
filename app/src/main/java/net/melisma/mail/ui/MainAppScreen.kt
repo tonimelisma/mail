@@ -48,9 +48,9 @@ fun showToast(context: Context, message: String) {
 }
 
 @Composable
-fun LoadingIndicator(statusText: String) {
+fun LoadingIndicator(statusText: String, modifier: Modifier = Modifier) {
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxSize()
             .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally,

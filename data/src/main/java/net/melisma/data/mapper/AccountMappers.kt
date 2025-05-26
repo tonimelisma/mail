@@ -6,21 +6,19 @@ import net.melisma.core_db.entity.AccountEntity
 fun Account.toEntity(): AccountEntity {
     return AccountEntity(
         id = this.id,
-        username = this.username, // Store username from Account model
-        emailAddress = this.username, // Assuming username is suitable as emailAddress for entity
-        providerType = this.providerType // providerType is already a String
-        // Note: needsReauthentication from Account model is not stored in AccountEntity by default.
-        // If offline re-auth status is needed, add it to AccountEntity.
+        username = this.username,
+        emailAddress = this.username, // Assuming username is the email address for now
+        providerType = this.providerType,
+        needsReauthentication = this.needsReauthentication
     )
 }
 
 fun AccountEntity.toDomainAccount(): Account {
     return Account(
         id = this.id,
-        username = this.username, // Use stored username
+        username = this.username,
+        // emailAddress is not directly in the domain Account model, username usually serves this.
         providerType = this.providerType,
-        // Default needsReauthentication to false when loading from DB.
-        // Live re-authentication state is typically managed by an auth service.
-        needsReauthentication = false
+        needsReauthentication = this.needsReauthentication
     )
 } 
