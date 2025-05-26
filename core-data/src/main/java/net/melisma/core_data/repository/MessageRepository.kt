@@ -1,6 +1,8 @@
 package net.melisma.core_data.repository
 
 import android.app.Activity
+import androidx.paging.PagingConfig
+import androidx.paging.PagingData
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import net.melisma.core_data.model.Account
@@ -32,6 +34,20 @@ interface MessageRepository {
      * @return A Flow emitting the list of [Message] objects.
      */
     fun observeMessagesForFolder(accountId: String, folderId: String): Flow<List<Message>>
+
+    /**
+     * Returns a Flow of PagingData for messages in the specified folder, suitable for use with Paging 3.
+     *
+     * @param accountId The ID of the account.
+     * @param folderId The ID of the folder.
+     * @param pagingConfig The PagingConfig to configure Paging 3.
+     * @return A Flow emitting PagingData<Message>.
+     */
+    fun getMessagesPager(
+        accountId: String,
+        folderId: String,
+        pagingConfig: PagingConfig
+    ): Flow<PagingData<Message>>
 
     /**
      * Sets the target account and folder for which messages should be fetched and observed via [messageDataState].

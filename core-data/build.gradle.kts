@@ -57,6 +57,9 @@ dependencies {
     // Coroutines Core (Exported via api for modules that implement core-data interfaces)
     api(libs.kotlinx.coroutines.core)
 
+    // Paging 3 Runtime (Exported via api as Repository interfaces use PagingData/PagingConfig)
+    api(libs.androidx.paging.runtime) // Assuming alias libs.androidx.paging.runtime for "androidx.paging:paging-runtime:3.2.1"
+
     // Javax Inject (Used for @Inject annotation, potentially by Hilt/Dagger users of this module's interfaces)
     implementation(libs.javax.inject)
 

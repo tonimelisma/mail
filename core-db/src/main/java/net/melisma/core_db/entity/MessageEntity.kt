@@ -43,5 +43,6 @@ data class MessageEntity(
     val sentTimestamp: Long?, // Unix timestamp, UTC, derived from sentDateTime. Added for alignment.
     val isRead: Boolean,
     val isStarred: Boolean, // Assuming this will be handled
-    val hasAttachments: Boolean // Assuming this will be handled
+    val hasAttachments: Boolean, // Assuming this will be handled
+    val needsSync: Boolean = false
 ) 

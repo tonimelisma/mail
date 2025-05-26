@@ -42,7 +42,9 @@ dependencies {
     // Room
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
+    implementation(libs.androidx.room.paging) // Added for Room Paging 3 integration
     ksp(libs.androidx.room.compiler)
+    api(libs.androidx.paging.common) // Added for Room PagingSource support
 
     // Kotlinx Serialization
     implementation(libs.kotlinx.serialization.json) // Added Kotlinx Serialization JSON library

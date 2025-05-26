@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Email
@@ -30,6 +29,9 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.paging.LoadState
+import androidx.paging.compose.LazyPagingItems
+import androidx.paging.compose.itemKey
 import net.melisma.core_data.model.Account
 import net.melisma.core_data.model.Message
 import net.melisma.mail.R
@@ -41,11 +43,13 @@ import net.melisma.mail.R
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MessageListContent(
-    messages: List<Message>,      // New
-    isLoading: Boolean,           // New
-    error: String?,               // New
+    messages: LazyPagingItems<Message>, // Changed to LazyPagingItems
+    // isLoading: Boolean,           // Derived from messages.loadState
+    // error: String?,               // Derived from messages.loadState
     accountContext: Account?,
-    onMessageClick: (String) -> Unit
+    onMessageClick: (String) -> Unit,
+    onRetry: () -> Unit, // For retry button on error
+    onRefresh: () -> Unit // For pull to refresh
 ) {
     Column(modifier = Modifier.fillMaxSize()) {
         if (accountContext != null) {
@@ -58,23 +62,35 @@ fun MessageListContent(
                 .fillMaxSize()
                 .weight(1f)
         ) {
+            // Handle combined Paging LoadStates
+            val loadState = messages.loadState
+            val isInitialLoading = loadState.refresh is LoadState.Loading
+            val isAppending = loadState.append is LoadState.Loading
+            val initialLoadError = loadState.refresh as? LoadState.Error
+            val appendError = loadState.append as? LoadState.Error
+
             when {
-                isLoading && messages.isEmpty() -> {
-                    // Show loading indicator only if messages are empty (initial load)
-                    // PullToRefreshBox in parent handles subsequent refresh indicators over content.
+                isInitialLoading && messages.itemCount == 0 -> {
                     LoadingIndicator(statusText = stringResource(R.string.title_loading_messages))
                 }
 
-                error != null -> {
+                initialLoadError != null && messages.itemCount == 0 -> {
                     FullScreenMessage(
                         icon = Icons.Filled.CloudOff,
                         iconContentDescription = stringResource(R.string.cd_error_loading_messages),
                         title = stringResource(R.string.error_loading_messages_title),
-                        message = error
+                        message = initialLoadError.error.localizedMessage
+                            ?: stringResource(R.string.unknown_error),
+                        content = {
+                            ButtonPrimary(
+                                text = stringResource(id = R.string.action_retry),
+                                onClick = onRetry
+                            )
+                        }
                     )
                 }
-
-                messages.isEmpty() -> {
+                // No error, but list is empty after initial load/refresh finished
+                !isInitialLoading && messages.itemCount == 0 -> {
                     FullScreenMessage(
                         icon = Icons.Filled.Email,
                         iconContentDescription = stringResource(R.string.cd_no_messages),
@@ -82,9 +98,66 @@ fun MessageListContent(
                         message = stringResource(R.string.folder_is_empty)
                     )
                 }
-
+                // List has items, or is loading more items
                 else -> {
-                    MessageListSuccessContent(messages, onMessageClick)
+                    MessageListSuccessContentPaging(
+                        messages = messages,
+                        onMessageClick = onMessageClick,
+                        isAppending = isAppending,
+                        appendError = appendError?.error?.localizedMessage
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Displays the actual list of messages using LazyColumn with PagingItems. */
+@Composable
+private fun MessageListSuccessContentPaging(
+    messages: LazyPagingItems<Message>,
+    onMessageClick: (String) -> Unit,
+    isAppending: Boolean,
+    appendError: String?
+) {
+    LazyColumn(modifier = Modifier.fillMaxSize()) {
+        items(
+            count = messages.itemCount,
+            key = messages.itemKey { it.id } // Use itemKey for stable keys
+        ) { index ->
+            val message = messages[index]
+            if (message != null) {
+                MessageListItem(message = message, onClick = { onMessageClick(message.id) })
+                HorizontalDivider(thickness = 0.5.dp)
+            }
+        }
+
+        // Append loading state
+        if (isAppending) {
+            item {
+                LoadingIndicator(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    statusText = stringResource(id = R.string.loading_more_messages)
+                )
+            }
+        }
+
+        // Append error state
+        if (appendError != null) {
+            item {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = stringResource(R.string.error_loading_more_failed, appendError),
+                        color = MaterialTheme.colorScheme.error
+                    )
+                    // Consider adding a retry for append failures if appropriate
                 }
             }
         }
@@ -92,18 +165,6 @@ fun MessageListContent(
 }
 
 // --- Helper Composables (Single Definitions) ---
-
-/** Displays the actual list of messages using LazyColumn. */
-@Composable
-private fun MessageListSuccessContent(messages: List<Message>, onMessageClick: (String) -> Unit) {
-    LazyColumn(modifier = Modifier.fillMaxSize()) {
-        items(messages, key = { it.id }) { message ->
-            // Reusable composable for a single message item
-            MessageListItem(message = message, onClick = { onMessageClick(message.id) })
-            HorizontalDivider(thickness = 0.5.dp) // Separator between items
-        }
-    }
-}
 
 /** Displays a centered message, typically used for error or empty states. */
 @Composable

@@ -2,6 +2,9 @@ package net.melisma.data.repository
 
 import android.app.Activity
 import android.util.Log
+import androidx.paging.Pager
+import androidx.paging.PagingConfig
+import androidx.paging.PagingData
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -28,9 +31,11 @@ import net.melisma.core_data.model.MessageDraft
 import net.melisma.core_data.model.MessageSyncState
 import net.melisma.core_data.repository.AccountRepository
 import net.melisma.core_data.repository.MessageRepository
+import net.melisma.core_db.AppDatabase
 import net.melisma.core_db.dao.MessageDao
 import net.melisma.data.mapper.toDomainModel
 import net.melisma.data.mapper.toEntity
+import net.melisma.data.paging.MessageRemoteMediator
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.cancellation.CancellationException
@@ -42,7 +47,8 @@ class DefaultMessageRepository @Inject constructor(
     @ApplicationScope private val externalScope: CoroutineScope,
     private val errorMappers: Map<String, @JvmSuppressWildcards ErrorMapperService>,
     private val accountRepository: AccountRepository,
-    private val messageDao: MessageDao
+    private val messageDao: MessageDao,
+    private val appDatabase: AppDatabase
 ) : MessageRepository {
 
     private val TAG = "DefaultMessageRepo"
@@ -66,6 +72,33 @@ class DefaultMessageRepository @Inject constructor(
         Log.d(TAG, "observeMessagesForFolder: accountId=$accountId, folderId=$folderId")
         return messageDao.getMessagesForFolder(accountId, folderId)
             .map { entities -> entities.map { it.toDomainModel() } }
+    }
+
+    override fun getMessagesPager(
+        accountId: String,
+        folderId: String,
+        pagingConfig: PagingConfig
+    ): Flow<PagingData<Message>> {
+        Log.d(TAG, "getMessagesPager for accountId=$accountId, folderId=$folderId")
+        val apiServiceForMediator = mailApiServices.values.firstOrNull()
+            ?: throw IllegalStateException("No MailApiService available for MessageRemoteMediator")
+
+        return Pager(
+            config = pagingConfig,
+            remoteMediator = MessageRemoteMediator(
+                accountId = accountId,
+                folderId = folderId,
+                database = appDatabase,
+                mailApiService = apiServiceForMediator,
+                ioDispatcher = ioDispatcher,
+                onSyncStateChanged = { syncState -> _messageSyncState.value = syncState }
+            ),
+            pagingSourceFactory = { messageDao.getMessagesPagingSource(accountId, folderId) }
+        ).flow.map { pagingDataEntity ->
+            pagingDataEntity.map { messageEntity ->
+                messageEntity.toDomainModel()
+            }
+        }
     }
 
     override suspend fun setTargetFolder(
@@ -264,27 +297,61 @@ class DefaultMessageRepository @Inject constructor(
     ): Result<Unit> {
         Log.d(
             TAG,
-            "markMessageRead for id: $messageId, account: ${account.username}, isRead: $isRead"
+            "markMessageRead for id: $messageId, account: ${account.username}, isRead: $isRead. DB first."
         )
-        val apiService = mailApiServices[account.providerType.uppercase()]
-            ?: return Result.failure(NotImplementedError("markMessageRead not impl for ${account.providerType}"))
+        try {
+            val messageEntity = messageDao.getMessageById(messageId).firstOrNull()
+            if (messageEntity != null) {
+                // Update DB first
+                messageDao.insertOrUpdateMessages(
+                    listOf(
+                        messageEntity.copy(
+                            isRead = isRead,
+                            needsSync = true
+                        )
+                    )
+                )
+                Log.d(TAG, "Updated read status in DB for $messageId to $isRead, needsSync=true")
 
-        val result = apiService.markMessageRead(messageId, isRead)
-        if (result.isSuccess) {
-            externalScope.launch(ioDispatcher) {
-                val messageEntity = messageDao.getMessageById(messageId).firstOrNull()
-                if (messageEntity != null) {
-                    messageDao.insertOrUpdateMessages(listOf(messageEntity.copy(isRead = isRead)))
-                    Log.d(TAG, "Updated read status in DB for $messageId to $isRead")
+                // TODO: Enqueue WorkManager task to sync this change to the backend.
+                // For now, still attempt direct API call after DB update.
+
+                val apiService = mailApiServices[account.providerType.uppercase()]
+                    ?: return Result.failure(NotImplementedError("MailApiService not found for ${account.providerType} to sync markMessageRead"))
+
+                val apiResult = apiService.markMessageRead(messageId, isRead)
+                if (apiResult.isSuccess) {
+                    // If API call is successful, update needsSync to false
+                    messageDao.getMessageById(messageId).firstOrNull()?.let { updatedEntity ->
+                        messageDao.insertOrUpdateMessages(listOf(updatedEntity.copy(needsSync = false)))
+                        Log.d(
+                            TAG,
+                            "markMessageRead: API sync successful for $messageId, needsSync set to false."
+                        )
+                    }
+                    return Result.success(Unit)
                 } else {
                     Log.w(
                         TAG,
-                        "markMessageRead: Message $messageId not found in DB to update read status after API success."
+                        "markMessageRead: API sync failed for $messageId. DB change will be synced later by worker. Error: ${apiResult.exceptionOrNull()?.message}"
+                    )
+                    // DB already updated with needsSync = true, so worker should pick it up.
+                    return Result.failure(
+                        apiResult.exceptionOrNull()
+                            ?: Exception("API error during markMessageRead sync")
                     )
                 }
+            } else {
+                Log.w(
+                    TAG,
+                    "markMessageRead: Message $messageId not found in DB to update read status."
+                )
+                return Result.failure(NoSuchElementException("Message $messageId not found in DB"))
             }
+        } catch (e: Exception) {
+            Log.e(e, "markMessageRead: Failed to update message $messageId read status in DB.")
+            return Result.failure(e)
         }
-        return result
     }
 
     override suspend fun deleteMessage(account: Account, messageId: String): Result<Unit> {

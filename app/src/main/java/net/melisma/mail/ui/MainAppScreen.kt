@@ -33,6 +33,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
+import androidx.paging.compose.collectAsLazyPagingItems
 import kotlinx.coroutines.launch
 import net.melisma.core_data.repository.OverallApplicationAuthState
 import net.melisma.mail.MainViewModel
@@ -68,6 +69,9 @@ fun MainAppScreen(
     mainViewModel: MainViewModel
 ) {
     val state by mainViewModel.uiState.collectAsStateWithLifecycle()
+    val messagesPagerFlow by mainViewModel.messagesPagerFlow.collectAsStateWithLifecycle()
+    val lazyMessageItems = messagesPagerFlow.collectAsLazyPagingItems()
+
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -194,7 +198,7 @@ fun MainAppScreen(
                         } else if (state.selectedFolder != null) {
                             val selectedAccount = mainViewModel.getSelectedAccount()
                             val isViewModelRefreshing = when (state.currentViewMode) {
-                                ViewMode.MESSAGES -> state.isMessageLoading
+                                ViewMode.MESSAGES -> lazyMessageItems.loadState.refresh is androidx.paging.LoadState.Loading
                                 ViewMode.THREADS -> state.threadDataState is net.melisma.core_data.model.ThreadDataState.Loading
                             }
 
@@ -202,7 +206,7 @@ fun MainAppScreen(
                                 isRefreshing = isViewModelRefreshing,
                                 onRefresh = {
                                     when (state.currentViewMode) {
-                                        ViewMode.MESSAGES -> mainViewModel.retryFetchMessagesForCurrentFolder()
+                                        ViewMode.MESSAGES -> lazyMessageItems.refresh()
                                         ViewMode.THREADS -> mainViewModel.retryFetchThreadsForCurrentFolder()
                                     }
                                 }
@@ -210,9 +214,7 @@ fun MainAppScreen(
                                 when (state.currentViewMode) {
                                     ViewMode.MESSAGES -> {
                                         MessageListContent(
-                                            messages = state.messages,
-                                            isLoading = state.isMessageLoading,
-                                            error = state.messageError,
+                                            messages = lazyMessageItems,
                                             accountContext = selectedAccount,
                                             onMessageClick = { messageId ->
                                                 Log.d(
@@ -237,7 +239,9 @@ fun MainAppScreen(
                                                         "Error: Account context missing for message."
                                                     )
                                                 }
-                                            }
+                                            },
+                                            onRetry = { lazyMessageItems.retry() },
+                                            onRefresh = { lazyMessageItems.refresh() }
                                         )
                                     }
 

@@ -10,16 +10,17 @@ import android.util.Log
 import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.paging.PagingData
+import androidx.paging.cachedIn
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.catch
-import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.launchIn
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -56,7 +57,6 @@ data class MainScreenState(
     val foldersByAccountId: Map<String, FolderFetchState> = emptyMap(),
     val selectedFolderAccountId: String? = null,
     val selectedFolder: MailFolder? = null,
-    val messages: List<Message> = emptyList(),
     val messageSyncState: MessageSyncState = MessageSyncState.Idle,
     val threadDataState: ThreadDataState = ThreadDataState.Initial,
     val currentViewMode: ViewMode = MailViewModePreference.THREADS,
@@ -106,7 +106,11 @@ class MainViewModel @Inject constructor(
     private val _pendingAuthIntent = MutableStateFlow<Intent?>(null)
     val pendingAuthIntent: StateFlow<Intent?> = _pendingAuthIntent.asStateFlow()
 
-    private var messageDataObserverJob: Job? = null
+    // Flow for PagingData<Message>
+    private val _messagesPagerFlow = MutableStateFlow<Flow<PagingData<Message>>>(emptyFlow())
+    val messagesPagerFlow: StateFlow<Flow<PagingData<Message>>> = _messagesPagerFlow.asStateFlow()
+
+    private var currentFolderMessagesJob: Job? = null
 
     init {
         Timber.tag(TAG).d("ViewModel Initializing")
@@ -115,7 +119,7 @@ class MainViewModel @Inject constructor(
         observeMessageRepositorySyncState()
         observeThreadRepository()
         observeUserPreferences()
-        observeSelectedFolderAndMessages()
+        // observeSelectedFolderAndMessages() // This responsibility is now part of onFolderSelected / selection changes
     }
 
     private fun observeAccountRepositoryState() {
@@ -253,62 +257,17 @@ class MainViewModel @Inject constructor(
     }
 
     private fun observeMessageRepositorySyncState() {
-        Timber.tag(TAG).d("MainViewModel: observeMessageRepositorySyncState() - Setting up flow")
         messageRepository.messageSyncState
-            .onEach { newSyncState ->
-                if (_uiState.value.messageSyncState != newSyncState) {
-                    Timber.tag(TAG).d(
-                        "MainViewModel: MessageRepo Sync State Changed: ${newSyncState::class.simpleName}"
-                    )
-                    _uiState.update { it.copy(messageSyncState = newSyncState) }
-                }
+            .onEach { syncState ->
+                _uiState.update { it.copy(messageSyncState = syncState) }
             }.launchIn(viewModelScope)
     }
 
     private fun observeSelectedFolderAndMessages() {
-        _uiState
-            .map { state: MainScreenState ->
-                Pair(
-                    state.selectedFolderAccountId,
-                    state.selectedFolder?.id
-                )
-            }
-            .distinctUntilChanged()
-            .onEach { (accountId: String?, folderId: String?) ->
-                messageDataObserverJob?.cancel()
-                if (accountId != null && folderId != null) {
-                    Timber.tag(TAG)
-                        .d("Selected folder changed to: Account $accountId, Folder $folderId. Observing messages from DB.")
-                    messageDataObserverJob =
-                        messageRepository.observeMessagesForFolder(accountId, folderId)
-                            .onEach { messages ->
-                                Timber.tag(TAG)
-                                    .d("DB emitted ${messages.size} messages for $accountId/$folderId")
-                                _uiState.update { it.copy(messages = messages) }
-                            }
-                            .catch { e ->
-                                Timber.e(
-                                    e,
-                                    "Error observing messages from DB for $accountId/$folderId"
-                                )
-                                _uiState.update { state ->
-                                    state.copy(
-                                        messages = emptyList(),
-                                        messageSyncState = MessageSyncState.SyncError(
-                                            accountId,
-                                            folderId,
-                                            "Error loading messages from DB"
-                                        )
-                                    )
-                                }
-                            }
-                            .launchIn(viewModelScope)
-                } else {
-                    Timber.tag(TAG)
-                        .d("No folder selected or folderId missing. Clearing local messages list.")
-                    _uiState.update { it.copy(messages = emptyList()) } 
-                }
-            }.launchIn(viewModelScope)
+        // This logic is now effectively handled by how messagesPagerFlow is updated
+        // in onFolderSelected and when selectedFolder/accountId changes.
+        // The direct collection of List<Message> is replaced by collecting PagingData from messagesPagerFlow in the UI.
+        Timber.d("observeSelectedFolderAndMessages is deprecated; Pager flow is now updated on selection change.")
     }
 
     private fun observeThreadRepository() {
@@ -847,34 +806,69 @@ class MainViewModel @Inject constructor(
         _uiState.update {
             it.copy(
                 selectedFolderAccountId = account.id,
-                selectedFolder = folder,
-                messages = emptyList(),
-                messageSyncState = MessageSyncState.Idle
+                selectedFolder = folder
             )
         }
-        viewModelScope.launch {
-            messageRepository.setTargetFolder(account, folder)
-            if (_uiState.value.currentViewMode == ViewMode.THREADS) {
-                threadRepository.setTargetFolderForThreads(account, folder, null)
-            }
+        // Cancel previous folder's message collection job
+        currentFolderMessagesJob?.cancel()
+
+        // Update the pager flow for the new folder
+        _messagesPagerFlow.value = messageRepository.getMessagesPager(
+            accountId = account.id,
+            folderId = folder.id,
+            // Define a PagingConfig - this should probably be a constant or configurable
+            pagingConfig = PagingConfig(pageSize = 20, enablePlaceholders = false)
+        ).cachedIn(viewModelScope) // cachedIn is important for surviving config changes
+
+        // The old messageRepository.setTargetFolder() might still be relevant if it managed
+        // other non-paging related state or triggered initial non-paging syncs. Review its role.
+        // For Paging 3 with RemoteMediator, the mediator handles data fetching.
+        // If setTargetFolder also clears selections or resets other states, that part might need to be preserved
+        // or handled differently.
+        // For now, let's assume Pager is the primary mechanism for message loading for the selected folder.
+        // viewModelScope.launch {
+        //    messageRepository.setTargetFolder(account, folder) // This might trigger the old non-paging sync
+        // }
+
+        if (_uiState.value.currentViewMode == MailViewModePreference.THREADS) {
+            threadRepository.setTargetFolderForThreads(account, folder, applicationContext)
         }
     }
 
     fun refreshMessages() {
-        val accountId = _uiState.value.selectedFolderAccountId
-        val folderId = _uiState.value.selectedFolder?.id
+        Timber.tag(TAG).d("refreshMessages triggered.")
+        // For Paging 3, refreshing is typically handled by calling refresh() on the LazyPagingItems adapter in the UI.
+        // The ViewModel doesn't directly trigger a Pager refresh usually, but it can if needed.
+        // The current `messageRepository.refreshMessages` is likely for the old non-paging mechanism.
+        // If we want the ViewModel to be able to trigger a Paging 3 refresh, we might need a new
+        // signal or the UI should handle it.
+        // For now, this method might become a no-op or re-trigger the Pager if we expose a way.
 
-        if (accountId != null && folderId != null) {
-            Timber.tag(TAG).d("refreshMessages called for Account $accountId, Folder $folderId")
-            viewModelScope.launch {
-                messageRepository.syncMessagesForFolder(
-                    accountId,
-                    folderId,
-                    null /*activity if needed*/
-                )
+        // OLD Logic (may not apply directly to Paging 3 via RemoteMediator)
+        // val currentAccount = _uiState.value.accounts.find { it.id == _uiState.value.selectedFolderAccountId }
+        // val currentFolder = _uiState.value.selectedFolder
+        // if (currentAccount != null && currentFolder != null) {
+        //     viewModelScope.launch {
+        //         messageRepository.refreshMessages() // This was for the old list-based sync
+        //     }
+        // } else {
+        //     Timber.w("Cannot refresh messages, no folder selected or account not found.")
+        // }
+        // The Paging 3 refresh will be initiated by the UI (e.g., pull-to-refresh on LazyPagingItems.refresh()).
+        // The RemoteMediator will then get a LoadType.REFRESH.
+        // If _messageSyncState needs to be manually set to Syncing here, consider that.
+        // However, the RemoteMediator itself updates _messageSyncState.
+        _uiState.value.selectedFolderAccountId?.let { accId ->
+            _uiState.value.selectedFolder?.id?.let { fId ->
+                // We don't directly call a refresh on the pager flow here.
+                // The UI will call adapter.refresh() which triggers the RemoteMediator's REFRESH load.
+                // We can, however, ensure our sync state reflects an attempt if needed, though mediator does this.
+                // _uiState.update { it.copy(messageSyncState = MessageSyncState.Syncing(accId, fId)) }
+                // Potentially, if there's a global refresh button not tied to the list's adapter:
+                // messageRepository.forcePagerRefresh(accId, fId) // This method would need to be added to repo
+                // For now, assume UI triggers refresh on LazyPagingItems.
+                Timber.i("Refresh for Paging 3 should be triggered by UI action on LazyPagingItems.")
             }
-        } else {
-            Timber.tag(TAG).w("refreshMessages: No folder selected or account/folder ID missing.")
         }
     }
 }

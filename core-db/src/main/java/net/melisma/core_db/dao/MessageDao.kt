@@ -1,9 +1,11 @@
 package net.melisma.core_db.dao
 
+import androidx.paging.PagingSource
 import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import kotlinx.coroutines.flow.Flow
 import net.melisma.core_db.entity.MessageEntity
 
@@ -24,8 +26,14 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE messageId = :messageId")
     fun getMessageById(messageId: String): Flow<MessageEntity?>
 
+    @Query("SELECT * FROM messages WHERE accountId = :accountId AND folderId = :folderId ORDER BY timestamp DESC")
+    fun getMessagesPagingSource(
+        accountId: String,
+        folderId: String
+    ): PagingSource<Int, MessageEntity>
+
     // Helper to clear messages for a specific folder, then insert new ones (transactional)
-    @androidx.room.Transaction
+    @Transaction
     suspend fun clearAndInsertMessagesForFolder(
         accountId: String,
         folderId: String,
