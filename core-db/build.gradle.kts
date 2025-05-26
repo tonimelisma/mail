@@ -4,6 +4,7 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.ksp) // KSP for Room
     alias(libs.plugins.hilt.gradle)
+    alias(libs.plugins.kotlin.serialization) // Added Kotlin Serialization plugin
 }
 
 android {
@@ -42,6 +43,9 @@ dependencies {
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
+
+    // Kotlinx Serialization
+    implementation(libs.kotlinx.serialization.json) // Added Kotlinx Serialization JSON library
 
     // Hilt
     implementation(libs.hilt.android)

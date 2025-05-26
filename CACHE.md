@@ -224,3 +224,238 @@ focusing on user accounts and their mail folders.
 
 This completes the initial database setup and refactoring of the folder data flow to use the local
 cache as the primary source of truth, with network sync on demand.
+
+## IV. Current State, Lessons, and Architectural Impact (Post-Phase 1)
+
+### A. Current State (Folders Implemented)
+
+* **Functionality:** User accounts and their mail folders are now cached locally using Room.
+  The `DefaultFolderRepository` fetches folder lists from the network, stores them in the local
+  database, and serves data to the UI primarily from this database.
+  The `MainViewModel` observes folder states, which now originate from database flows, automatically
+  reflecting updates from sync operations.
+  Sync operations (refresh per account, refresh all) are in place, updating the local DB which in
+  turn updates the UI.
+* **Build Status:** The project compiles successfully after resolving KSP version issues, missing
+  module dependencies, and minor code errors.
+  The warning for `ExperimentalCoroutinesApi` (due to `flatMapLatest`) has been addressed with
+  `@OptIn`.
+
+### B. Mistakes, Shortcuts, and Lessons Learned
+
+* **Initial Build Errors & Versioning:** Encountered several build issues primarily due to:
+    * Incorrect Gradle plugin aliases (Hilt).
+    * Missing library definitions in `libs.versions.toml` for Room, Coroutines, and SDK versions (
+      initially tried to reference non-existent catalog versions for SDKs).
+    * KSP errors (`unexpected jvm signature V`, KSP task creation failures) which required iterating
+      through Kotlin, KSP plugin, and AGP versions to find a compatible set. The final working
+      combination seems to be AGP `8.9.3`, Kotlin `2.1.10`, KSP `2.1.10-1.0.29`, and Room `2.7.1` (
+      as per your latest update).
+    * Missing module dependency: `:core-db` needed an `implementation` dependency on `:core-data`
+      because entities/converters in `:core-db` used models from `:core-data`.
+* **Shortcut - Domain Model for Folders:** Currently, `net.melisma.core_data.model.MailFolder` (the
+  API model) is directly used as the "domain model" that `FolderEntity` maps to and is exposed by
+  the repository. Ideally, a distinct `DomainFolder` model in the `:domain` layer would provide
+  better separation, but for this increment, reusing `MailFolder` was a shortcut to avoid immediate
+  changes in ViewModels and UseCases consuming it.
+* **Complex Flow in Repository:** The `observeDatabaseChanges` logic in `DefaultFolderRepository`
+  involving `flatMapLatest` and `combine` to merge multiple account folder flows and then merge this
+  with transient sync states (`Loading`, `Error`) is quite complex. While functional, it needs
+  careful testing for edge cases.
+* **Error Handling in DB Flow:** The `catch` block in `observeDatabaseChanges` for DB errors
+  currently emits a generic `FolderFetchState.Error`. More granular error handling or state
+  representation for DB issues might be needed.
+* **`ensureActive()`:** This was initially removed and then re-added. It's crucial for ensuring
+  coroutines honor cancellation during long-running operations like network calls.
+
+### C. Architectural Updates & Impact
+
+* **New Module `:core-db`:** Successfully introduced, encapsulating all Room database components (
+  entities, DAOs, database class, type converters, DI module for DB).
+* **Repository as Synchronizer (`DefaultFolderRepository`):** The repository's role has shifted. It
+  now orchestrates data flow between the network (`MailApiService`) and the local database (
+  `FolderDao`, `AccountDao`), with the database being the primary source for observers.
+* **Single Source of Truth (for Folders):** For folder data, the app now moves closer to the SSoT
+  principle, where UI-bound data flows originate from the database.
+* **Reactive UI Updates:** Changes to folder data in the database (e.g., after a network sync)
+  automatically propagate to the UI via `Flow` objects.
+* **Dependency Changes:**
+    * `:core-db` depends on `:core-data` (for `WellKnownFolderType`).
+    * `:data` depends on `:core-db` (for DAOs) and `:core-data`.
+
+## V. Phase 2a: Caching Message Headers for One Folder
+
+This phase focuses on caching message headers for a selected folder, allowing the UI to display
+messages from the local database and providing a mechanism to sync these messages with the network.
+
+### A. Summary of Work Done (Phase 2a Implementation)
+
+1. **`core-db` Module (Entities, DAO, Converters, Database):**
+    * Created `MessageEntity.kt` with fields aligned with `core_data.model.Message` and necessary
+      foreign keys to `AccountEntity` and `FolderEntity`. Includes indices for common queries.
+    * Created `StringListConverter.kt` using Kotlinx Serialization for `List<String>` type fields (
+      e.g., `recipientAddresses`, `ccAddresses`, `bccAddresses`).
+    * Updated `AppDatabase.kt`:
+        * Added `MessageEntity::class` to the `@Database` entities list.
+        * Added `StringListConverter::class` to `@TypeConverters`.
+        * Incremented database `version` to 2.
+        * Added `fallbackToDestructiveMigration()` for development.
+        * Added `abstract fun messageDao(): MessageDao`.
+    * Created `MessageDao.kt` with methods for inserting, querying (by folder, by ID), deleting (by
+      folder, by account), and a transactional clear-and-insert.
+    * Updated `core-db/di/DatabaseModule.kt` to provide `MessageDao`.
+    * Added Kotlin Serialization plugin and `kotlinx-serialization-json` dependency to
+      `core-db/build.gradle.kts`.
+
+2. **`core-data` Module (Models, Repository Interface):**
+    * Enhanced `core_data.model.Message.kt` to include fields that were previously only in
+      `MessageEntity` (e.g., `senderName`, `recipientNames`, `isStarred`, `hasAttachments`,
+      `sentDateTime`, `sentTimestamp`), promoting alignment between domain model and cache entity.
+    * Created `core_data.model.MessageSyncState.kt` (`Idle`, `Syncing`, `SyncSuccess`, `SyncError`)
+      for folder message synchronization status.
+    * Updated `core_data.repository.MessageRepository.kt` interface:
+        * Replaced `messageDataState` with `messageSyncState: StateFlow<MessageSyncState>`.
+        * Added
+          `observeMessagesForFolder(accountId: String, folderId: String): Flow<List<Message>>`.
+        * Added `setTargetFolder(account: Account?, folder: MailFolder?)`.
+        * Added
+          `syncMessagesForFolder(accountId: String, folderId: String, activity: Activity? = null)`.
+        * Updated other method signatures as needed (e.g., `sendMessage`, `getMessageAttachments`).
+    * Updated `core_data.repository.AccountRepository.kt` to include
+      `getAccountById(accountId: String): Flow<Account?>`.
+
+3. **`data` Module (Mappers, Repository Implementation):**
+    * Created `data/mapper/MessageMappers.kt` with `Message.toEntity()` and
+      `MessageEntity.toDomainModel()`, handling timestamp conversions.
+    * Refactored `data/repository/DefaultMessageRepository.kt`:
+        * Injected `MessageDao` and `AccountRepository`.
+        * Implemented `messageSyncState` and `observeMessagesForFolder` (reads from DAO).
+        * Implemented `setTargetFolder` (manages current target, sync jobs) and
+          `syncMessagesForFolderInternal` (fetches from API, saves to DAO, updates sync state).
+        * Updated `refreshMessages`, `markMessageRead` (to also update DB).
+        * Updated methods like `getMessageDetails` to use `accountRepository.getAccountById()`.
+        * Added stubs for `createDraftMessage`, `updateDraftMessage`, `searchMessages`.
+    * Updated `data/repository/DefaultAccountRepository.kt`:
+        * Injected `AccountDao` and implemented `getAccountById()`. Marked `getAccounts()` with
+          `TODO` for DB as SSoT.
+
+4. **`domain` Module (Use Cases):**
+    * Updated `MoveMessageUseCase.kt` for new `moveMessage` signature.
+    * Refactored `ObserveMessagesForFolderUseCase.kt` to directly return
+      `messageRepository.observeMessagesForFolder()`.
+
+5. **`app` Module (ViewModel, UI):**
+    * Updated `MainViewModel.kt`:
+        * `MainScreenState` now uses `messages: List<Message>` and
+          `messageSyncState: MessageSyncState`.
+        * Split message observation: `observeMessageRepositorySyncState()` for sync status, and
+          `observeSelectedFolderAndMessages()` for collecting messages from
+          `messageRepository.observeMessagesForFolder()` based on selection.
+        * Updated `onFolderSelected()` and `refreshMessages()` to align with new repository methods.
+    * Updated `app/ui/MainAppScreen.kt` and `app/ui/MessageListContent.kt` to use the new
+      `MainScreenState` fields and `MessageListContent` signature.
+    * Corrected string resource usage in `MessageListContent.kt`.
+
+6. **`backend-microsoft` Module:**
+    * Implemented `getAccountById` in `MicrosoftAccountRepository.kt`.
+
+### B. Current Project State (Post-Phase 2a)
+
+* **Functionality:** Message headers for a single selected folder are cached. The UI observes these
+  messages from the database. Selecting a folder or refreshing triggers a network sync that updates
+  the local DB. `MessageSyncState` indicates sync status.
+* **Build Status:** The project compiles successfully.
+* **Vision Alignment:** This phase aligns with the "Offline-First" vision by:
+    * Reading message lists primarily from the local Room database (`MessageDao`).
+    * The UI (`MainViewModel`, `MessageListContent`) observes this local data.
+    * Network operations (`DefaultMessageRepository.syncMessagesForFolderInternal`) happen to update
+      the cache, and the UI reacts to cache changes.
+
+### C. Shortcuts, Workarounds, Technical Debt, and Questionable Choices
+
+* **`fallbackToDestructiveMigration()`:** Used in `AppDatabase.kt`. **Debt:** Production apps need
+  proper `Migration` objects (e.g., `MIGRATION_1_2` for adding `MessageEntity`).
+* **Error Handling in Mappers:** `MessageMappers.toEntity` uses `try-catch` for date parsing with a
+  default to `System.currentTimeMillis()`. **Debt/Smell:** Better API contract or error reporting
+  needed. Potential for silent data inconsistencies if parsing fails often for individual items.
+* **API-Entity-Model Discrepancies:** `core_data.model.Message` was enhanced, but the
+  `MailApiService` might not provide all new fields. Mappers default these, leading to potentially
+  incomplete cached data. **Debt:** API and DTOs need to be updated to provide all fields.
+* **`MailApiService` Stubs:** Methods like `getMessageAttachments` in `DefaultMessageRepository` are
+  stubbed as they don't exist in `MailApiService` yet. **Debt:** API service needs implementation.
+* **`DefaultAccountRepository.getAccounts()` SSoT:** Still marked with `TODO // SSoT from DB?`. *
+  *Debt:** Needs refactor for accounts to be truly cache-first.
+* **Sync Transactionality:** `MessageDao.clearAndInsertMessagesForFolder` is transactional, but the
+  broader sync in `DefaultMessageRepository` (API call + DAO ops) isn't. **Smell:** Potential for
+  inconsistent state if app crashes mid-sync.
+* **No Paging:** Message lists are fetched/displayed in full (up to API limit). **Debt:**
+  Inefficient for large folders. Paging 3 is essential.
+* **Limited Offline Write/Outbox:** Most write operations (send, delete, move) are API-direct or
+  stubs. `markMessageRead` updates DB locally after API success, a step in the right direction. *
+  *Debt:** Full offline write capability with an outbox pattern is missing.
+* **Log Spam:** Numerous debug logs should be reviewed for release builds.
+
+### D. Plan for Next Increment (Phase 2b - True Cache-First for Messages & Paging)
+
+This plan focuses on making the message list truly cache-first using Paging 3 and addressing some
+immediate debt. The vision is for the UI to be seamlessly fed by the local cache, with the network
+operating in the background to fill and update this cache.
+
+1. **Integrate Jetpack Paging 3 for Message List:**
+    * **Goal:** Implement "infinite scrolling" for messages, loading from DB first, then fetching
+      from network when DB runs out, aligning with "Scenario B: Scrolling Past Cached Data."
+    * **`core-db/MessageDao.kt`:** Add
+      `getMessagesPagingSource(accountId: String, folderId: String): PagingSource<Int, MessageEntity>`.
+    * **`data/repository/DefaultMessageRepository.kt`:**
+        * Implement
+          `getMessagesPager(accountId: String, folderId: String, pagingConfig: PagingConfig): Flow<PagingData<Message>>`.
+        * Uses `Pager` with `pagingSourceFactory = { messageDao.getMessagesPagingSource(...) }` and
+          a new `MessageRemoteMediator`.
+    * **`data/paging/MessageRemoteMediator.kt` (New File):**
+        * **Purpose:** Bridge between database and network for Paging 3.
+        * **`load()` method:** Fetches pages from `MailApiService`, saves to `MessageDao`. Handles
+          `LoadType.REFRESH` (clear and insert) vs. `APPEND` (insert). Returns
+          `MediatorResult.Success` or `Error`.
+        * **`initialize()` method:** Consider `InitializeAction.LAUNCH_INITIAL_REFRESH`.
+    * **`core-data/repository/MessageRepository.kt`:** Add `getMessagesPager(...)` interface method.
+    * **`app/MainViewModel.kt`:**
+        * Replace `messages: List<Message>` with `val messagesPagerFlow: Flow<PagingData<Message>>`.
+        * Initialize this flow using
+          `messageRepository.getMessagesPager(...).cachedIn(viewModelScope)`.
+    * **`app/ui/MainAppScreen.kt` & `MessageListContent.kt`:**
+        * Adapt to use `LazyPagingItems<Message>` collected from `messagesPagerFlow`.
+        * Use `items(lazyPagingItems)` in `LazyColumn`.
+        * Handle loading/error states from `lazyPagingItems.loadState`.
+        * `PullToRefreshBox` calls `lazyPagingItems.refresh()`.
+
+2. **Refine `MessageSyncState` Handling (Post-Paging Integration):**
+    * **Goal:** Ensure `MessageSyncState` accurately reflects `RemoteMediator` operations.
+    * **`MessageRemoteMediator`:** Update `_messageSyncState` in `DefaultMessageRepository` from
+      within `load()` to reflect current sync activity.
+    * **UI:** Primarily react to `PagingData` and `LoadState`. `MessageSyncState` for supplemental
+      global indicators/errors.
+
+3. **Address `fallbackToDestructiveMigration()`:**
+    * **Goal:** Implement proper Room Migrations for data persistence.
+    * **`core-db/AppDatabase.kt`:**
+        * Define `MIGRATION_1_2` for adding `MessageEntity`.
+        * Replace `.fallbackToDestructiveMigration()` with `.addMigrations(MIGRATION_1_2)`.
+
+4. **Improve `DefaultAccountRepository` SSoT for Accounts:**
+    * **Goal:** Make `AccountDao` the Single Source of Truth for accounts.
+    * **`DefaultAccountRepository.kt`:** Refactor `getAccounts()` to read from DAO. Sync logic (
+      MSAL, Google) updates `AccountEntity` in DB.
+
+5. **True Offline for `markMessageRead` (and other simple state changes):**
+    * **Goal:** Write to DB immediately, then queue network sync, aligning with "Scenario A: Reading
+      a Cached Message" (for state changes).
+    * **`DefaultMessageRepository.markMessageRead()`:**
+        1. Update `isRead` in local `MessageEntity` via `MessageDao` *first*.
+        2. Queue a background task (e.g., WorkManager one-off task) to sync this specific change to
+           the API. This task should have retry logic.
+
+        * This makes the UI update instantly and decouples it from network success for state
+          changes.
+
+This next increment will significantly advance the offline capabilities and user experience by
+providing a robust, paginated, cache-first message list.

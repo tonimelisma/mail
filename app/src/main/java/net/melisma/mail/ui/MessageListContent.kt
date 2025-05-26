@@ -32,7 +32,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import net.melisma.core_data.model.Account
 import net.melisma.core_data.model.Message
-import net.melisma.core_data.model.MessageDataState
 import net.melisma.mail.R
 
 /**
@@ -42,75 +41,54 @@ import net.melisma.mail.R
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MessageListContent(
-    messageDataState: MessageDataState, // *** Use MessageDataState ***
-    // messages: List<Message>?, // Messages are now inside MessageDataState.Success
-    // messageError: String?, // Error is now inside MessageDataState.Error
-    accountContext: Account?, // Uses generic Account for context header
+    messages: List<Message>,      // New
+    isLoading: Boolean,           // New
+    error: String?,               // New
+    accountContext: Account?,
     onMessageClick: (String) -> Unit
 ) {
-    // val isRefreshing = messageDataState is MessageDataState.Loading // Determine refreshing state
-
     Column(modifier = Modifier.fillMaxSize()) {
-        // Display optional header showing the current account context
         if (accountContext != null) {
             AccountContextHeader(account = accountContext)
             HorizontalDivider()
         }
 
-        // Determine content based on the messageDataState
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .weight(1f)
-        ) { // Ensure it fills available space in the Column
-            when (messageDataState) {
-                // Initial state before loading or after clearing selection
-                is MessageDataState.Initial -> {
-                    FullScreenMessage(
-                        icon = null, // No icon needed for initial prompt
-                        iconContentDescription = null,
-                        title = stringResource(R.string.select_a_folder) // Prompt user
-                    )
+        ) {
+            when {
+                isLoading && messages.isEmpty() -> {
+                    // Show loading indicator only if messages are empty (initial load)
+                    // PullToRefreshBox in parent handles subsequent refresh indicators over content.
+                    LoadingIndicator(statusText = stringResource(R.string.title_loading_messages))
                 }
-                // Loading state (can happen initially or during refresh)
-                is MessageDataState.Loading -> {
-                    // Show nothing specific during load, PullToRefreshBox shows indicator
-                    // Alternatively, show a centered spinner:
-                    // Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    //     CircularProgressIndicator()
-                    // }
-                    Spacer(Modifier.fillMaxSize()) // Let Parent PullToRefreshBox handle indicator, or show blank space
-                }
-                // Error state
-                is MessageDataState.Error -> {
+
+                error != null -> {
                     FullScreenMessage(
                         icon = Icons.Filled.CloudOff,
                         iconContentDescription = stringResource(R.string.cd_error_loading_messages),
                         title = stringResource(R.string.error_loading_messages_title),
-                        // Get error message from the state object
-                        message = messageDataState.error
+                        message = error
                     )
                 }
-                // Success state
-                is MessageDataState.Success -> {
-                    // Get messages list from the state object
-                    val messages = messageDataState.messages
-                    if (messages.isEmpty()) {
-                        // Show message if folder is empty
-                        FullScreenMessage(
-                            icon = Icons.Filled.Email,
-                            iconContentDescription = stringResource(R.string.cd_no_messages),
-                            title = stringResource(R.string.no_messages_title),
-                            message = stringResource(R.string.folder_is_empty)
-                        )
-                    } else {
-                        // Display the list of messages
-                        MessageListSuccessContent(messages, onMessageClick)
-                    }
+
+                messages.isEmpty() -> {
+                    FullScreenMessage(
+                        icon = Icons.Filled.Email,
+                        iconContentDescription = stringResource(R.string.cd_no_messages),
+                        title = stringResource(R.string.no_messages_title),
+                        message = stringResource(R.string.folder_is_empty)
+                    )
                 }
-            } // End when
-        } // End Box that replaced PullToRefreshBox
-    } // End Column
+
+                else -> {
+                    MessageListSuccessContent(messages, onMessageClick)
+                }
+            }
+        }
+    }
 }
 
 // --- Helper Composables (Single Definitions) ---

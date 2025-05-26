@@ -9,14 +9,12 @@ class MoveMessageUseCase @Inject constructor(
     suspend operator fun invoke(
         account: net.melisma.core_data.model.Account,
         messageId: String,
-        currentFolderId: String,
         destinationFolderId: String
     ): Result<Unit> {
         return messageRepository.moveMessage(
-            account,
-            messageId,
-            currentFolderId,
-            destinationFolderId
+            account = account,
+            messageId = messageId,
+            newFolderId = destinationFolderId
         )
     }
 } 

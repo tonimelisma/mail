@@ -192,6 +192,12 @@ class MicrosoftAccountRepository @Inject constructor(
 
     override fun getAccounts(): Flow<List<Account>> = _msAccounts.asStateFlow()
 
+    override fun getAccountById(accountId: String): Flow<Account?> {
+        return _msAccounts.map { accounts ->
+            accounts.find { it.id == accountId }
+        }
+    }
+
     override fun getActiveAccount(providerType: String): Flow<Account?> {
         if (!providerType.equals(Account.PROVIDER_TYPE_MS, ignoreCase = true)) return flowOf(null)
 

@@ -1,14 +1,14 @@
 package net.melisma.core_data.repository
 
 import android.app.Activity
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
-import net.melisma.core_data.model.Account // Updated import
-import net.melisma.core_data.model.MailFolder // Updated import
-import net.melisma.core_data.model.MessageDataState // Updated import
-import net.melisma.core_data.model.MessageDraft // Added import
-import net.melisma.core_data.model.Attachment // Added import
-import net.melisma.core_data.model.Message // Added import for return type
-import kotlinx.coroutines.flow.Flow // Added import for Flow
+import net.melisma.core_data.model.Account
+import net.melisma.core_data.model.Attachment
+import net.melisma.core_data.model.MailFolder
+import net.melisma.core_data.model.Message
+import net.melisma.core_data.model.MessageDraft
+import net.melisma.core_data.model.MessageSyncState
 
 /**
  * Interface defining the contract for managing mail messages within specific folders.
@@ -18,11 +18,20 @@ import kotlinx.coroutines.flow.Flow // Added import for Flow
 interface MessageRepository {
 
     /**
-     * A [StateFlow] emitting the current fetch state ([MessageDataState]) for messages
-     * in the folder/account currently targeted by [setTargetFolder].
-     * UI layers collect this to display the message list or relevant status indicators.
+     * A [StateFlow] emitting the current synchronization state ([MessageSyncState])
+     * for messages in the folder/account currently being synced or recently synced.
      */
-    val messageDataState: StateFlow<MessageDataState>
+    val messageSyncState: StateFlow<MessageSyncState>
+
+    /**
+     * Observes messages for a given account and folder directly from the local database.
+     * The UI should use this to display the list of messages.
+     *
+     * @param accountId The ID of the account.
+     * @param folderId The ID of the folder.
+     * @return A Flow emitting the list of [Message] objects.
+     */
+    fun observeMessagesForFolder(accountId: String, folderId: String): Flow<List<Message>>
 
     /**
      * Sets the target account and folder for which messages should be fetched and observed via [messageDataState].
@@ -35,13 +44,28 @@ interface MessageRepository {
     suspend fun setTargetFolder(account: Account?, folder: MailFolder?)
 
     /**
-     * Triggers a background refresh of the message list for the currently targeted folder/account.
-     * Updates (loading, success, or error) will be emitted through the [messageDataState] flow.
+     * Triggers a background synchronization of messages for the currently targeted folder/account.
+     * Updates to sync status will be emitted via [messageSyncState].
+     * Data updates will be reflected in flows from [observeMessagesForFolder].
      *
-     * @param activity The optional [Activity] context, potentially required
-     * for interactive authentication if tokens need to be refreshed.
+     * @param activity Optional [Activity] context.
      */
     suspend fun refreshMessages(activity: Activity? = null)
+
+    /**
+     * Explicitly triggers a synchronization of messages for the given account and folder.
+     * Updates to sync status will be emitted via [messageSyncState].
+     * Data updates will be reflected in flows from [observeMessagesForFolder].
+     *
+     * @param accountId The ID of the account.
+     * @param folderId The ID of the folder.
+     * @param activity Optional [Activity] context.
+     */
+    suspend fun syncMessagesForFolder(
+        accountId: String,
+        folderId: String,
+        activity: Activity? = null
+    )
 
     // Potential future methods for message management:
     // suspend fun loadMoreMessages() // For pagination
@@ -51,8 +75,7 @@ interface MessageRepository {
     suspend fun moveMessage(
         account: Account,
         messageId: String,
-        currentFolderId: String,
-        destinationFolderId: String
+        newFolderId: String
     ): Result<Unit>
 
     /**
@@ -65,7 +88,7 @@ interface MessageRepository {
     suspend fun getMessageDetails(
         messageId: String,
         accountId: String
-    ): kotlinx.coroutines.flow.Flow<net.melisma.core_data.model.Message?>
+    ): Flow<Message?>
 
     // New methods for draft and message sending
     suspend fun createDraftMessage(accountId: String, draftDetails: MessageDraft): Result<Message>
@@ -75,7 +98,7 @@ interface MessageRepository {
         draftDetails: MessageDraft
     ): Result<Message>
 
-    suspend fun sendMessage(accountId: String, messageId: String): Result<Unit>
+    suspend fun sendMessage(draft: MessageDraft, account: Account): Result<String>
 
     // New method for searching messages
     fun searchMessages(
@@ -85,7 +108,7 @@ interface MessageRepository {
     ): Flow<List<Message>>
 
     // New methods for attachments
-    fun getMessageAttachments(accountId: String, messageId: String): Flow<List<Attachment>>
+    suspend fun getMessageAttachments(accountId: String, messageId: String): Flow<List<Attachment>>
     suspend fun downloadAttachment(
         accountId: String,
         messageId: String,

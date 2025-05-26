@@ -194,7 +194,7 @@ fun MainAppScreen(
                         } else if (state.selectedFolder != null) {
                             val selectedAccount = mainViewModel.getSelectedAccount()
                             val isViewModelRefreshing = when (state.currentViewMode) {
-                                ViewMode.MESSAGES -> state.messageDataState is net.melisma.core_data.model.MessageDataState.Loading
+                                ViewMode.MESSAGES -> state.isMessageLoading
                                 ViewMode.THREADS -> state.threadDataState is net.melisma.core_data.model.ThreadDataState.Loading
                             }
 
@@ -210,7 +210,9 @@ fun MainAppScreen(
                                 when (state.currentViewMode) {
                                     ViewMode.MESSAGES -> {
                                         MessageListContent(
-                                            messageDataState = state.messageDataState,
+                                            messages = state.messages,
+                                            isLoading = state.isMessageLoading,
+                                            error = state.messageError,
                                             accountContext = selectedAccount,
                                             onMessageClick = { messageId ->
                                                 Log.d(

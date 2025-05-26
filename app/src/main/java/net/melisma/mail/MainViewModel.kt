@@ -12,10 +12,14 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -27,7 +31,7 @@ import net.melisma.core_data.model.GenericSignOutResult
 import net.melisma.core_data.model.MailFolder
 import net.melisma.core_data.model.MailThread
 import net.melisma.core_data.model.Message
-import net.melisma.core_data.model.MessageDataState
+import net.melisma.core_data.model.MessageSyncState
 import net.melisma.core_data.model.ThreadDataState
 import net.melisma.core_data.model.WellKnownFolderType
 import net.melisma.core_data.preferences.MailViewModePreference
@@ -52,19 +56,26 @@ data class MainScreenState(
     val foldersByAccountId: Map<String, FolderFetchState> = emptyMap(),
     val selectedFolderAccountId: String? = null,
     val selectedFolder: MailFolder? = null,
-    val messageDataState: MessageDataState = MessageDataState.Initial,
+    val messages: List<Message> = emptyList(),
+    val messageSyncState: MessageSyncState = MessageSyncState.Idle,
     val threadDataState: ThreadDataState = ThreadDataState.Initial,
-    val currentViewMode: ViewMode = MailViewModePreference.THREADS, // <-- UPDATE DEFAULT
+    val currentViewMode: ViewMode = MailViewModePreference.THREADS,
     val toastMessage: String? = null
 ) {
     val isAnyFolderLoading: Boolean
         get() = foldersByAccountId.values.any { it is FolderFetchState.Loading }
     val isMessageLoading: Boolean
-        get() = messageDataState is MessageDataState.Loading
-    val messages: List<Message>?
-        get() = (messageDataState as? MessageDataState.Success)?.messages
+        get() = messageSyncState is MessageSyncState.Syncing &&
+                messageSyncState.accountId == selectedFolderAccountId &&
+                messageSyncState.folderId == selectedFolder?.id
     val messageError: String?
-        get() = (messageDataState as? MessageDataState.Error)?.error
+        get() = (messageSyncState as? MessageSyncState.SyncError)?.let {
+            if (it.accountId == selectedFolderAccountId && it.folderId == selectedFolder?.id) {
+                it.error
+            } else {
+                null
+            }
+        }
     val isThreadLoading: Boolean
         get() = threadDataState is ThreadDataState.Loading
     val threads: List<MailThread>?
@@ -95,13 +106,16 @@ class MainViewModel @Inject constructor(
     private val _pendingAuthIntent = MutableStateFlow<Intent?>(null)
     val pendingAuthIntent: StateFlow<Intent?> = _pendingAuthIntent.asStateFlow()
 
+    private var messageDataObserverJob: Job? = null
+
     init {
         Timber.tag(TAG).d("ViewModel Initializing")
         observeAccountRepositoryState()
         observeFolderRepository()
-        observeMessageRepository()
+        observeMessageRepositorySyncState()
         observeThreadRepository()
         observeUserPreferences()
+        observeSelectedFolderAndMessages()
     }
 
     private fun observeAccountRepositoryState() {
@@ -238,58 +252,63 @@ class MainViewModel @Inject constructor(
         Timber.tag(TAG).d("MainViewModel: Finished setting up FolderRepository observation flow")
     }
 
-    private fun observeMessageRepository() {
-        Timber.tag(TAG).d("MainViewModel: observeMessageRepository() - Setting up flow")
-
-        messageRepository.messageDataState
-            .onEach { newMessageState ->
-                if (_uiState.value.messageDataState != newMessageState) {
+    private fun observeMessageRepositorySyncState() {
+        Timber.tag(TAG).d("MainViewModel: observeMessageRepositorySyncState() - Setting up flow")
+        messageRepository.messageSyncState
+            .onEach { newSyncState ->
+                if (_uiState.value.messageSyncState != newSyncState) {
                     Timber.tag(TAG).d(
-                        "MainViewModel: MessageRepo State Changed: ${newMessageState::class.simpleName}"
+                        "MainViewModel: MessageRepo Sync State Changed: ${newSyncState::class.simpleName}"
                     )
-                    when (newMessageState) {
-                        is MessageDataState.Success -> {
-                            val messageCount = newMessageState.messages.size
-                            Timber.tag(TAG).d(
-                                "ViewModel received Success with ${newMessageState.messages.size} messages. First 3 subjects: ${
-                                    newMessageState.messages.take(3).map { it.subject }
-                                }"
-                            )
-                            Log.d(TAG, "MainViewModel: Received ${messageCount} messages")
-                            if (messageCount > 0) {
-                                Log.d(
-                                    TAG,
-                                    "MainViewModel: First message subject: ${newMessageState.messages.first().subject}"
-                                )
-                                Log.d(
-                                    TAG,
-                                    "MainViewModel: Message IDs: ${
-                                        newMessageState.messages.take(3).map { it.id }
-                                    }"
-                                )
-                            }
-                        }
-
-                        is MessageDataState.Loading -> Log.d(
-                            TAG,
-                            "MainViewModel: Messages are loading"
-                        )
-
-                        is MessageDataState.Error -> Log.e(
-                            TAG,
-                            "MainViewModel: Message loading error: ${newMessageState.error}"
-                        )
-
-                        is MessageDataState.Initial -> Log.d(
-                            TAG,
-                            "MainViewModel: Message state is initial (no data loaded yet)"
-                        )
-                    }
-                    _uiState.update { it.copy(messageDataState = newMessageState) }
-                    Log.d(TAG, "MainViewModel: UI state updated with new message state")
+                    _uiState.update { it.copy(messageSyncState = newSyncState) }
                 }
             }.launchIn(viewModelScope)
-        Log.d(TAG, "MainViewModel: Finished setting up MessageRepository observation flow")
+    }
+
+    private fun observeSelectedFolderAndMessages() {
+        _uiState
+            .map { state: MainScreenState ->
+                Pair(
+                    state.selectedFolderAccountId,
+                    state.selectedFolder?.id
+                )
+            }
+            .distinctUntilChanged()
+            .onEach { (accountId: String?, folderId: String?) ->
+                messageDataObserverJob?.cancel()
+                if (accountId != null && folderId != null) {
+                    Timber.tag(TAG)
+                        .d("Selected folder changed to: Account $accountId, Folder $folderId. Observing messages from DB.")
+                    messageDataObserverJob =
+                        messageRepository.observeMessagesForFolder(accountId, folderId)
+                            .onEach { messages ->
+                                Timber.tag(TAG)
+                                    .d("DB emitted ${messages.size} messages for $accountId/$folderId")
+                                _uiState.update { it.copy(messages = messages) }
+                            }
+                            .catch { e ->
+                                Timber.e(
+                                    e,
+                                    "Error observing messages from DB for $accountId/$folderId"
+                                )
+                                _uiState.update { state ->
+                                    state.copy(
+                                        messages = emptyList(),
+                                        messageSyncState = MessageSyncState.SyncError(
+                                            accountId,
+                                            folderId,
+                                            "Error loading messages from DB"
+                                        )
+                                    )
+                                }
+                            }
+                            .launchIn(viewModelScope)
+                } else {
+                    Timber.tag(TAG)
+                        .d("No folder selected or folderId missing. Clearing local messages list.")
+                    _uiState.update { it.copy(messages = emptyList()) } 
+                }
+            }.launchIn(viewModelScope)
     }
 
     private fun observeThreadRepository() {
@@ -539,7 +558,7 @@ class MainViewModel @Inject constructor(
                 }
                 return
             }
-            if (_uiState.value.currentViewMode == ViewMode.MESSAGES && _uiState.value.messageDataState !is MessageDataState.Initial) {
+            if (_uiState.value.currentViewMode == ViewMode.MESSAGES && _uiState.value.messageSyncState !is MessageSyncState.Idle) {
                 Log.d(
                     TAG,
                     "Folder ${folder.displayName} already selected for MESSAGES view and data exists/loading. Skipping full re-fetch."
@@ -562,7 +581,7 @@ class MainViewModel @Inject constructor(
                     TAG,
                     "selectFolder: Current view mode is THREADS. Clearing message state, setting target for threads."
                 )
-                if (_uiState.value.messageDataState !is MessageDataState.Initial) {
+                if (_uiState.value.messageSyncState !is MessageSyncState.Idle) {
                     messageRepository.setTargetFolder(null, null)
                 }
                 threadRepository.setTargetFolderForThreads(account, folder)
@@ -652,20 +671,14 @@ class MainViewModel @Inject constructor(
             userPreferencesRepository.updateMailViewMode(newMode)
             _uiState.update { currentState ->
                 currentState.copy(
-                    messageDataState = if (newMode == ViewMode.THREADS && currentState.messageDataState !is MessageDataState.Initial) {
-                        Log.d(
-                            TAG,
-                            "setViewModePreference: Switching to THREADS, resetting MessageDataState."
-                        )
-                        MessageDataState.Initial
+                    currentViewMode = newMode,
+                    messageSyncState = if (newMode == ViewMode.THREADS && currentState.messageSyncState !is MessageSyncState.Idle) {
+                        MessageSyncState.Idle
                     } else {
-                        currentState.messageDataState
+                        currentState.messageSyncState
                     },
+                    messages = if (newMode == ViewMode.THREADS) emptyList() else currentState.messages,
                     threadDataState = if (newMode == ViewMode.MESSAGES && currentState.threadDataState !is ThreadDataState.Initial) {
-                        Log.d(
-                            TAG,
-                            "setViewModePreference: Switching to MESSAGES, resetting ThreadDataState."
-                        )
                         ThreadDataState.Initial
                     } else {
                         currentState.threadDataState
@@ -685,11 +698,10 @@ class MainViewModel @Inject constructor(
 
     fun refreshFoldersForAccount(accountId: String, activity: Activity? = null) {
         Timber.tag(TAG).d("Explicitly refreshing folders for account: $accountId")
-        _uiState.update { it.copy(isLoadingAccountAction = true) } // Indicate some loading
+        _uiState.update { it.copy(isLoadingAccountAction = true) }
         viewModelScope.launch {
             try {
                 folderRepository.refreshFoldersForAccount(accountId, activity)
-                //isLoadingAccountAction will be reset by the folder state flow observation
             } catch (e: Exception) {
                 Timber.tag(TAG).e(e, "Error refreshing folders for account $accountId")
                 _uiState.update {
@@ -767,17 +779,14 @@ class MainViewModel @Inject constructor(
     fun initiateSignIn(providerType: String, activity: Activity) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoadingAccountAction = true) }
-            // The GMAIL_SCOPES_FOR_LOGIN are internal to DefaultAccountRepository,
-            // so we pass null for scopes and let the repository decide.
             defaultAccountRepository.getAuthenticationIntentRequest(
                 providerType = providerType,
                 activity = activity,
-                scopes = null // Let repository use default scopes
+                scopes = null
             ).collect { result: GenericAuthResult ->
                 _uiState.update { it.copy(isLoadingAccountAction = false) }
                 when (result) {
                     is GenericAuthResult.Success -> {
-                        // Handled by account observation flow, maybe post a toast?
                         _uiState.update { it.copy(toastMessage = "Sign-in flow for ${providerType} initiated.") }
                     }
 
@@ -830,6 +839,42 @@ class MainViewModel @Inject constructor(
         } else {
             Timber.tag(TAG).w("Cannot retry thread fetch: no folder or account selected.")
             _uiState.update { it.copy(toastMessage = "Please select a folder and account first.") }
+        }
+    }
+
+    fun onFolderSelected(account: Account, folder: MailFolder) {
+        Timber.tag(TAG).d("Folder selected: ${folder.displayName} in account ${account.username}")
+        _uiState.update {
+            it.copy(
+                selectedFolderAccountId = account.id,
+                selectedFolder = folder,
+                messages = emptyList(),
+                messageSyncState = MessageSyncState.Idle
+            )
+        }
+        viewModelScope.launch {
+            messageRepository.setTargetFolder(account, folder)
+            if (_uiState.value.currentViewMode == ViewMode.THREADS) {
+                threadRepository.setTargetFolderForThreads(account, folder, null)
+            }
+        }
+    }
+
+    fun refreshMessages() {
+        val accountId = _uiState.value.selectedFolderAccountId
+        val folderId = _uiState.value.selectedFolder?.id
+
+        if (accountId != null && folderId != null) {
+            Timber.tag(TAG).d("refreshMessages called for Account $accountId, Folder $folderId")
+            viewModelScope.launch {
+                messageRepository.syncMessagesForFolder(
+                    accountId,
+                    folderId,
+                    null /*activity if needed*/
+                )
+            }
+        } else {
+            Timber.tag(TAG).w("refreshMessages: No folder selected or account/folder ID missing.")
         }
     }
 }

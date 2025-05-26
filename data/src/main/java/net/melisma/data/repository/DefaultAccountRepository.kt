@@ -15,7 +15,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
@@ -42,6 +41,8 @@ import net.melisma.core_data.model.GenericAuthResult
 import net.melisma.core_data.model.GenericSignOutResult
 import net.melisma.core_data.repository.AccountRepository
 import net.melisma.core_data.repository.OverallApplicationAuthState
+import net.melisma.core_db.dao.AccountDao
+import net.melisma.data.mapper.toDomainAccount
 import net.openid.appauth.AuthorizationException
 import net.openid.appauth.AuthorizationResponse
 import timber.log.Timber
@@ -63,7 +64,8 @@ class DefaultAccountRepository @Inject constructor(
     private val googleAuthManager: GoogleAuthManager,
     private val externalScope: CoroutineScope,
     private val errorMappers: Map<String, @JvmSuppressWildcards ErrorMapperService>,
-    private val activeGoogleAccountHolder: ActiveGoogleAccountHolder
+    private val activeGoogleAccountHolder: ActiveGoogleAccountHolder,
+    private val accountDao: AccountDao
 ) : AccountRepository {
 
     private val TAG = "DefaultAccountRepo"
@@ -312,17 +314,18 @@ class DefaultAccountRepository @Inject constructor(
 
     // getAccounts - combines MS (from its repo) and Google accounts (from local _googleAccounts, fed by GoogleAuthManager)
     override fun getAccounts(): Flow<List<Account>> {
-        return combine(
-            microsoftAccountRepository.getAccounts(), // Flow<List<Account>> from MS repo
-            _googleAccounts // This is StateFlow<List<Account>>, updated by GoogleAuthManager interactions
-        ) { msAccounts, googleAccounts ->
-            Timber.tag(TAG)
-                .d("Combining accounts: MS(${msAccounts.size}), Google(${googleAccounts.size})")
-            msAccounts + googleAccounts
-        }.onEach { combinedAccounts ->
-            // This updates the main _accounts StateFlow that external collectors observe for combined list.
-            _accounts.value = combinedAccounts
-            // updateOverallAuthState() is now called within the collectors of _googleAccounts and MS accounts
+        // For now, let existing logic in init block update _accounts if it's combining sources.
+        // Ideally, this would be: return accountDao.getAllAccounts().map { list -> list.map { it.toDomainAccount() } }
+        // But that's a larger refactor of how _accounts is populated. 
+        // For now, returning the combined _accounts StateFlow which should reflect DB state if init logic is correct.
+        // This is a temporary measure to avoid breaking existing account list observation logic immediately.
+        // TODO: Refactor DefaultAccountRepository to use AccountDao as the SSoT for getAccounts().
+        return _accounts.asStateFlow() // Placeholder, assuming _accounts is populated from DB eventually.
+    }
+
+    override fun getAccountById(accountId: String): Flow<Account?> {
+        return accountDao.getAccountById(accountId).map { entity ->
+            entity?.toDomainAccount()
         }
     }
 

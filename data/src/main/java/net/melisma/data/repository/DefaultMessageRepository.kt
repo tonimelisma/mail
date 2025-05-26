@@ -12,7 +12,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import net.melisma.core_data.datasource.MailApiService
@@ -24,10 +24,13 @@ import net.melisma.core_data.model.Account
 import net.melisma.core_data.model.Attachment
 import net.melisma.core_data.model.MailFolder
 import net.melisma.core_data.model.Message
-import net.melisma.core_data.model.MessageDataState
 import net.melisma.core_data.model.MessageDraft
+import net.melisma.core_data.model.MessageSyncState
 import net.melisma.core_data.repository.AccountRepository
 import net.melisma.core_data.repository.MessageRepository
+import net.melisma.core_db.dao.MessageDao
+import net.melisma.data.mapper.toDomainModel
+import net.melisma.data.mapper.toEntity
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.cancellation.CancellationException
@@ -38,22 +41,31 @@ class DefaultMessageRepository @Inject constructor(
     @Dispatcher(MailDispatchers.IO) private val ioDispatcher: CoroutineDispatcher,
     @ApplicationScope private val externalScope: CoroutineScope,
     private val errorMappers: Map<String, @JvmSuppressWildcards ErrorMapperService>,
-    private val accountRepository: AccountRepository
+    private val accountRepository: AccountRepository,
+    private val messageDao: MessageDao
 ) : MessageRepository {
 
     private val TAG = "DefaultMessageRepo"
-    private val _messageDataState = MutableStateFlow<MessageDataState>(MessageDataState.Initial)
-    override val messageDataState: StateFlow<MessageDataState> = _messageDataState.asStateFlow()
+    private val _messageSyncState = MutableStateFlow<MessageSyncState>(MessageSyncState.Idle)
+    override val messageSyncState: StateFlow<MessageSyncState> = _messageSyncState.asStateFlow()
 
     private var currentTargetAccount: Account? = null
-    private var currentTargetFolder: MailFolder? = null
-    private var fetchJob: Job? = null
+    private var currentTargetFolderId: String? = null
+    private var syncJob: Job? = null
 
     init {
         Log.d(
-            TAG, "Initializing DefaultMessageRepository. Injected maps:" +
-                    " mailApiServices keys: ${mailApiServices.keys}, errorMappers keys: ${errorMappers.keys}"
+            TAG, "Initializing DefaultMessageRepository with MessageDao."
         )
+    }
+
+    override fun observeMessagesForFolder(
+        accountId: String,
+        folderId: String
+    ): Flow<List<Message>> {
+        Log.d(TAG, "observeMessagesForFolder: accountId=$accountId, folderId=$folderId")
+        return messageDao.getMessagesForFolder(accountId, folderId)
+            .map { entities -> entities.map { it.toDomainModel() } }
     }
 
     override suspend fun setTargetFolder(
@@ -62,50 +74,66 @@ class DefaultMessageRepository @Inject constructor(
     ) {
         Log.d(
             TAG,
-            "setTargetFolder: Account=${account?.username}, Folder=${folder?.displayName}, Job Active: ${fetchJob?.isActive}"
+            "setTargetFolder: Account=${account?.username}, Folder=${folder?.displayName}, SyncJob Active: ${syncJob?.isActive}"
         )
 
-        val isSameTarget =
-            account?.id == currentTargetAccount?.id && folder?.id == currentTargetFolder?.id
-        val isInitialOrError =
-            _messageDataState.value is MessageDataState.Initial || _messageDataState.value is MessageDataState.Error
+        val newAccountId = account?.id
+        val newFolderId = folder?.id
 
-        if (isSameTarget && !isInitialOrError) {
+        if (newAccountId == currentTargetAccount?.id && newFolderId == currentTargetFolderId && _messageSyncState.value !is MessageSyncState.Idle && _messageSyncState.value !is MessageSyncState.SyncError) {
             Log.d(
                 TAG,
-                "setTargetFolder: Same target and data already loaded/loading and not in error/initial state. To refresh, call refreshMessages()."
+                "setTargetFolder: Same target and not in idle/error state. Current sync state: ${_messageSyncState.value}"
             )
             return
         }
 
-        if (isSameTarget && _messageDataState.value is MessageDataState.Loading) {
-            Log.d(TAG, "setTargetFolder: Same target and already loading. Ignoring.")
-            return
-        }
-
-
-        cancelAndClearJob("New target folder: ${folder?.displayName ?: "null"}")
+        cancelAndClearSyncJob("New target folder set: Account=${newAccountId}, Folder=${newFolderId}")
         currentTargetAccount = account
-        currentTargetFolder = folder
+        currentTargetFolderId = newFolderId
 
-        if (account == null || folder == null) {
-            _messageDataState.value = MessageDataState.Initial
-            Log.d(TAG, "setTargetFolder: Cleared target, state set to Initial.")
+        if (account == null || newFolderId == null) {
+            _messageSyncState.value = MessageSyncState.Idle
+            Log.d(TAG, "setTargetFolder: Cleared target, sync state set to Idle.")
             return
         }
-        _messageDataState.value = MessageDataState.Loading
-        launchMessageFetchJobInternal(account, folder, isRefresh = false)
+
+        syncMessagesForFolderInternal(account, newFolderId, isRefresh = false)
     }
 
-    private fun launchMessageFetchJobInternal(
-        account: Account,
-        folder: MailFolder,
-        isRefresh: Boolean
+    override suspend fun syncMessagesForFolder(
+        accountId: String,
+        folderId: String,
+        activity: Activity?
     ) {
-        cancelAndClearJob("Launching new message fetch for ${folder.displayName}. Refresh: $isRefresh")
+        val account = accountRepository.getAccountById(accountId).firstOrNull()
+        if (account == null) {
+            Log.e(TAG, "syncMessagesForFolder: Account not found for id $accountId")
+            _messageSyncState.value =
+                MessageSyncState.SyncError(accountId, folderId, "Account not found for sync.")
+            return
+        }
+        syncMessagesForFolderInternal(account, folderId, isRefresh = true, explicitRequest = true)
+    }
+
+    private fun syncMessagesForFolderInternal(
+        account: Account,
+        folderId: String,
+        isRefresh: Boolean,
+        explicitRequest: Boolean = false
+    ) {
+        if (syncJob?.isActive == true && !isRefresh) {
+            Log.d(
+                TAG,
+                "syncMessagesForFolderInternal: Sync job already active for $folderId. Ignoring."
+            )
+            return
+        }
+        cancelAndClearSyncJob("Launching new message sync for ${account.id} / $folderId. Refresh: $isRefresh")
+
         Log.d(
             TAG,
-            "[${folder.displayName}] launchMessageFetchJobInternal for account type: ${account.providerType}"
+            "[${account.id}/$folderId] syncMessagesForFolderInternal for account type: ${account.providerType}"
         )
 
         val providerType = account.providerType.uppercase()
@@ -114,52 +142,68 @@ class DefaultMessageRepository @Inject constructor(
 
         if (apiService == null || errorMapper == null) {
             val errorMsg =
-                "Unsupported account type: $providerType or missing services for message fetching."
+                "Unsupported account type: $providerType or missing services for message sync."
             Log.e(TAG, errorMsg)
-            _messageDataState.value = MessageDataState.Error(errorMsg)
+            _messageSyncState.value = MessageSyncState.SyncError(account.id, folderId, errorMsg)
             return
         }
 
-        fetchJob = externalScope.launch(ioDispatcher) {
-            Log.i(TAG, "[${folder.displayName}] Message fetch job started. Refresh: $isRefresh")
+        _messageSyncState.value = MessageSyncState.Syncing(account.id, folderId)
+
+        syncJob = externalScope.launch(ioDispatcher) {
+            Log.i(TAG, "[${account.id}/$folderId] Message sync job started. Refresh: $isRefresh")
             try {
                 val messagesResult = apiService.getMessagesForFolder(
-                    folderId = folder.id,
-                    maxResults = 50 // Default page size
+                    folderId = folderId,
+                    maxResults = 100
                 )
                 ensureActive()
 
                 if (messagesResult.isSuccess) {
-                    val messages = messagesResult.getOrThrow()
+                    val apiMessages = messagesResult.getOrThrow()
                     Log.i(
                         TAG,
-                        "[${folder.displayName}] Successfully fetched ${messages.size} messages."
+                        "[${account.id}/$folderId] Successfully fetched ${apiMessages.size} messages from API."
                     )
-                    _messageDataState.value = MessageDataState.Success(messages)
+
+                    val messageEntities = apiMessages.map { it.toEntity(account.id, folderId) }
+                    messageDao.clearAndInsertMessagesForFolder(
+                        account.id,
+                        folderId,
+                        messageEntities
+                    )
+                    Log.i(
+                        TAG,
+                        "[${account.id}/$folderId] Saved ${messageEntities.size} messages to DB."
+                    )
+
+                    _messageSyncState.value = MessageSyncState.SyncSuccess(account.id, folderId)
                 } else {
                     val exception = messagesResult.exceptionOrNull()
                     val errorDetails = errorMapper.mapExceptionToErrorDetails(exception)
                     Log.e(
                         TAG,
-                        "[${folder.displayName}] Error fetching messages: ${errorDetails.message}",
+                        "[${account.id}/$folderId] Error syncing messages: ${errorDetails.message}",
                         exception
                     )
-                    _messageDataState.value = MessageDataState.Error(errorDetails.message)
+                    _messageSyncState.value =
+                        MessageSyncState.SyncError(account.id, folderId, errorDetails.message)
                 }
             } catch (e: CancellationException) {
-                Log.w(TAG, "[${folder.displayName}] Message fetch job cancelled.", e)
-                if (isActive && currentTargetFolder?.id == folder.id && _messageDataState.value is MessageDataState.Loading) {
-                    _messageDataState.value = MessageDataState.Error("Message loading cancelled.")
+                Log.w(TAG, "[${account.id}/$folderId] Message sync job cancelled.", e)
+                if (isActive && currentTargetAccount?.id == account.id && currentTargetFolderId == folderId && _messageSyncState.value is MessageSyncState.Syncing) {
+                    _messageSyncState.value = MessageSyncState.Idle
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "[${folder.displayName}] Exception during message fetch process", e)
-                if (isActive && currentTargetFolder?.id == folder.id) {
+                Log.e(TAG, "[${account.id}/$folderId] Exception during message sync process", e)
+                if (isActive && currentTargetAccount?.id == account.id && currentTargetFolderId == folderId) {
                     val details = errorMapper.mapExceptionToErrorDetails(e)
-                    _messageDataState.value = MessageDataState.Error(details.message)
+                    _messageSyncState.value =
+                        MessageSyncState.SyncError(account.id, folderId, details.message)
                 }
             } finally {
-                if (fetchJob == coroutineContext[Job]) {
-                    fetchJob = null
+                if (syncJob == coroutineContext[Job]) {
+                    syncJob = null
                 }
             }
         }
@@ -167,44 +211,36 @@ class DefaultMessageRepository @Inject constructor(
 
     override suspend fun refreshMessages(activity: Activity?) {
         val account = currentTargetAccount
-        val folder = currentTargetFolder
-        if (account == null || folder == null) {
-            Log.w(TAG, "refreshMessages: No target account or folder set. Skipping.")
-            _messageDataState.value = MessageDataState.Error("Cannot refresh: No folder selected.")
+        val folderId = currentTargetFolderId
+        if (account == null || folderId == null) {
+            Log.w(TAG, "refreshMessages: No target account or folderId set. Skipping.")
             return
         }
-        Log.d(
-            TAG,
-            "refreshMessages called for folder: ${folder.displayName}, Account: ${account.username}"
-        )
-        if (_messageDataState.value is MessageDataState.Loading) {
-            Log.d(TAG, "refreshMessages: Already loading. Skipping duplicate refresh.")
+        Log.d(TAG, "refreshMessages called for folderId: $folderId, Account: ${account.username}")
+        if (_messageSyncState.value is MessageSyncState.Syncing && (_messageSyncState.value as MessageSyncState.Syncing).folderId == folderId) {
+            Log.d(TAG, "refreshMessages: Already syncing this folder. Skipping duplicate refresh.")
             return
         }
-        _messageDataState.value = MessageDataState.Loading
-        launchMessageFetchJobInternal(account, folder, isRefresh = true)
+        syncMessagesForFolderInternal(account, folderId, isRefresh = true, explicitRequest = true)
     }
 
-
-    private fun cancelAndClearJob(reason: String) {
-        fetchJob?.let {
+    private fun cancelAndClearSyncJob(reason: String) {
+        syncJob?.let {
             if (it.isActive) {
                 Log.d(
                     TAG,
-                    "Cancelling previous message fetch job. Reason: $reason. Hash: ${it.hashCode()}"
+                    "Cancelling previous message sync job. Reason: $reason. Hash: ${it.hashCode()}"
                 )
-                it.cancel(CancellationException("Job cancelled: $reason"))
+                it.cancel(CancellationException("Sync job cancelled: $reason"))
             }
         }
-        fetchJob = null
-        Log.d(TAG, "cancelAndClearJob: Cleared fetchJob. Reason: $reason")
+        syncJob = null
+        Log.d(TAG, "cancelAndClearSyncJob: Cleared syncJob. Reason: $reason")
     }
 
     override suspend fun getMessageDetails(messageId: String, accountId: String): Flow<Message?> {
-        Log.d(TAG, "getMessageDetails called for messageId: $messageId, accountId: $accountId")
-
-        val account = accountRepository.getAccounts().firstOrNull()?.find { it.id == accountId }
-
+        Log.d(TAG, "getMessageDetails (API direct): $messageId, accountId: $accountId")
+        val account = accountRepository.getAccountById(accountId).firstOrNull()
         if (account == null) {
             Log.e(TAG, "getMessageDetails: Account not found for id $accountId")
             return flowOf(null)
@@ -218,10 +254,6 @@ class DefaultMessageRepository @Inject constructor(
             )
             return flowOf(null)
         }
-        Log.d(
-            TAG,
-            "Using ApiService for provider: ${account.providerType} (resolved to key: $providerType) to fetch details for message ID: $messageId"
-        )
         return apiService.getMessageDetails(messageId)
     }
 
@@ -232,21 +264,23 @@ class DefaultMessageRepository @Inject constructor(
     ): Result<Unit> {
         Log.d(
             TAG,
-            "markMessageRead called for id: $messageId, account: ${account.username}, isRead: $isRead"
+            "markMessageRead for id: $messageId, account: ${account.username}, isRead: $isRead"
         )
         val apiService = mailApiServices[account.providerType.uppercase()]
-            ?: return Result.failure(NotImplementedError("markMessageRead not implemented for account ${account.providerType}"))
+            ?: return Result.failure(NotImplementedError("markMessageRead not impl for ${account.providerType}"))
 
         val result = apiService.markMessageRead(messageId, isRead)
         if (result.isSuccess) {
-            _messageDataState.update { currentState ->
-                if (currentState is MessageDataState.Success) {
-                    val updatedMessages = currentState.messages.map { message ->
-                        if (message.id == messageId) message.copy(isRead = isRead) else message
-                    }
-                    currentState.copy(messages = updatedMessages)
+            externalScope.launch(ioDispatcher) {
+                val messageEntity = messageDao.getMessageById(messageId).firstOrNull()
+                if (messageEntity != null) {
+                    messageDao.insertOrUpdateMessages(listOf(messageEntity.copy(isRead = isRead)))
+                    Log.d(TAG, "Updated read status in DB for $messageId to $isRead")
                 } else {
-                    currentState
+                    Log.w(
+                        TAG,
+                        "markMessageRead: Message $messageId not found in DB to update read status after API success."
+                    )
                 }
             }
         }
@@ -254,116 +288,49 @@ class DefaultMessageRepository @Inject constructor(
     }
 
     override suspend fun deleteMessage(account: Account, messageId: String): Result<Unit> {
-        Log.d(TAG, "deleteMessage called for id: $messageId, account: ${account.username}")
-        val apiService = mailApiServices[account.providerType.uppercase()]
-            ?: return Result.failure(NotImplementedError("deleteMessage not implemented for account ${account.providerType}"))
-
-        val result = apiService.deleteMessage(messageId)
-        if (result.isSuccess) {
-            _messageDataState.update { currentState ->
-                if (currentState is MessageDataState.Success) {
-                    val updatedMessages = currentState.messages.filterNot { it.id == messageId }
-                    currentState.copy(messages = updatedMessages)
-                } else {
-                    currentState
-                }
-            }
-        }
-        return result
+        Log.d(TAG, "deleteMessage for id: $messageId, account: ${account.username}")
+        return Result.failure(NotImplementedError("deleteMessage not yet implemented with DB sync"))
     }
 
     override suspend fun moveMessage(
         account: Account,
         messageId: String,
-        currentFolderId: String,
-        destinationFolderId: String
+        newFolderId: String
     ): Result<Unit> {
-        Log.d(
-            TAG,
-            "moveMessage: id=$messageId, acc=${account.username}, from=$currentFolderId, to=$destinationFolderId"
-        )
-        val apiService = mailApiServices[account.providerType.uppercase()]
-            ?: return Result.failure(NotImplementedError("moveMessage not implemented for account ${account.providerType}"))
-
-        val result = apiService.moveMessage(messageId, destinationFolderId, currentFolderId)
-        if (result.isSuccess) {
-            _messageDataState.update { currentState ->
-                if (currentState is MessageDataState.Success && currentTargetFolder?.id == currentFolderId) {
-                    val updatedMessages = currentState.messages.filterNot { it.id == messageId }
-                    currentState.copy(messages = updatedMessages)
-                } else {
-                    // If not the current folder, or not success state, or if a refresh is preferred after move
-                    // consider triggering refreshMessages() if the moved-from folder is the current one
-                    // For now, just pass through the current state
-                    currentState
-                }
-            }
-        }
-        return result
+        Log.d(TAG, "moveMessage for id: $messageId to $newFolderId")
+        return Result.failure(NotImplementedError("moveMessage not yet implemented with DB sync"))
     }
 
-    // Stub implementations for new methods
-    override suspend fun createDraftMessage(
-        accountId: String,
-        draftDetails: MessageDraft
-    ): Result<Message> {
-        Log.d(
-            TAG,
-            "createDraftMessage called for accountId: $accountId, draftDetails: $draftDetails"
-        )
-        // val account = accountRepository.getAccounts().firstOrNull()?.find { it.id == accountId }
-        // val apiService = account?.providerType?.uppercase()?.let { mailApiServices[it] }
-        // apiService?.createDraftMessage(draftDetails) // Actual call commented for stub
-        return Result.failure(NotImplementedError("createDraftMessage not implemented"))
+    override suspend fun sendMessage(draft: MessageDraft, account: Account): Result<String> {
+        return Result.failure(NotImplementedError("sendMessage not part of this repository's direct caching scope"))
     }
 
-    override suspend fun updateDraftMessage(
-        accountId: String,
-        messageId: String,
-        draftDetails: MessageDraft
-    ): Result<Message> {
-        Log.d(
-            TAG,
-            "updateDraftMessage called for accountId: $accountId, messageId: $messageId, draftDetails: $draftDetails"
-        )
-        // val account = accountRepository.getAccounts().firstOrNull()?.find { it.id == accountId }
-        // val apiService = account?.providerType?.uppercase()?.let { mailApiServices[it] }
-        // apiService?.updateDraftMessage(messageId, draftDetails) // Actual call commented for stub
-        return Result.failure(NotImplementedError("updateDraftMessage not implemented"))
-    }
-
-    override suspend fun sendMessage(accountId: String, messageId: String): Result<Unit> {
-        Log.d(TAG, "sendMessage called for accountId: $accountId, messageId: $messageId")
-        // val account = accountRepository.getAccounts().firstOrNull()?.find { it.id == accountId }
-        // val apiService = account?.providerType?.uppercase()?.let { mailApiServices[it] }
-        // apiService?.sendMessage(messageId) // Actual call commented for stub
-        return Result.failure(NotImplementedError("sendMessage not implemented"))
-    }
-
-    override fun searchMessages(
-        accountId: String,
-        query: String,
-        folderId: String?
-    ): Flow<List<Message>> {
-        Log.d(
-            TAG,
-            "searchMessages called for accountId: $accountId, query: $query, folderId: $folderId"
-        )
-        // val account = accountRepository.getAccounts().firstOrNull()?.find { it.id == accountId }
-        // val apiService = account?.providerType?.uppercase()?.let { mailApiServices[it] }
-        // apiService?.searchMessages(query, folderId) // Actual call commented for stub
-        return flowOf(emptyList())
-    }
-
-    override fun getMessageAttachments(
+    override suspend fun getMessageAttachments(
         accountId: String,
         messageId: String
     ): Flow<List<Attachment>> {
         Log.d(TAG, "getMessageAttachments called for accountId: $accountId, messageId: $messageId")
-        // val account = accountRepository.getAccounts().firstOrNull()?.find { it.id == accountId }
-        // val apiService = account?.providerType?.uppercase()?.let { mailApiServices[it] }
-        // apiService?.getMessageAttachments(messageId) // Actual call commented for stub
-        return flowOf(emptyList())
+        val account = accountRepository.getAccountById(accountId).firstOrNull()
+
+        if (account == null) {
+            Log.e(TAG, "getMessageAttachments: Account not found for id $accountId")
+            return flowOf(emptyList())
+        }
+        val apiService = mailApiServices[account.providerType.uppercase()]
+        return if (apiService != null) {
+            // apiService.getMessageAttachments(messageId) // Method doesn't exist in MailApiService yet
+            Log.w(
+                TAG,
+                "getMessageAttachments: MailApiService.getMessageAttachments not yet implemented."
+            )
+            flowOf(emptyList())
+        } else {
+            Log.e(
+                TAG,
+                "getMessageAttachments: ApiService not found for provider ${account.providerType}"
+            )
+            flowOf(emptyList())
+        }
     }
 
     override suspend fun downloadAttachment(
@@ -375,9 +342,54 @@ class DefaultMessageRepository @Inject constructor(
             TAG,
             "downloadAttachment called for accountId: $accountId, messageId: $messageId, attachmentId: $attachmentId"
         )
-        // val account = accountRepository.getAccounts().firstOrNull()?.find { it.id == accountId }
-        // val apiService = account?.providerType?.uppercase()?.let { mailApiServices[it] }
-        // apiService?.downloadAttachment(messageId, attachmentId) // Actual call commented for stub
-        return Result.failure(NotImplementedError("downloadAttachment not implemented"))
+        val account = accountRepository.getAccountById(accountId).firstOrNull()
+        if (account == null) {
+            Log.e(TAG, "downloadAttachment: Account $accountId not found.")
+            return Result.failure(NotImplementedError("Account not found for attachment download."))
+        }
+        mailApiServices[account.providerType.uppercase()]
+        // apiService?.downloadAttachment(messageId, attachmentId) // Method doesn't exist in MailApiService yet
+        Log.w(TAG, "downloadAttachment: MailApiService.downloadAttachment not yet implemented.")
+        return Result.failure(NotImplementedError("downloadAttachment not yet implemented in MailApiService"))
+    }
+
+    // --- Stubs for methods not yet refactored for full DB interaction in Phase 2a ---
+
+    override suspend fun createDraftMessage(
+        accountId: String,
+        draftDetails: MessageDraft
+    ): Result<Message> {
+        Log.d(
+            TAG,
+            "createDraftMessage called for accountId: $accountId. Not implemented with DB sync."
+        )
+        // This would typically involve saving a draft to a local Drafts table or directly to the server.
+        return Result.failure(NotImplementedError("createDraftMessage not yet implemented with DB sync"))
+    }
+
+    override suspend fun updateDraftMessage(
+        accountId: String,
+        messageId: String,
+        draftDetails: MessageDraft
+    ): Result<Message> {
+        Log.d(
+            TAG,
+            "updateDraftMessage called for accountId: $accountId, messageId: $messageId. Not implemented with DB sync."
+        )
+        return Result.failure(NotImplementedError("updateDraftMessage not yet implemented with DB sync"))
+    }
+
+    override fun searchMessages(
+        accountId: String,
+        query: String,
+        folderId: String?
+    ): Flow<List<Message>> {
+        Log.d(
+            TAG,
+            "searchMessages called for accountId: $accountId, query: '$query'. Not implemented with DB FTS yet."
+        )
+        // Phase 3 plans for MessageFtsEntity. For now, this would be a network-only search or empty.
+        // For local FTS, this would query the MessageFtsEntity in Room.
+        return flowOf(emptyList()) // Placeholder
     }
 }

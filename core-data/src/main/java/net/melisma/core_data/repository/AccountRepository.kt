@@ -10,6 +10,7 @@ import net.melisma.core_data.model.GenericSignOutResult // New import
 
 interface AccountRepository {
     fun getAccounts(): Flow<List<Account>>
+    fun getAccountById(accountId: String): Flow<Account?>
     fun getActiveAccount(providerType: String): Flow<Account?> // Or a single active overall
     val overallApplicationAuthState: Flow<OverallApplicationAuthState>
 
