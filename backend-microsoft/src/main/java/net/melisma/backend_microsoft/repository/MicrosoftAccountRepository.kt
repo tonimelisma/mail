@@ -376,13 +376,28 @@ class MicrosoftAccountRepository @Inject constructor(
         Timber.tag(TAG).i("Account $accountId marked for re-authentication.")
     }
 
-    // Stub implementation for new method
     override suspend fun syncAccount(accountId: String): Result<Unit> {
         Timber.tag(TAG)
             .d("syncAccount called for accountId: $accountId in MicrosoftAccountRepository")
         // This would trigger specific Microsoft sync/refresh mechanisms if available.
         // For now, just a placeholder.
         return Result.success(Unit) // Or Result.failure(NotImplementedError("syncAccount for MS not implemented"))
+    }
+
+    override fun getAuthenticationIntentRequest(
+        providerType: String,
+        activity: Activity,
+        scopes: List<String>? // Note: MSAL scopes are usually fixed in MicrosoftAuthManager
+    ): Flow<GenericAuthResult> {
+        Timber.tag(TAG)
+            .d("getAuthenticationIntentRequest called for provider: $providerType. Redirecting to signIn.")
+        // For Microsoft, the signIn method itself handles the interactive flow that might
+        // be considered equivalent to getting an "intent request" in other auth libraries.
+        // The scopes are typically managed by MicrosoftAuthManager.MICROSOFT_SCOPES.
+        // We pass null for loginHint as getAuthenticationIntentRequest doesn't have it.
+        // Also, the `scopes` parameter passed here is effectively ignored because signIn
+        // uses MicrosoftAuthManager.MICROSOFT_SCOPES internally.
+        return signIn(activity, null, providerType)
     }
 
     private fun updateOverallApplicationAuthState() {

@@ -73,6 +73,7 @@ dependencies {
     // --- Project Modules ---
     implementation(project(":core-data"))
     implementation(project(":data"))
+    implementation(project(":domain"))
     implementation(project(":backend-microsoft"))
     implementation(project(":backend-google"))
 
@@ -94,6 +95,7 @@ dependencies {
     implementation(libs.androidx.ui.graphics)
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
+    implementation(libs.androidx.material)
     implementation(libs.androidx.material.icons.extended)
 
     // --- ViewModel & Lifecycle Compose Dependencies ---
@@ -137,4 +139,5 @@ dependencies {
     implementation(libs.timber)
 
     // Hilt Navigation Compose
+    implementation(libs.androidx.hilt.navigation.compose)
 }

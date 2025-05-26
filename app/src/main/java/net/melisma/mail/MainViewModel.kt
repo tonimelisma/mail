@@ -683,8 +683,23 @@ class MainViewModel @Inject constructor(
         return null
     }
 
-    fun refreshFoldersForAccount(accountId: String) {
-        Log.w(TAG, "refreshFoldersForAccount($accountId) - Not yet fully implemented from merge.")
+    fun refreshFoldersForAccount(accountId: String, activity: Activity? = null) {
+        Timber.tag(TAG).d("Explicitly refreshing folders for account: $accountId")
+        _uiState.update { it.copy(isLoadingAccountAction = true) } // Indicate some loading
+        viewModelScope.launch {
+            try {
+                folderRepository.refreshFoldersForAccount(accountId, activity)
+                //isLoadingAccountAction will be reset by the folder state flow observation
+            } catch (e: Exception) {
+                Timber.tag(TAG).e(e, "Error refreshing folders for account $accountId")
+                _uiState.update {
+                    it.copy(
+                        toastMessage = "Error refreshing folders for $accountId.",
+                        isLoadingAccountAction = false
+                    )
+                }
+            }
+        }
     }
 
     fun refreshCurrentFolderMessages() {
@@ -747,6 +762,75 @@ class MainViewModel @Inject constructor(
     override fun onCleared() {
         super.onCleared()
         Log.d(TAG, "ViewModel Cleared.")
+    }
+
+    fun initiateSignIn(providerType: String, activity: Activity) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoadingAccountAction = true) }
+            // The GMAIL_SCOPES_FOR_LOGIN are internal to DefaultAccountRepository,
+            // so we pass null for scopes and let the repository decide.
+            defaultAccountRepository.getAuthenticationIntentRequest(
+                providerType = providerType,
+                activity = activity,
+                scopes = null // Let repository use default scopes
+            ).collect { result: GenericAuthResult ->
+                _uiState.update { it.copy(isLoadingAccountAction = false) }
+                when (result) {
+                    is GenericAuthResult.Success -> {
+                        // Handled by account observation flow, maybe post a toast?
+                        _uiState.update { it.copy(toastMessage = "Sign-in flow for ${providerType} initiated.") }
+                    }
+
+                    is GenericAuthResult.Error -> {
+                        _uiState.update { it.copy(toastMessage = "Sign-in error: ${result.type.name} - ${result.message}") }
+                    }
+
+                    is GenericAuthResult.UiActionRequired -> {
+                        _pendingAuthIntent.value = result.intent
+                    }
+
+                    is GenericAuthResult.Cancelled -> {
+                        _uiState.update { it.copy(toastMessage = "Sign-in cancelled.") }
+                    }
+                }
+            }
+        }
+    }
+
+    fun consumePendingAuthIntent() {
+        _pendingAuthIntent.value = null
+    }
+
+    fun retryFetchMessagesForCurrentFolder() {
+        val selectedAccount = getSelectedAccount()
+        val selectedFolder = _uiState.value.selectedFolder
+
+        if (selectedAccount != null && selectedFolder != null) {
+            Timber.tag(TAG)
+                .d("Retrying fetch messages for folder ${selectedFolder.id} on account ${selectedAccount.id}")
+            viewModelScope.launch {
+                messageRepository.setTargetFolder(selectedAccount, selectedFolder)
+            }
+        } else {
+            Timber.tag(TAG).w("Cannot retry message fetch: no folder or account selected.")
+            _uiState.update { it.copy(toastMessage = "Please select a folder and account first.") }
+        }
+    }
+
+    fun retryFetchThreadsForCurrentFolder() {
+        val selectedAccount = getSelectedAccount()
+        val selectedFolder = _uiState.value.selectedFolder
+
+        if (selectedAccount != null && selectedFolder != null) {
+            Timber.tag(TAG)
+                .d("Retrying fetch threads for folder ${selectedFolder.id} on account ${selectedAccount.id}")
+            viewModelScope.launch {
+                threadRepository.setTargetFolderForThreads(selectedAccount, selectedFolder, null)
+            }
+        } else {
+            Timber.tag(TAG).w("Cannot retry thread fetch: no folder or account selected.")
+            _uiState.update { it.copy(toastMessage = "Please select a folder and account first.") }
+        }
     }
 }
 

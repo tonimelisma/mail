@@ -19,12 +19,14 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Badge
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.NavigationDrawerItem
@@ -55,6 +57,7 @@ fun MailDrawerContent(
     state: MainScreenState,
     onFolderSelected: (folder: MailFolder, account: Account) -> Unit,
     onSettingsClicked: () -> Unit,
+    onRefreshFolders: (accountId: String) -> Unit
 ) {
     // --- Define folder sorting logic ONCE using remember ---
     val standardFolderOrder = remember {
@@ -90,7 +93,11 @@ fun MailDrawerContent(
 
             // --- Accounts and Folders Section ---
             state.accounts.forEach { account ->
-                stickyHeader { AccountHeader(account = account) } // Now resolved
+                stickyHeader {
+                    AccountHeader(
+                        account = account,
+                        onRefreshClicked = { onRefreshFolders(account.id) })
+                } // Pass to AccountHeader
 
                 val folderState = state.foldersByAccountId[account.id]
 
@@ -218,29 +225,38 @@ fun MailDrawerContent(
  * Composable for the sticky header displaying the account username in the drawer.
  */
 @Composable
-private fun AccountHeader(account: Account) {
-    Row( // Now resolved
-        modifier = Modifier // Now resolved
-            .fillMaxWidth() // Now resolved
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.9f)) // Now resolved
-            .padding(horizontal = 16.dp, vertical = 8.dp), // Now resolved
-        verticalAlignment = Alignment.CenterVertically // Now resolved
+private fun AccountHeader(account: Account, onRefreshClicked: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.9f))
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon( // Now resolved
-            Icons.Filled.AccountCircle, // Now resolved
+        Icon(
+            Icons.Filled.AccountCircle,
             contentDescription = "Account",
-            modifier = Modifier.size(24.dp), // Now resolved
+            modifier = Modifier.size(24.dp),
             tint = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        Spacer(Modifier.width(16.dp)) // Now resolved
-        Text( // Now resolved
+        Spacer(Modifier.width(16.dp))
+        Text(
             text = account.username,
             style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.Bold, // Now resolved
+            fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1,
-            overflow = TextOverflow.Ellipsis // Now resolved
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f) // Allow text to take available space
         )
+        // Add a refresh icon button
+        IconButton(onClick = onRefreshClicked, modifier = Modifier.size(36.dp)) {
+            Icon(
+                imageVector = Icons.Filled.Refresh, // Make sure this import exists: androidx.compose.material.icons.filled.Refresh
+                contentDescription = "Refresh folders for ${account.username}",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }
 

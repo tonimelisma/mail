@@ -44,6 +44,12 @@ private data class GraphMailFolder(
 )
 
 @Serializable
+private data class GraphItemBody(
+    val contentType: String? = null, // "text" or "html"
+    val content: String? = null
+)
+
+@Serializable
 private data class GraphMessage(
     val id: String,
     val conversationId: String?,
@@ -54,7 +60,8 @@ private data class GraphMessage(
     val from: GraphRecipient? = null,
     val toRecipients: List<GraphRecipient> = emptyList(),
     val isRead: Boolean = true,
-    val bodyPreview: String? = null
+    val bodyPreview: String? = null,
+    val body: GraphItemBody? = null // Added body field
 )
 
 @Serializable
@@ -312,16 +319,21 @@ class GraphApiHelper @Inject constructor(
             java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
         outputDateFormat.timeZone = java.util.TimeZone.getTimeZone("UTC")
 
+        Log.d(
+            TAG,
+            "Mapping GraphMessage: ID='${graphMessage.id}', Subject='${graphMessage.subject}', Preview='${graphMessage.bodyPreview}', HasFullBodyObject: ${graphMessage.body != null}, FullBodyContentType: ${graphMessage.body?.contentType}, FullBodyContentIsEmpty: ${graphMessage.body?.content.isNullOrEmpty()}"
+        )
+
         return Message(
             id = graphMessage.id,
-            threadId = graphMessage.conversationId, // Map conversationId to threadId
+            threadId = graphMessage.conversationId,
             receivedDateTime = outputDateFormat.format(date),
             subject = graphMessage.subject,
             senderName = effectiveSender?.emailAddress?.name,
             senderAddress = effectiveSender?.emailAddress?.address,
             bodyPreview = graphMessage.bodyPreview,
-            isRead = graphMessage.isRead
-                ?: true // Default to true if null, as per existing GraphMessage model
+            isRead = graphMessage.isRead,
+            body = graphMessage.body?.content
         )
     }
 
@@ -509,18 +521,17 @@ class GraphApiHelper @Inject constructor(
                         parameters.append(
                             "\$select",
                             "id,conversationId,receivedDateTime,sentDateTime,subject,bodyPreview,sender,from,isRead,body"
-                        ) // Assuming 'body' is desired for details
+                        ) // Ensured 'body' is selected
                     }
                     // accept(ContentType.Application.Json) // Assuming defaultRequest or ContentNegotiation handles it
                 }
 
             if (response.status.isSuccess()) {
-                val graphMessage =
-                    response.body<GraphMessage>() // Assuming GraphMessage can handle the 'body' field if present
+                val graphMessageFromApi =
+                    response.body<GraphMessage>() // GraphMessage now expects the 'body' object
                 val mappedMessage =
-                    mapGraphMessageToMessage(graphMessage) // mapGraphMessageToMessage needs to handle potential full body
-                // TODO: Enhance mapGraphMessageToMessage and core Message model if full body needs to be stored and propagated.
-                // For now, it will map based on existing fields.
+                    mapGraphMessageToMessage(graphMessageFromApi) // mapGraphMessageToMessage now uses graphMessage.body.content
+                // TODO: Enhance mapGraphMessageToMessage and core Message model if full body needs to be stored and propagated. <- This TODO can now be considered addressed for this phase.
                 emit(mappedMessage)
             } else {
                 val errorBody = response.bodyAsText()

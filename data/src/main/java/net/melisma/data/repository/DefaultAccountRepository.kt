@@ -822,6 +822,75 @@ class DefaultAccountRepository @Inject constructor(
         Timber.tag(TAG).w("syncAccount for $accountId not fully implemented. Placeholder.")
         return Result.failure(NotImplementedError("syncAccount not implemented"))
     }
+
+    override fun getAuthenticationIntentRequest(
+        providerType: String,
+        activity: Activity,
+        scopes: List<String>?
+    ): Flow<GenericAuthResult> {
+        Timber.tag(TAG).d("getAuthenticationIntentRequest called for provider: $providerType")
+        _accountActionMessage.tryEmit(null) // Clear previous messages
+
+        return when (providerType.uppercase()) {
+            Account.PROVIDER_TYPE_MS -> {
+                // Assuming microsoftAccountRepository conforms to the updated AccountRepository interface
+                (microsoftAccountRepository as? AccountRepository)?.getAuthenticationIntentRequest(
+                    providerType,
+                    activity,
+                    scopes
+                ) ?: flowOf(
+                    GenericAuthResult.Error(
+                        "Microsoft provider does not support getAuthenticationIntentRequest or is not of expected type.",
+                        GenericAuthErrorType.INVALID_REQUEST
+                    )
+                )
+            }
+
+            Account.PROVIDER_TYPE_GOOGLE -> {
+                flow {
+                    try {
+                        Timber.tag(TAG)
+                            .d("Google getAuthenticationIntentRequest: Calling googleAuthManager.signInInteractive.")
+                        val authIntent = googleAuthManager.signInInteractive(activity, null)
+                        emit(GenericAuthResult.UiActionRequired(authIntent))
+                        Timber.tag(TAG)
+                            .d("Google getAuthenticationIntentRequest: UiActionRequired emitted.")
+                    } catch (e: Exception) {
+                        Timber.tag(TAG).e(
+                            e,
+                            "Google getAuthenticationIntentRequest: Error during signInInteractive."
+                        )
+                        val googleErrorMapper =
+                            getErrorMapperForProvider(Account.PROVIDER_TYPE_GOOGLE)
+                        val details = googleErrorMapper?.mapExceptionToErrorDetails(e)
+                            ?: MappedErrorDetails(
+                                "Failed to create Google sign-in intent: ${e.message}",
+                                GenericAuthErrorType.UNKNOWN_ERROR,
+                                e::class.java.simpleName
+                            )
+                        emit(
+                            GenericAuthResult.Error(
+                                details.message,
+                                details.type,
+                                details.providerSpecificErrorCode
+                            )
+                        )
+                    }
+                }
+            }
+
+            else -> {
+                Timber.tag(TAG)
+                    .w("Unsupported providerType for getAuthenticationIntentRequest: $providerType")
+                flowOf(
+                    GenericAuthResult.Error(
+                        "Unsupported provider: $providerType",
+                        GenericAuthErrorType.INVALID_REQUEST
+                    )
+                )
+            }
+        }
+    }
 }
 
 

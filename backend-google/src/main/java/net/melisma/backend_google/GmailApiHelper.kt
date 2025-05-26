@@ -1,5 +1,6 @@
 package net.melisma.backend_google
 
+import android.util.Base64
 import android.util.Log
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
@@ -357,129 +358,77 @@ class GmailApiHelper @Inject constructor(
         }
     }
 
-    private fun mapGmailMessageToMessage(gmailMessage: GmailMessage): Message {
-        Log.d(TAG, "mapGmailMessageToMessage: Mapping GmailMessage ID: ${gmailMessage.id}")
+    // Helper function to parse From header into name and address
+    private fun parseSender(header: String?): Pair<String?, String?> {
+        if (header == null) return Pair(null, null)
+        val email = extractSenderAddress(header)
+        val name = extractSenderName(header)
+        return Pair(if (name.isNotBlank()) name else null, if (email.isNotBlank()) email else null)
+    }
 
-        var effectiveHeaders = gmailMessage.payload?.headers ?: emptyList()
-
-        // Check if top-level headers are sufficient, otherwise search in parts
-        val needsSearchInParts =
-            effectiveHeaders.none { it.name.equals("Subject", ignoreCase = true) } ||
-                    effectiveHeaders.none { it.name.equals("From", ignoreCase = true) } ||
-                    effectiveHeaders.none { it.name.equals("Date", ignoreCase = true) }
-
-        if (needsSearchInParts && gmailMessage.payload?.parts?.isNotEmpty() == true) {
-            Log.d(
-                TAG,
-                "Message ID ${gmailMessage.id}: Top-level headers missing key info or empty (Count: ${effectiveHeaders.size}). Attempting to find headers in parts."
-            )
-
-            fun findHeadersRecursively(parts: List<MessagePart>?): List<MessagePartHeader> {
-                parts?.forEach { part ->
-                    Log.d(
-                        TAG,
-                        "Message ID ${gmailMessage.id}: Checking partId: ${part.partId}, mimeType: ${part.mimeType}, headersCount: ${part.headers?.size}"
+    private fun mapGmailMessageToMessage(message: GmailMessage): Message? {
+        try {
+            val subject =
+                message.payload?.headers?.find {
+                    it.name.equals(
+                        "Subject",
+                        ignoreCase = true
                     )
-                    part.headers?.let { currentPartHeaders ->
-                        // If this part has Subject and From, consider it good enough.
-                        // More specific logic could be added to prefer text/html over text/plain, or vice-versa.
-                        if (currentPartHeaders.any {
-                                it.name.equals(
-                                    "Subject",
-                                    ignoreCase = true
-                                )
-                            } &&
-                            currentPartHeaders.any { it.name.equals("From", ignoreCase = true) }) {
-                            Log.d(
-                                TAG,
-                                "Message ID ${gmailMessage.id}: Found suitable headers in partId: ${part.partId} (mimeType: ${part.mimeType})"
-                            )
-                            return currentPartHeaders
-                        }
-                    }
-                    // If this part is also a multipart and has sub-parts, recurse
-                    if (part.parts?.isNotEmpty() == true) {
-                        val headersFromSubPart = findHeadersRecursively(part.parts)
-                        if (headersFromSubPart.isNotEmpty() &&
-                            headersFromSubPart.any {
-                                it.name.equals(
-                                    "Subject",
-                                    ignoreCase = true
-                                )
-                            } &&
-                            headersFromSubPart.any { it.name.equals("From", ignoreCase = true) }
-                        ) { // Check if useful headers found
-                            Log.d(
-                                TAG,
-                                "Message ID ${gmailMessage.id}: Found suitable headers in sub-part of partId: ${part.partId}"
-                            )
-                            return headersFromSubPart
-                        }
-                    }
-                }
-                Log.d(
-                    TAG,
-                    "Message ID ${gmailMessage.id}: No suitable headers found after checking all sub-parts of this branch."
-                )
-                return emptyList()
-            }
+                }?.value ?: ""
+            val senderHeader =
+                message.payload?.headers?.find { it.name.equals("From", ignoreCase = true) }?.value
+            val (senderName, senderAddress) = parseSender(senderHeader)
+            val dateHeader =
+                message.payload?.headers?.find { it.name.equals("Date", ignoreCase = true) }?.value
+            val parsedUtilDate = dateHeader?.let { parseEmailDate(it) }
 
-            val headersFromParts = findHeadersRecursively(gmailMessage.payload.parts)
-            if (headersFromParts.isNotEmpty()) {
-                Log.d(
-                    TAG,
-                    "Message ID ${gmailMessage.id}: Using headers found in parts (Count: ${headersFromParts.size})."
-                )
-                effectiveHeaders = headersFromParts
+            val receivedDateTime = if (parsedUtilDate != null) {
+                SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).format(parsedUtilDate)
             } else {
-                Log.d(
-                    TAG,
-                    "Message ID ${gmailMessage.id}: No suitable headers found in parts either. Using top-level (Count: ${effectiveHeaders.size})."
-                )
+                SimpleDateFormat(
+                    "yyyy-MM-dd'T'HH:mm:ss'Z'",
+                    Locale.US
+                ).format(Date(message.internalDate?.toLongOrNull() ?: System.currentTimeMillis()))
             }
-        } else if (needsSearchInParts) {
-            Log.d(
-                TAG,
-                "Message ID ${gmailMessage.id}: Top-level headers missing key info (Count: ${effectiveHeaders.size}), but no parts to search."
+
+            val isRead = message.labelIds?.contains("UNREAD") == false
+            val threadId = message.threadId
+
+            // Attempt to find the body content
+            var messageBody: String? = null
+            if (message.payload != null) {
+                if (message.payload.parts.isNullOrEmpty()) { // Single part message
+                    if ((message.payload.mimeType == "text/html" || message.payload.mimeType == "text/plain") && message.payload.body?.data != null) {
+                        try {
+                            messageBody =
+                                String(Base64.decode(message.payload.body.data, Base64.URL_SAFE))
+                        } catch (e: IllegalArgumentException) {
+                            Log.e(TAG, "Base64 decoding failed for single part message body", e)
+                        }
+                    }
+                } else { // Multipart message
+                    messageBody = findBodyContent(message.payload.parts)
+                }
+            }
+
+
+            return Message(
+                id = message.id
+                    ?: throw IllegalStateException("Message ID cannot be null from Gmail message: $message"),
+                threadId = threadId,
+                receivedDateTime = receivedDateTime,
+                subject = subject,
+                senderName = senderName,
+                senderAddress = senderAddress,
+                bodyPreview = message.snippet?.replace("\\u003e", ">")?.replace("\\u003c", "<")
+                    ?.replace("&#39;", "'")?.trim(),
+                isRead = isRead,
+                body = messageBody // Populate the new body field
             )
-        } else {
-            Log.d(
-                TAG,
-                "Message ID ${gmailMessage.id}: Using top-level headers (Count: ${effectiveHeaders.size})."
-            )
+        } catch (e: Exception) {
+            Log.e(TAG, "Error mapping GmailMessage to Message: ${e.message}", e)
+            return null
         }
-
-
-        val subject = effectiveHeaders.findHeaderValue("Subject") ?: "(No Subject)"
-        val from = effectiveHeaders.findHeaderValue("From") ?: ""
-        val dateStr = effectiveHeaders.findHeaderValue("Date")
-
-        // Fallback for date if not found, using internalDate as a last resort
-        val date = dateStr?.let { parseEmailDate(it) }
-            ?: gmailMessage.internalDate?.toLongOrNull()?.let { Date(it) }
-            ?: Date() // Absolute fallback to now
-
-        val senderName = extractSenderName(from)
-        val senderAddress = extractSenderAddress(from)
-
-        val outputDateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
-        val formattedDate = outputDateFormat.format(date)
-
-        Log.d(
-            TAG,
-            "To App Message ID: ${gmailMessage.id}, Subject: '$subject', SenderName: '$senderName', SenderAddress: '$senderAddress', Date: '$formattedDate', Preview: '${gmailMessage.snippet ?: ""}'"
-        )
-
-        return Message(
-            id = gmailMessage.id,
-            threadId = gmailMessage.threadId,
-            subject = subject,
-            receivedDateTime = formattedDate,
-            senderName = senderName,
-            senderAddress = senderAddress,
-            bodyPreview = gmailMessage.snippet ?: "",
-            isRead = !gmailMessage.labelIds.contains("UNREAD") // Assuming UNREAD is the standard label
-        )
     }
 
     private fun extractSenderAddress(fromHeader: String): String {
@@ -1026,5 +975,35 @@ class GmailApiHelper @Inject constructor(
             val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
             Result.failure(Exception(mappedDetails.message, e))
         }
+    }
+
+    private fun findBodyContent(parts: List<MessagePart>?): String? {
+        if (parts == null) return null
+
+        // Prioritize HTML content
+        for (part in parts) {
+            if (part.mimeType == "text/html" && part.body?.data != null) {
+                try {
+                    return String(Base64.decode(part.body.data, Base64.URL_SAFE))
+                } catch (e: IllegalArgumentException) {
+                    Log.e(TAG, "Base64 decoding failed for HTML part", e)
+                }
+            }
+            // Recurse for multipart
+            val nestedBody = findBodyContent(part.parts)
+            if (nestedBody != null) return nestedBody
+        }
+
+        // Fallback to plain text content
+        for (part in parts) {
+            if (part.mimeType == "text/plain" && part.body?.data != null) {
+                try {
+                    return String(Base64.decode(part.body.data, Base64.URL_SAFE))
+                } catch (e: IllegalArgumentException) {
+                    Log.e(TAG, "Base64 decoding failed for plain text part", e)
+                }
+            }
+        }
+        return null
     }
 }

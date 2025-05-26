@@ -42,6 +42,16 @@ interface FolderRepository {
      */
     suspend fun refreshAllFolders(activity: Activity? = null)
 
+    /**
+     * Triggers a background refresh of the folder list for a specific account.
+     * Updates will be emitted through the [Flow] provided by [observeFoldersState].
+     *
+     * @param accountId The ID of the account for which to refresh folders.
+     * @param activity The optional [Activity] context, which might be required
+     * for interactive authentication if tokens have expired.
+     */
+    suspend fun refreshFoldersForAccount(accountId: String, activity: Activity? = null)
+
     // New methods
     suspend fun syncFolderContents(accountId: String, folderId: String): Result<Unit>
     fun getThreadsInFolder(accountId: String, folderId: String): Flow<List<MailThread>>

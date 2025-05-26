@@ -22,5 +22,6 @@ data class Message(
     val senderName: String?,
     val senderAddress: String?,
     val bodyPreview: String?,
-    val isRead: Boolean
+    val isRead: Boolean,
+    val body: String? = null
 )

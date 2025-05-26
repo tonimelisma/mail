@@ -9,6 +9,7 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -27,7 +28,6 @@ import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.cancellation.CancellationException
-import kotlinx.coroutines.flow.flowOf
 
 @Singleton
 class DefaultFolderRepository @Inject constructor(
@@ -200,6 +200,48 @@ class DefaultFolderRepository @Inject constructor(
                     )
                     currentMap + (account.id to FolderFetchState.Error("Cannot refresh: Unsupported account provider type: ${account.providerType}, or missing services."))
                 }
+            }
+        }
+    }
+
+    override suspend fun refreshFoldersForAccount(accountId: String, activity: Activity?) {
+        val account = observedAccounts[accountId]
+        if (account == null) {
+            Log.w(
+                TAG,
+                "refreshFoldersForAccount: Account with ID '$accountId' not found in observed accounts. Cannot refresh."
+            )
+            _folderStates.update { currentMap ->
+                currentMap + (accountId to FolderFetchState.Error("Account not actively observed."))
+            }
+            return
+        }
+
+        val providerType = account.providerType.uppercase()
+        Log.i(
+            TAG,
+            "refreshFoldersForAccount called for account '${account.username}' (ID: $accountId, Provider: $providerType)"
+        )
+
+        if (mailApiServices.containsKey(providerType) && errorMappers.containsKey(providerType)) {
+            Log.d(
+                TAG,
+                "refreshFoldersForAccount: Provider '$providerType' for '${account.username}' is supported. Launching fetch."
+            )
+            launchFolderFetchJob(
+                account = account,
+                isInitialLoad = false, // Not an initial load
+                activity = activity,
+                forceRefresh = true,   // Explicit refresh request
+                reasonSuffix = "specific account refresh"
+            )
+        } else {
+            Log.w(
+                TAG,
+                "refreshFoldersForAccount: Skipping refresh for account ${account.username} (Provider: '$providerType') due to unsupported provider type or missing services."
+            )
+            _folderStates.update { currentMap ->
+                currentMap + (accountId to FolderFetchState.Error("Cannot refresh: Unsupported account provider type: ${account.providerType}, or missing services for this specific refresh."))
             }
         }
     }

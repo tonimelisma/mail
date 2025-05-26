@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Mail</string>
+    <string name="app_name">Mail App</string>
     <string name="app_name_google_account">Melisma Mail (Google)</string>
     <string name="app_name_microsoft_account">Melisma Mail (Microsoft)</string>
     <string name="unknown_user">Unknown User</string>
@@ -15,7 +15,7 @@
     <string name="error_loading_folders_title">Error Loading Folders</string>
     <string name="error_could_not_load_folder_list">Could not load folder list.</string>
     <string name="cd_select_folder_prompt">Select folder prompt icon</string>
-    <string name="select_a_folder">Select a folder</string>
+    <string name="select_a_folder">Select a folder from the drawer</string>
     <string name="cd_error_loading_messages">Error loading messages icon</string>
     <string name="error_loading_messages_title">Error Loading Messages</string>
     <string name="cd_no_messages">No messages icon</string>
@@ -26,7 +26,7 @@
     <string name="add_account">Add Account</string>
     <string name="remove_account">Remove %1$s</string>
     <string name="remove_account_cd">Remove account %1$s</string>
-    <string name="cd_open_navigation_drawer">Open Navigation Drawer</string>
+    <string name="cd_open_navigation_drawer">Open navigation drawer</string>
     <string name="cd_signed_in_as">Signed in as %1$s</string>
     <string name="title_initializing">Initializing…</string>
     <string name="title_loading_messages">Loading Messages…</string>
@@ -35,12 +35,12 @@
     <string name="welcome_message">Welcome to Melisma Mail</string>
     <string name="add_account_button">Sign In / Add Account</string>
     <string name="manage_accounts_button">Manage Accounts</string>
-    <string name="status_initializing_auth">(Initializing Auth…)</string>
-    <string name="status_authenticating">(Authenticating…)</string>
+    <string name="status_initializing_auth">Initializing authentication…</string>
+    <string name="status_authenticating">Authenticating…</string>
     <string name="status_auth_failed">(Authentication Failed: %1$s)</string>
     <string name="error_auth_init_failed">Authentication Setup Failed</string>
     <string name="settings_title">Settings</string>
-    <string name="account_context_label">Account: %1$s</string>
+    <string name="account_context_label">Viewing for: %1$s</string>
     <string name="prompt_select_folder">Select a folder from the drawer</string>
     <string name="prompt_add_account">Add an account via Settings to get started.</string>
     <string name="manage_accounts_header">Manage Accounts</string>
@@ -66,7 +66,7 @@
     <string name="settings_add_account_button">Add Another Account</string>
 
     <!-- Strings added for MainActivity and general status -->
-    <string name="error_google_signin_failed_generic">Failed to start Google sign-in</string>
+    <string name="error_google_signin_failed_generic">Google Sign-in failed</string>
     <string name="status_loading_accounts">Loading accounts…</string>
     <string name="status_waiting_for_activity">Waiting for activity…</string>
     <string name="error_critical_no_activity_context">Critical Error: Cannot get Activity context.</string>
@@ -80,5 +80,33 @@
 
     <string name="signin_with_microsoft_button">Sign In with Microsoft</string>
     <string name="title_authentication_error">Authentication Error</string>
+
+    <!-- New strings for MessageDetailScreen and ThreadListContent -->
+    <string name="title_message_detail">Message Details</string>
+    <string name="cd_navigate_back">Navigate back</string>
+    <string name="cd_close_navigation_drawer">Close navigation drawer</string>
+    <string name="cd_account_avatar">Account avatar</string>
+    <string name="pull_to_refresh_messages">Pull to refresh messages</string>
+    <string name="pull_to_refresh_threads">Pull to refresh threads</string>
+    <string name="error_generic_signin_failed">Sign-in failed</string>
+    <string name="error_ms_redirect">Microsoft sign-in redirect error</string>
+    <string name="error_ms_auth_failed">Microsoft authentication failed</string>
+    <string name="signed_out_successfully">Signed out successfully</string>
+    <string name="error_while_signing_out">Error while signing out</string>
+    <string name="no_accounts_configured_add_one">No accounts configured. Please add one via Settings.</string>
+    <string name="add_account_button_text">Add Account</string>
+    <string name="accounts_header_text">Accounts</string>
+    <string name="view_mode_label">View mode:</string>
+    <string name="view_mode_messages">Messages</string>
+    <string name="view_mode_threads">Threads</string>
+    <string name="toast_signin_cancelled">Sign-in cancelled.</string>
+    <string name="toast_signed_in_as">Signed in as %1$s</string>
+    <string name="label_mail_folders">Mail Folders</string>
+    <string name="label_no_folders_for_account">No folders found for this account.</string>
+    <string name="label_loading_folders">Loading folders...</string>
+    <string name="label_error_loading_folders">Error loading folders.</string>
+    <string name="btn_retry_folders">Retry</string>
+
+    <string name="cd_more_actions">More actions</string>
 
 </resources>

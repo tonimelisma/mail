@@ -58,6 +58,22 @@ interface AccountRepository {
 
     // New method
     suspend fun syncAccount(accountId: String): Result<Unit>
+
+    /**
+     * Prepares and returns an Intent to initiate an authentication flow for the given provider.
+     * This is typically used when the UI needs to launch an external activity for sign-in (e.g., AppAuth).
+     * The Flow will emit UiActionRequired with the Intent, or Error if the intent cannot be created.
+     *
+     * @param providerType The type of account provider.
+     * @param activity The current Activity, crucial for providers needing UI context.
+     * @param scopes Optional list of scopes to request. If null, default scopes for the provider will be used.
+     * @return A Flow emitting the result, typically UiActionRequired with an Intent or an Error.
+     */
+    fun getAuthenticationIntentRequest(
+        providerType: String,
+        activity: Activity,
+        scopes: List<String>? = null
+    ): Flow<GenericAuthResult>
 }
 
 enum class OverallApplicationAuthState {

@@ -11,7 +11,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.firstOrNull
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
@@ -22,11 +21,11 @@ import net.melisma.core_data.di.Dispatcher
 import net.melisma.core_data.di.MailDispatchers
 import net.melisma.core_data.errors.ErrorMapperService
 import net.melisma.core_data.model.Account
+import net.melisma.core_data.model.Attachment
 import net.melisma.core_data.model.MailFolder
 import net.melisma.core_data.model.Message
 import net.melisma.core_data.model.MessageDataState
 import net.melisma.core_data.model.MessageDraft
-import net.melisma.core_data.model.Attachment
 import net.melisma.core_data.repository.AccountRepository
 import net.melisma.core_data.repository.MessageRepository
 import javax.inject.Inject
@@ -204,13 +203,11 @@ class DefaultMessageRepository @Inject constructor(
     override suspend fun getMessageDetails(messageId: String, accountId: String): Flow<Message?> {
         Log.d(TAG, "getMessageDetails called for messageId: $messageId, accountId: $accountId")
 
-        val accountsList: List<Account>? = accountRepository.getAccounts().firstOrNull()
-        val accounts: List<Account> = accountsList ?: emptyList()
-        val account: Account? = accounts.find { acc -> acc.id == accountId }
+        val account = accountRepository.getAccounts().firstOrNull()?.find { it.id == accountId }
 
         if (account == null) {
             Log.e(TAG, "getMessageDetails: Account not found for id $accountId")
-            return flow { emit(null) }
+            return flowOf(null)
         }
         val providerType = account.providerType.uppercase()
         val apiService = mailApiServices[providerType]
@@ -219,7 +216,7 @@ class DefaultMessageRepository @Inject constructor(
                 TAG,
                 "getMessageDetails: ApiService not found for provider ${account.providerType}"
             )
-            return flow { emit(null) }
+            return flowOf(null)
         }
         return apiService.getMessageDetails(messageId)
     }

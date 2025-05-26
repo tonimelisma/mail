@@ -12,6 +12,7 @@ espressoCore = "3.6.1"
 lifecycle = "2.9.0"
 activityCompose = "1.10.1"
 composeBom = "2025.05.00"
+composeMaterial = "1.6.8"
 
 msal = "6.0.0"
 hilt = "2.56.2" # Check for latest Hilt version
@@ -36,6 +37,7 @@ ksp = "2.1.10-1.0.29" # Ensured KSP version for Kotlin 2.0.0
 datastorePreferences = "1.1.6" # <-- ADDED DATASTORE VERSION
 timber = "5.0.1" # Added Timber version
 navigationCompose = "2.9.0" # Added Navigation Compose version
+hiltNavigationCompose = "1.2.0-alpha01" # Added Hilt Navigation Compose version
 
 [libraries]
 kotlin-stdlib = { group = "org.jetbrains.kotlin", name = "kotlin-stdlib", version.ref = "kotlin" }
@@ -74,9 +76,11 @@ androidx-ui = { group = "androidx.compose.ui", name = "ui" }
 androidx-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
 androidx-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
 androidx-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
+androidx-material = { group = "androidx.compose.material", name = "material", version.ref = "composeMaterial" }
 androidx-material3 = { group = "androidx.compose.material3", name = "material3" }
 androidx-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" } # Removed version.ref, should come from BOM or define version
 androidx-navigation-compose = { group = "androidx.navigation", name = "navigation-compose", version.ref = "navigationCompose" } # Added Navigation Compose library
+androidx-hilt-navigation-compose = { group = "androidx.hilt", name = "hilt-navigation-compose", version.ref = "hiltNavigationCompose" }
 
 microsoft-msal = { group = "com.microsoft.identity.client", name = "msal", version.ref = "msal" }
 
