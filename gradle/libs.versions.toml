@@ -3,7 +3,7 @@
 [versions]
 agp = "8.9.3" # Assuming this is your AGP version, adjust if different
 kotlin = "2.1.10"
-kotlinxSerialization = "1.6.3"
+kotlinxSerialization = "1.7.3"
 ktor = "2.3.12"
 coreKtx = "1.16.0"
 junit = "4.13.2"
@@ -11,8 +11,8 @@ junitVersion = "1.2.1"
 espressoCore = "3.6.1"
 lifecycle = "2.9.0"
 activityCompose = "1.10.1"
-composeBom = "2025.05.00"
-composeMaterial = "1.6.8"
+composeBom = "2025.05.01"
+composeMaterial = "1.8.2"
 
 msal = "6.0.0"
 hilt = "2.56.2" # Check for latest Hilt version
@@ -34,10 +34,10 @@ appAuth = "0.11.1" # Latest stable version as of May 2025
 browserCustomTabs = "1.8.0" # Latest stable version as of May 2025
 
 ksp = "2.1.10-1.0.29" # Ensured KSP version for Kotlin 2.0.0
-datastorePreferences = "1.1.6" # <-- ADDED DATASTORE VERSION
+datastorePreferences = "1.1.7" # <-- ADDED DATASTORE VERSION
 timber = "5.0.1" # Added Timber version
 navigationCompose = "2.9.0" # Added Navigation Compose version
-hiltNavigationCompose = "1.2.0-alpha01" # Added Hilt Navigation Compose version
+hiltNavigationCompose = "1.2.0" # Added Hilt Navigation Compose version
 
 [libraries]
 kotlin-stdlib = { group = "org.jetbrains.kotlin", name = "kotlin-stdlib", version.ref = "kotlin" }
