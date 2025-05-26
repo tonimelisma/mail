@@ -106,3 +106,121 @@ fetchers to **synchronizers**.
     * When a user sends an email, the `SendEmailUseCase` will save it to the Outbox table first.
     * A separate `OutboxWorker` (using `WorkManager` with a network constraint) will be responsible
       for reading from this table and attempting to send the emails whenever the device is online.
+
+## III. Detailed Implementation Steps - Phase 1: Folders Foundation
+
+This section outlines the concrete steps taken to implement the first phase of local caching,
+focusing on user accounts and their mail folders.
+
+1. **Created the `:core-db` module:**
+    * Added an Android library module named `core-db`.
+    * Configured `settings.gradle.kts` to include `:core-db`.
+    * Created `core-db/build.gradle.kts` with dependencies for Room (KSP, runtime, ktx), Kotlin
+      Coroutines, and Hilt.
+
+2. **Defined Entities in `:core-db`:**
+    * `core-db/src/main/java/net/melisma/core_db/entity/AccountEntity.kt`:
+        * `@PrimaryKey id: String` (from `Account.id`)
+        * `username: String`
+        * `emailAddress: String` (derived from `Account.username`)
+        * `providerType: String` (from `Account.providerType`)
+    * `core-db/src/main/java/net/melisma/core_db/entity/FolderEntity.kt`:
+        * `@PrimaryKey id: String` (from `MailFolder.id`)
+        * `accountId: String` (foreign key to `AccountEntity.id`)
+        * `displayName: String`
+        * `totalItemCount: Int`
+        * `unreadItemCount: Int`
+        * `type: WellKnownFolderType` (from `MailFolder.type`)
+        * Includes `@ForeignKey` to `AccountEntity` with `onDelete = CASCADE`.
+        * Includes `@Index` on `accountId`.
+
+3. **Created TypeConverters in `:core-db`:**
+    * `core-db/src/main/java/net/melisma/core_db/converter/WellKnownFolderTypeConverter.kt`:
+        * Handles conversion between `WellKnownFolderType` enum and `String` for Room storage.
+
+4. **Created DAOs (Data Access Objects) in `:core-db`:**
+    * `core-db/src/main/java/net/melisma/core_db/dao/AccountDao.kt`:
+        * `insertOrUpdateAccount(account: AccountEntity)`
+        * `insertOrUpdateAccounts(accounts: List<AccountEntity>)`
+        * `getAccountById(accountId: String): Flow<AccountEntity?>`
+        * `getAllAccounts(): Flow<List<AccountEntity>>`
+        * `deleteAccount(accountId: String)`
+        * `getAnyAccount(): AccountEntity?`
+    * `core-db/src/main/java/net/melisma/core_db/dao/FolderDao.kt`:
+        * `insertOrUpdateFolders(folders: List<FolderEntity>)`
+        * `getFoldersForAccount(accountId: String): Flow<List<FolderEntity>>`
+        * `deleteAllFoldersForAccount(accountId: String)`
+        * `clearAllFolders()`
+
+5. **Created Database Class in `:core-db`:**
+    * `core-db/src/main/java/net/melisma/core_db/AppDatabase.kt`:
+        * `@Database` for `AccountEntity`, `FolderEntity`. Version 1. `exportSchema = false`.
+        * Annotated with `@TypeConverters(WellKnownFolderTypeConverter::class)`.
+        * Abstract methods for `accountDao()` and `folderDao()`.
+        * Companion object with singleton `getDatabase(context: Context)` method.
+
+6. **Created DI Module for Database in `:core-db` (Hilt):**
+    * `core-db/src/main/java/net/melisma/core_db/di/DatabaseModule.kt`:
+        * `@Module @InstallIn(SingletonComponent::class)`.
+        * Provides `@Singleton AppDatabase`, `@Singleton AccountDao`, `@Singleton FolderDao`.
+
+7. **Integrated `:core-db` into `:data` module:**
+    * Added `implementation(project(":core-db"))` to `data/build.gradle.kts`.
+
+8. **Created Mappers in `:data` module:**
+    * `data/src/main/java/net/melisma/data/mapper/AccountMappers.kt`:
+        * `fun Account.toEntity(): AccountEntity`
+        * `fun AccountEntity.toDomainAccount(): Account` (maps to `core_data.model.Account`)
+    * `data/src/main/java/net/melisma/data/mapper/FolderMappers.kt`:
+        * `fun MailFolder.toEntity(accountId: String): FolderEntity` (takes
+          `core_data.model.MailFolder`)
+        * `fun FolderEntity.toDomainModel(): MailFolder` (maps to `core_data.model.MailFolder` which
+          serves as the domain model for folders for now)
+
+9. **Refactored `DefaultFolderRepository` in `:data:module`**
+    * **Injected DAOs**: `AccountDao` and `FolderDao` are injected via Hilt.
+    * **`observeDatabaseChanges()` (new private method)**:
+        * Observes `accountDao.getAllAccounts()`.
+        * Uses `flatMapLatest` to get `folderDao.getFoldersForAccount()` for each account.
+        * Uses `combine` to merge these folder flows into a `Map<String, List<FolderEntity>>`.
+        * Maps `FolderEntity` to `MailFolder` (domain model).
+        * The combined flow updates
+          `_folderStates: MutableStateFlow<Map<String, FolderFetchState>>`.
+        * Handles DB errors by emitting `FolderFetchState.Error`.
+        * Manages merging DB states with potential ongoing sync (Loading/Error) states.
+    * **`observeFoldersState(): Flow<Map<String, FolderFetchState>>`**:
+        * Now returns `_folderStates.asStateFlow()`, which is populated by `observeDatabaseChanges`
+          and sync operations.
+    * **`manageObservedAccounts(accounts: List<Account>)`**:
+        * Compares incoming `accounts` with those in `AccountDao`.
+        * Adds new accounts to DB (
+          `accountDao.insertOrUpdateAccounts(accounts.map { it.toEntity() })`).
+        * Removes accounts no longer present from DB (`accountDao.deleteAccount`,
+          `folderDao.deleteAllFoldersForAccount`).
+        * Cancels ongoing syncs for removed accounts.
+        * Triggers `refreshFoldersForAccountInternal` for accounts that need an initial folder
+          sync (e.g., new accounts, or those with empty/error states).
+    * **
+      `refreshFoldersForAccountInternal(account: Account, activity: Activity?, forceRefresh: Boolean, reasonSuffix: String)` (
+      new private method)**:
+        * Manages a `syncJobs: ConcurrentHashMap<String, Job>` to prevent concurrent syncs for the
+          same account unless `forceRefresh` is true.
+        * Sets `_folderStates` to `FolderFetchState.Loading` for the account.
+        * Calls the appropriate `mailApiService.getMailFolders()`.
+        * On success: maps API response (`List<MailFolder>`) to `List<FolderEntity>` and saves to
+          `folderDao.insertOrUpdateFolders()`. The DB observation flow then naturally updates
+          `_folderStates` to `Success`.
+        * On failure (API or other exception): updates `_folderStates` to `FolderFetchState.Error`.
+        * Ensures sync job is removed from `syncJobs` upon completion or cancellation.
+    * **`refreshFoldersForAccount(accountId: String, activity: Activity?)` (public)**:
+        * Fetches `AccountEntity` from `accountDao`.
+        * Converts to domain `Account`.
+        * Calls `refreshFoldersForAccountInternal`.
+    * **`refreshAllFolders(activity: Activity?)` (public)**:
+        * Fetches all `AccountEntity`s from `accountDao`.
+        * Iterates and calls `refreshFoldersForAccountInternal` for each supported account.
+    * Removed old `launchFolderFetchJob` and related mechanisms like `observedAccounts` map. Sync
+      state is now primarily managed via `syncJobs` and reflected into `_folderStates`.
+
+This completes the initial database setup and refactoring of the folder data flow to use the local
+cache as the primary source of truth, with network sync on demand.

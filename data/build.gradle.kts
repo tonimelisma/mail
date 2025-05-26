@@ -56,6 +56,7 @@ android {
 dependencies {
     // --- Project Modules ---
     implementation(project(":core-data")) // Includes ErrorMapperService now
+    implementation(project(":core-db")) // Added new local DB module
     // Use 'api' for :backend-microsoft so its Hilt bindings and types (like AuthStateListener)
     // are visible to modules that depend on :data (e.g., :backend-google for Kapt processing)
     implementation(project(":backend-microsoft")) // For MS-specific components

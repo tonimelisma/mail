@@ -2,7 +2,7 @@
 <project version="4">
   <component name="CompilerConfiguration">
     <bytecodeTargetLevel target="21">
-      <module name="Mail.domain" target="17" />
+      <module name="Melisma_Mail.domain" target="17" />
     </bytecodeTargetLevel>
   </component>
 </project>

@@ -41,3 +41,4 @@ include(":backend-microsoft")
 include(":backend-google")  // New Google backend module
 include(":data")
 include(":domain") // Add the new domain module
+include(":core-db") // Add new module
