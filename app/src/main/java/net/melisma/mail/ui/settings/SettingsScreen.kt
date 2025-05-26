@@ -234,15 +234,17 @@ fun SettingsScreen(
                         Switch(
                             checked = isThreadMode,
                             onCheckedChange = { wantsThreadMode ->
-                                if (wantsThreadMode) MailViewModePreference.THREADS else MailViewModePreference.MESSAGES
-                                // viewModel.setViewModePreference(newMode) // Commented out: Method doesn't exist on MainViewModel
+                                val newMode =
+                                    if (wantsThreadMode) MailViewModePreference.THREADS else MailViewModePreference.MESSAGES
+                                viewModel.setViewModePreference(newMode)
                             }
                         )
                     },
                     colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface), // Ensure background contrast
                     modifier = Modifier.clickable {
-                        if (isThreadMode) MailViewModePreference.MESSAGES else MailViewModePreference.THREADS
-                        // viewModel.setViewModePreference(newMode) // Commented out: Method doesn't exist on MainViewModel
+                        val newMode =
+                            if (isThreadMode) MailViewModePreference.MESSAGES else MailViewModePreference.THREADS
+                        viewModel.setViewModePreference(newMode)
                     }
                 )
                 HorizontalDivider(modifier = Modifier.padding(start = 16.dp))

@@ -29,7 +29,7 @@ class MessageDetailViewModel @Inject constructor(
 
         if (accountId != null && messageId != null) {
             viewModelScope.launch {
-                getMessageDetailsUseCase(accountId, messageId)
+                getMessageDetailsUseCase(messageId, accountId)
                     .onStart { _uiState.value = MessageDetailUIState.Loading }
                     .catch { exception ->
                         _uiState.value = MessageDetailUIState.Error(

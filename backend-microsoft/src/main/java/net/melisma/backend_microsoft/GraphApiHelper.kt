@@ -301,23 +301,18 @@ class GraphApiHelper @Inject constructor(
     private fun mapGraphMessageToMessage(graphMessage: GraphMessage): Message {
         Log.v(
             TAG,
-            "GraphApiHelper: mapGraphMessageToMessage - MsgID: ${graphMessage.id}, ConvID: ${graphMessage.conversationId}"
-        ) // Using Verbose for potentially frequent log
-        val sender = graphMessage.sender // GraphMessage.sender is already GraphRecipient?
-        val from = graphMessage.from // Also GraphRecipient?
-        val effectiveSender = from ?: sender // Prefer 'from' if available
+            "GraphApiHelper: mapGraphMessageToMessage - MsgID: ${graphMessage.id}, ConvID: ${graphMessage.conversationId}, Received: ${graphMessage.receivedDateTime}, Sent: ${graphMessage.sentDateTime}"
+        )
+        val sender = graphMessage.sender
+        val from = graphMessage.from
+        val effectiveSender = from ?: sender
 
-        // Date: Prefer sentDateTime for sent items, otherwise receivedDateTime
-        // Assuming folder context isn't directly available here to check if it's "Sent Items"
-        // A more robust way might involve passing folder context or message properties indicating direction.
-        // For now, prioritize receivedDateTime as it's more consistently available.
-        val dateTimeStr = graphMessage.receivedDateTime ?: graphMessage.sentDateTime
-        val date = dateTimeStr?.let { parseOutlookDate(it) }
-            ?: java.util.Date() // parseOutlookDate needs to be robust
-
-        val outputDateFormat =
-            java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
-        outputDateFormat.timeZone = java.util.TimeZone.getTimeZone("UTC")
+        // Reformatting to ensure consistent ISO 8601 format, primarily for receivedDateTime
+        // sentDateTime can be mapped directly if already in a suitable string format or also reformatted.
+        val formattedReceivedDateTime = graphMessage.receivedDateTime?.let { parseOutlookDate(it) }
+            ?.let { formatDateToIsoString(it) } ?: graphMessage.receivedDateTime
+        val formattedSentDateTime = graphMessage.sentDateTime?.let { parseOutlookDate(it) }
+            ?.let { formatDateToIsoString(it) } ?: graphMessage.sentDateTime
 
         Log.d(
             TAG,
@@ -327,7 +322,9 @@ class GraphApiHelper @Inject constructor(
         return Message(
             id = graphMessage.id,
             threadId = graphMessage.conversationId,
-            receivedDateTime = outputDateFormat.format(date),
+            receivedDateTime = formattedReceivedDateTime
+                ?: "", // Ensure non-null for Message.receivedDateTime
+            sentDateTime = formattedSentDateTime, // Keep as nullable for Message.sentDateTime
             subject = graphMessage.subject,
             senderName = effectiveSender?.emailAddress?.name,
             senderAddress = effectiveSender?.emailAddress?.address,
@@ -335,6 +332,14 @@ class GraphApiHelper @Inject constructor(
             isRead = graphMessage.isRead,
             body = graphMessage.body?.content
         )
+    }
+
+    // Helper to format Date object to "yyyy-MM-dd'T'HH:mm:ss'Z'" UTC string
+    private fun formatDateToIsoString(date: java.util.Date): String {
+        val outputDateFormat =
+            java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US)
+        outputDateFormat.timeZone = java.util.TimeZone.getTimeZone("UTC")
+        return outputDateFormat.format(date)
     }
 
     private fun parseOutlookDate(dateStr: String): java.util.Date? {
@@ -480,10 +485,6 @@ class GraphApiHelper @Inject constructor(
                     parameters.append("\$filter", "conversationId eq '$threadId'")
                     parameters.append("\$select", effectiveSelectFields)
                     parameters.append("\$top", maxResults.toString())
-                    parameters.append(
-                        "\$orderby",
-                        "receivedDateTime asc"
-                    ) // Threads usually viewed oldest to newest
                 }
                     // No accept(ContentType.Application.Json) here, assuming defaultRequest or ContentNegotiation handles it
             }

@@ -1,15 +1,14 @@
 package net.melisma.mail.navigation
 
-import android.app.Activity
+import androidx.activity.compose.LocalActivity
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
 import net.melisma.mail.MainViewModel
-import net.melisma.mail.ui.MainAppScreen // Will be created next
+import net.melisma.mail.ui.MainAppScreen
 import net.melisma.mail.ui.messagedetail.MessageDetailScreen
 import net.melisma.mail.ui.settings.SettingsScreen
 
@@ -25,7 +24,7 @@ fun MailAppNavigationGraph(
         }
 
         composable(AppRoutes.SETTINGS) {
-            val activity = LocalContext.current as? Activity
+            val activity = LocalActivity.current
             if (activity != null) {
                 SettingsScreen(
                     viewModel = mainViewModel, // SettingsScreen might use parts of MainViewModel or have its own

@@ -39,6 +39,7 @@ import net.melisma.core_data.model.WellKnownFolderType
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.TimeZone
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -367,36 +368,34 @@ class GmailApiHelper @Inject constructor(
     }
 
     private fun mapGmailMessageToMessage(message: GmailMessage): Message? {
+        Log.v(TAG, "mapGmailMessageToMessage for Gmail Message ID: ${message.id}")
         try {
-            val subject =
-                message.payload?.headers?.find {
-                    it.name.equals(
-                        "Subject",
-                        ignoreCase = true
-                    )
-                }?.value ?: ""
-            val senderHeader =
-                message.payload?.headers?.find { it.name.equals("From", ignoreCase = true) }?.value
-            val (senderName, senderAddress) = parseSender(senderHeader)
-            val dateHeader =
-                message.payload?.headers?.find { it.name.equals("Date", ignoreCase = true) }?.value
-            val parsedUtilDate = dateHeader?.let { parseEmailDate(it) }
+            val headers = message.payload?.headers ?: emptyList()
+            val subject = headers.findHeaderValue("Subject")
+            val fromHeader = headers.findHeaderValue("From") ?: "Unknown Sender"
+            val senderName = extractSenderName(fromHeader)
+            val senderAddress = extractSenderAddress(fromHeader)
 
-            val receivedDateTime = if (parsedUtilDate != null) {
-                SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).format(parsedUtilDate)
-            } else {
-                SimpleDateFormat(
-                    "yyyy-MM-dd'T'HH:mm:ss'Z'",
-                    Locale.US
-                ).format(Date(message.internalDate?.toLongOrNull() ?: System.currentTimeMillis()))
-            }
+            val dateHeader = headers.findHeaderValue("Date")
+            val parsedSentDate = dateHeader?.let { parseEmailDate(it) }
 
-            val isRead = message.labelIds?.contains("UNREAD") == false
+            // Use internalDate for receivedDateTime, fallback to parsedSentDate or now
+            val parsedReceivedDate =
+                message.internalDate?.toLongOrNull()?.let { Date(it) } ?: parsedSentDate ?: Date()
+
+            val outputDateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
+            outputDateFormat.timeZone = TimeZone.getTimeZone("UTC")
+
+            val sentDateTimeString = parsedSentDate?.let { outputDateFormat.format(it) }
+            val receivedDateTimeString = outputDateFormat.format(parsedReceivedDate) // Non-null
+
             val threadId = message.threadId
+            val isRead = message.labelIds?.contains("UNREAD") != true
 
-            // Attempt to find the body content
             var messageBody: String? = null
             if (message.payload != null) {
+                // Simplified body extraction for this fix - assumes findBodyContent exists and works
+                // findBodyContent should ideally look for text/plain and then text/html
                 if (message.payload.parts.isNullOrEmpty()) { // Single part message
                     if ((message.payload.mimeType == "text/html" || message.payload.mimeType == "text/plain") && message.payload.body?.data != null) {
                         try {
@@ -407,23 +406,24 @@ class GmailApiHelper @Inject constructor(
                         }
                     }
                 } else { // Multipart message
+                    // Assuming findBodyContent is defined elsewhere in the class and returns String?
                     messageBody = findBodyContent(message.payload.parts)
                 }
             }
-
 
             return Message(
                 id = message.id
                     ?: throw IllegalStateException("Message ID cannot be null from Gmail message: $message"),
                 threadId = threadId,
-                receivedDateTime = receivedDateTime,
+                receivedDateTime = receivedDateTimeString, // Use the distinctly derived received time
+                sentDateTime = sentDateTimeString,       // Populate the new sentDateTime field
                 subject = subject,
                 senderName = senderName,
                 senderAddress = senderAddress,
                 bodyPreview = message.snippet?.replace("\\u003e", ">")?.replace("\\u003c", "<")
                     ?.replace("&#39;", "'")?.trim(),
                 isRead = isRead,
-                body = messageBody // Populate the new body field
+                body = messageBody
             )
         } catch (e: Exception) {
             Log.e(TAG, "Error mapping GmailMessage to Message: ${e.message}", e)

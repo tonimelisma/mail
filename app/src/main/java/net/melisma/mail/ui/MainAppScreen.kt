@@ -11,10 +11,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material.ExperimentalMaterialApi
-import androidx.compose.material.pullrefresh.PullRefreshIndicator
-import androidx.compose.material.pullrefresh.pullRefresh
-import androidx.compose.material.pullrefresh.rememberPullRefreshState
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
@@ -23,6 +19,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -64,7 +61,7 @@ fun LoadingIndicator(statusText: String) {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterialApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainAppScreen(
     navController: NavHostController,
@@ -196,29 +193,32 @@ fun MainAppScreen(
                             }
                         } else if (state.selectedFolder != null) {
                             val selectedAccount = mainViewModel.getSelectedAccount()
-                            val isRefreshing = when (state.currentViewMode) {
+                            val isViewModelRefreshing = when (state.currentViewMode) {
                                 ViewMode.MESSAGES -> state.messageDataState is net.melisma.core_data.model.MessageDataState.Loading
                                 ViewMode.THREADS -> state.threadDataState is net.melisma.core_data.model.ThreadDataState.Loading
                             }
-                            val pullRefreshState = rememberPullRefreshState(
-                                refreshing = isRefreshing,
+
+                            PullToRefreshBox(
+                                isRefreshing = isViewModelRefreshing,
                                 onRefresh = {
                                     when (state.currentViewMode) {
                                         ViewMode.MESSAGES -> mainViewModel.retryFetchMessagesForCurrentFolder()
                                         ViewMode.THREADS -> mainViewModel.retryFetchThreadsForCurrentFolder()
                                     }
                                 }
-                            )
-
-                            Box(Modifier.pullRefresh(pullRefreshState)) {
+                            ) {
                                 when (state.currentViewMode) {
                                     ViewMode.MESSAGES -> {
                                         MessageListContent(
                                             messageDataState = state.messageDataState,
                                             accountContext = selectedAccount,
                                             onMessageClick = { messageId ->
-                                                val accountIdToUse = state.selectedFolderAccountId
-                                                if (accountIdToUse != null) {
+                                                Log.d(
+                                                    TAG_COMPOSABLE,
+                                                    "MessageListContent clicked. Message ID: $messageId, Account ID: ${selectedAccount?.id}"
+                                                )
+                                                val accountIdToUse = selectedAccount?.id
+                                                if (accountIdToUse != null && accountIdToUse.isNotBlank()) {
                                                     navController.navigate(
                                                         AppRoutes.messageDetailPath(
                                                             accountId = accountIdToUse,
@@ -228,7 +228,7 @@ fun MainAppScreen(
                                                 } else {
                                                     Log.e(
                                                         TAG_COMPOSABLE,
-                                                        "selectedFolderAccountId is null, cannot navigate to message detail."
+                                                        "Clicked message's accountId is blank or selectedAccount is null. Cannot navigate to message detail."
                                                     )
                                                     showToast(
                                                         context,
@@ -264,11 +264,6 @@ fun MainAppScreen(
                                         )
                                     }
                                 }
-                                PullRefreshIndicator(
-                                    refreshing = isRefreshing,
-                                    state = pullRefreshState,
-                                    modifier = Modifier.align(Alignment.TopCenter)
-                                )
                             }
                         } else if (state.isAnyFolderLoading || state.isLoadingAccountAction) {
                             LoadingIndicator(statusText = if (state.isLoadingAccountAction) "Loading accounts..." else "Loading folders...")

@@ -7,6 +7,7 @@ package net.melisma.core_data.model
  *
  * @property id The unique identifier of the message provided by the backend service.
  * @property receivedDateTime The date and time the message was received, typically in ISO 8601 format string.
+ * @property sentDateTime The date and time the message was sent, typically in ISO 8601 format string.
  * @property subject The subject line of the message. Can be null or empty.
  * @property senderName The display name of the sender, if available.
  * @property senderAddress The email address of the sender.
@@ -18,6 +19,7 @@ data class Message(
     val id: String,
     val threadId: String?,
     val receivedDateTime: String, // Consider parsing this to a date/time type later if needed for sorting/logic
+    val sentDateTime: String?,      // ADDED: For when the message was sent
     val subject: String?,
     val senderName: String?,
     val senderAddress: String?,

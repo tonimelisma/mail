@@ -14,7 +14,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.supervisorScope
 import net.melisma.core_data.datasource.MailApiService
 import net.melisma.core_data.di.ApplicationScope
 import net.melisma.core_data.di.Dispatcher
@@ -159,9 +158,20 @@ class DefaultThreadRepository @Inject constructor(
                     TAG,
                     "[${folder.displayName}] Fetching initial messages to discover thread IDs..."
                 )
+                // Ensure selectFields for initial discovery includes "id" and "conversationId" (or provider's equivalent for threadId)
+                val discoverySelectFields = listOfNotNull(
+                    "id",
+                    if (account.providerType.equals(
+                            "GOOGLE",
+                            ignoreCase = true
+                        )
+                    ) "threadId" else "conversationId",
+                    "subject" // Also get subject for logging a more useful initial message
+                )
+
                 val initialMessagesResult = apiService.getMessagesForFolder(
                     folderId = folder.id,
-                    selectFields = listOf("id", "conversationId"),
+                    selectFields = discoverySelectFields,
                     maxResults = initialMessageFetchCountForThreadDiscovery
                 )
                 ensureActive() // Check for cancellation
@@ -171,23 +181,25 @@ class DefaultThreadRepository @Inject constructor(
                         errorMapper.mapExceptionToErrorDetails(initialMessagesResult.exceptionOrNull())
                     Log.e(
                         TAG,
-                        "[${folder.displayName}] Error fetching initial messages: ${details.message}",
+                        "[${folder.displayName}] Error fetching initial messages for thread discovery: ${details.message}",
                         initialMessagesResult.exceptionOrNull()
                     )
-                    _threadDataState.value = ThreadDataState.Error(details.message)
+                    _threadDataState.value =
+                        ThreadDataState.Error("Failed to discover threads: ${details.message}")
                     return@launch
                 }
 
                 val initialMessages = initialMessagesResult.getOrThrow()
                 Log.d(
                     TAG,
-                    "[${folder.displayName}] Fetched ${initialMessages.size} initial messages."
+                    "[${folder.displayName}] Fetched ${initialMessages.size} initial messages for thread discovery."
                 )
                 if (initialMessages.isNotEmpty()) {
                     Log.d(
-                        TAG, "[${folder.displayName}] First 5 initial messages (or fewer): " +
+                        TAG,
+                        "[${folder.displayName}] First 5 initial messages (or fewer) for discovery: " +
                                 initialMessages.take(5)
-                                    .joinToString { "MsgID: ${it.id}, ThreadID: ${it.threadId}" })
+                                    .joinToString { "MsgID: ${it.id}, ThreadID: ${it.threadId}, Subject: ${it.subject}" })
                 }
 
                 val uniqueThreadIds = initialMessages.mapNotNull { it.threadId }.distinct()
@@ -195,173 +207,192 @@ class DefaultThreadRepository @Inject constructor(
                     TAG,
                     "[${folder.displayName}] Discovered ${uniqueThreadIds.size} unique thread IDs from ${initialMessages.size} initial messages."
                 )
+
+                val fetchedMailThreads = mutableListOf<MailThread>()
+
                 if (uniqueThreadIds.isNotEmpty()) {
-                    Log.d(
-                        TAG,
-                        "[${folder.displayName}] Unique thread IDs (first 5 or fewer): ${
-                            uniqueThreadIds.take(5)
-                        }"
-                    )
-                }
-
-                if (uniqueThreadIds.isEmpty()) {
-                    Log.i(
-                        TAG,
-                        "[${folder.displayName}] No unique thread IDs found in initial messages."
-                    )
-                    _threadDataState.value = ThreadDataState.Success(emptyList())
-                    return@launch
-                }
-
-                // Step 2: For each unique threadId, fetch all its messages
-                // Using supervisorScope to ensure one failing thread fetch doesn't cancel others.
-                val mailThreads = supervisorScope {
-                    uniqueThreadIds.map { threadId ->
-                        async { // Fetch each thread concurrently
-                            ensureActive()
+                    // Step 2: For each unique thread ID, fetch its messages and construct a MailThread
+                    val deferredMailThreads = uniqueThreadIds.map { threadId ->
+                        async(ioDispatcher) { // Using ioDispatcher for each API call
+                            ensureActive() // Check before each API call
                             Log.d(
                                 TAG,
-                                "[${folder.displayName}] Fetching full details for thread ID: $threadId"
+                                "[${folder.displayName}] Fetching messages for ThreadID: $threadId"
                             )
+
+                            val threadMessagesSelectFields = listOf(
+                                "id", "subject", "sender", "from", "toRecipients",
+                                "receivedDateTime", "sentDateTime", "bodyPreview", "isRead",
+                                if (account.providerType.equals(
+                                        "GOOGLE",
+                                        ignoreCase = true
+                                    )
+                                ) "threadId" else "conversationId"
+                            )
+
                             val messagesInThreadResult = apiService.getMessagesForThread(
                                 threadId = threadId,
-                                folderId = folder.id
+                                folderId = folder.id, // Pass folderId for context
+                                selectFields = threadMessagesSelectFields,
+                                maxResults = 100 // Fetch up to 100 messages per thread
                             )
                             ensureActive()
 
                             if (messagesInThreadResult.isSuccess) {
-                                val messages = messagesInThreadResult.getOrThrow()
-                                Log.d(
-                                    TAG,
-                                    "[${folder.displayName}] Thread $threadId: Fetched ${messages.size} messages."
-                                )
-                                if (messages.isNotEmpty()) {
-                                    assembleMailThread(threadId, messages, account.id)
+                                val messagesInThread = messagesInThreadResult.getOrThrow()
+                                if (messagesInThread.isNotEmpty()) {
+                                    Log.d(
+                                        TAG,
+                                        "[${folder.displayName}] Fetched ${messagesInThread.size} messages for ThreadID: $threadId."
+                                    )
+                                    constructMailThread(threadId, messagesInThread, account.id)
                                 } else {
                                     Log.w(
                                         TAG,
-                                        "[${folder.displayName}] Thread $threadId returned no messages."
+                                        "[${folder.displayName}] No messages found for ThreadID: $threadId, though ID was discovered. Skipping."
                                     )
-                                    null // Filter this out later
+                                    null
                                 }
                             } else {
+                                val errorDetails =
+                                    errorMapper.mapExceptionToErrorDetails(messagesInThreadResult.exceptionOrNull())
                                 Log.e(
                                     TAG,
-                                    "[${folder.displayName}] Failed to fetch messages for thread $threadId: ${messagesInThreadResult.exceptionOrNull()?.message}"
+                                    "[${folder.displayName}] Error fetching messages for ThreadID $threadId: ${errorDetails.message}",
+                                    messagesInThreadResult.exceptionOrNull()
                                 )
-                                null // Filter this out later
+                                null
                             }
                         }
-                    }.awaitAll()
-                        .filterNotNull() // awaitAll and filter out nulls from failed fetches
+                    }
+                    val results = deferredMailThreads.awaitAll()
+                    fetchedMailThreads.addAll(results.filterNotNull())
+                    Log.i(
+                        TAG,
+                        "[${folder.displayName}] Successfully constructed ${fetchedMailThreads.size} MailThread objects."
+                    )
+                } else {
+                    Log.i(
+                        TAG,
+                        "[${folder.displayName}] No unique thread IDs discovered. No threads to fetch details for."
+                    )
                 }
-                ensureActive()
 
-                val sortedThreads = mailThreads.sortedByDescending { it.lastMessageDateTime }
+                if (!isActive) {
+                    Log.i(
+                        TAG,
+                        "[${folder.displayName}] Job cancelled after fetching all thread details."
+                    )
+                    return@launch
+                }
+
+                if (fetchedMailThreads.isEmpty() && initialMessages.isNotEmpty() && uniqueThreadIds.isEmpty()) {
+                    Log.w(
+                        TAG,
+                        "[${folder.displayName}] No threads constructed. This might be because all discovered messages had null threadIds (e.g. conversationId was null from MS Graph for all items)."
+                    )
+                }
+
+                _threadDataState.value = ThreadDataState.Success(
+                    fetchedMailThreads.sortedByDescending { it.lastMessageDateTime }
+                )
                 Log.i(
                     TAG,
-                    "[${folder.displayName}] Successfully assembled ${sortedThreads.size} threads."
+                    "[${folder.displayName}] Thread fetch job completed. Emitted Success with ${fetchedMailThreads.size} threads."
                 )
-                if (sortedThreads.isNotEmpty()) {
-                    Log.d(
-                        TAG, "[${folder.displayName}] First 3 assembled threads (or fewer): " +
-                                sortedThreads.take(3)
-                                    .joinToString { "ThreadID: ${it.id}, Subject: '${it.subject}', Msgs: ${it.messages.size}" })
-                }
-                _threadDataState.value = ThreadDataState.Success(sortedThreads)
 
             } catch (e: CancellationException) {
-                Log.w(TAG, "[${folder.displayName}] Thread fetch job cancelled.", e)
-                // If was loading, and still the target, set to error or clear.
-                if (isActive && currentTargetFolder?.id == folder.id && _threadDataState.value is ThreadDataState.Loading) {
-                    _threadDataState.value = ThreadDataState.Error("Thread loading cancelled.")
-                }
+                Log.i(
+                    TAG,
+                    "[${folder.displayName}] Thread fetch job explicitly cancelled: ${e.message}"
+                )
             } catch (e: Exception) {
-                Log.e(TAG, "[${folder.displayName}] Exception during thread fetch process", e)
-                if (isActive && currentTargetFolder?.id == folder.id) {
-                    // Updated error handling
+                if (isActive) { 
                     val details = errorMapper.mapExceptionToErrorDetails(e)
+                    Log.e(
+                        TAG,
+                        "[${folder.displayName}] Unexpected error in thread fetch job: ${details.message}",
+                        e
+                    )
                     _threadDataState.value =
-                        ThreadDataState.Error(details.message) // Use details.message
+                        ThreadDataState.Error("Failed to fetch threads: ${details.message}")
+                } else {
+                    Log.i(
+                        TAG,
+                        "[${folder.displayName}] Exception after job cancellation, not updating to error state: ${e.message}"
+                    )
                 }
             } finally {
-                Log.d(
-                    TAG,
-                    "[${folder.displayName}] Thread fetch job 'finally' block. Current job hash: ${coroutineContext[Job]?.hashCode()}, stored job hash: ${fetchJob?.hashCode()}"
-                )
-                // Clear the job reference only if this is the job that's completing
-                if (fetchJob == coroutineContext[Job]) {
-                    fetchJob = null
-                    Log.d(TAG, "[${folder.displayName}] Cleared fetchJob reference.")
-                }
+                Log.d(TAG, "[${folder.displayName}] Thread fetch job's coroutine scope finished.")
             }
         }
     }
 
-    private fun assembleMailThread(
+    private fun constructMailThread(
         threadId: String,
         messages: List<Message>,
         accountId: String
     ): MailThread? {
-        if (messages.isEmpty()) {
-            Log.w(TAG, "Cannot assemble MailThread for $threadId: no messages provided.")
-            return null
-        }
+        if (messages.isEmpty()) return null
 
-        // Sort messages by date, most recent last to easily get the latest message
-        val sortedMessages = messages.sortedWith(compareBy { parseIsoDate(it.receivedDateTime) })
-        val latestMessage = sortedMessages.lastOrNull()
-            ?: messages.first() // Fallback to first if sorting fails or list empty after sort (should not happen)
+        val sortedMessages =
+            messages.sortedByDescending { parseMessageDate(it.receivedDateTime ?: it.sentDateTime) }
+        val latestMessage = sortedMessages.firstOrNull()
+            ?: return null // Handle case where sortedMessages might be empty after filtering (though unlikely here)
 
-        val subject = latestMessage.subject?.takeIf { it.isNotBlank() }
-            ?: sortedMessages.firstNotNullOfOrNull { it.subject?.takeIf { subj -> subj.isNotBlank() } }
-            ?: "(No Subject)"
+        val subject = latestMessage.subject ?: sortedMessages.firstNotNullOfOrNull { it.subject }
+        ?: "(No Subject)"
+        val snippet = latestMessage.bodyPreview ?: ""
+
+        val lastMessageDate =
+            parseMessageDate(latestMessage.receivedDateTime ?: latestMessage.sentDateTime)
+
+        val unreadCount = sortedMessages.count { !it.isRead }
+        val totalCount = sortedMessages.size
 
         val participants = sortedMessages
-            .mapNotNull {
-                it.senderName?.trim()?.takeIf { name -> name.isNotEmpty() } ?: it.senderAddress
-            }
+            .asSequence() // Use sequence for potentially better performance on multiple operations
+            .mapNotNull { it.senderName?.takeIf { name -> name.isNotBlank() } ?: it.senderAddress }
             .distinct()
+            .take(3)
+            .toList()
+            
         val participantsSummary = when {
-            participants.isEmpty() -> "Unknown Participants"
-            participants.size <= 2 -> participants.joinToString(", ")
-            else -> "${participants.take(2).joinToString(", ")} & ${participants.size - 2} more"
+            participants.size > 2 -> "${participants.take(2).joinToString(", ")} & more"
+            participants.isNotEmpty() -> participants.joinToString(", ")
+            else -> null
         }
-
-        val lastMessageParsedDate = parseIsoDate(latestMessage.receivedDateTime)
 
         return MailThread(
             id = threadId,
-            messages = sortedMessages, // Store all messages
+            messages = sortedMessages, 
             subject = subject,
-            snippet = latestMessage.bodyPreview?.take(120), // Slightly longer snippet
-            lastMessageDateTime = lastMessageParsedDate,
+            snippet = snippet,
+            lastMessageDateTime = lastMessageDate,
             participantsSummary = participantsSummary,
-            unreadMessageCount = sortedMessages.count { !it.isRead },
-            totalMessageCount = sortedMessages.size,
+            unreadMessageCount = unreadCount,
+            totalMessageCount = totalCount,
             accountId = accountId
         )
     }
 
-    private fun parseIsoDate(dateString: String?): Date? {
-        if (dateString.isNullOrBlank()) return null
-        // Try common ISO 8601 formats
-        val formatStrings = listOf(
-            "yyyy-MM-dd'T'HH:mm:ss.SSSSSSS'Z'", // With 7 millis
-            "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",     // With 3 millis
-            "yyyy-MM-dd'T'HH:mm:ss'Z'"          // Without millis
+    private fun parseMessageDate(dateTimeString: String?): Date? {
+        if (dateTimeString.isNullOrBlank()) return null
+        val isoFormatters = listOf(
+            SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSSSSS'Z'", Locale.US),
+            SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US),
+            SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
         )
-        for (formatString in formatStrings) {
+        for (formatter in isoFormatters) {
+            formatter.timeZone = TimeZone.getTimeZone("UTC")
             try {
-                val sdf = SimpleDateFormat(formatString, Locale.US)
-                sdf.timeZone = TimeZone.getTimeZone("UTC")
-                return sdf.parse(dateString)
+                return formatter.parse(dateTimeString)
             } catch (e: ParseException) {
-                // Continue to next format
+                // Try next format
             }
         }
-        Log.w(TAG, "Failed to parse date string: $dateString with common ISO formats.")
-        return null // Or throw, or return a default
+        Log.w(TAG, "Failed to parse date string for MailThread construction: $dateTimeString")
+        return null
     }
 
     private fun cancelAndClearJob(reason: String) {

@@ -218,6 +218,10 @@ class DefaultMessageRepository @Inject constructor(
             )
             return flowOf(null)
         }
+        Log.d(
+            TAG,
+            "Using ApiService for provider: ${account.providerType} (resolved to key: $providerType) to fetch details for message ID: $messageId"
+        )
         return apiService.getMessageDetails(messageId)
     }
 
