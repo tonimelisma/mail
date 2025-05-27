@@ -19,9 +19,14 @@ interface MailApiService {
     /**
      * Fetches mail folders (or labels in Gmail) for the authenticated user.
      *
+     * @param activity The optional Activity context, which might be needed for auth flows by some providers.
+     * @param accountId The ID of the account for which to fetch folders.
      * @return Result containing the list of mail folders or an error
      */
-    suspend fun getMailFolders(): Result<List<MailFolder>>
+    suspend fun getMailFolders(
+        activity: android.app.Activity?,
+        accountId: String
+    ): Result<List<MailFolder>>
 
     /**
      * Fetches messages for a specific folder ID.

@@ -1,17 +1,6 @@
 package net.melisma.core_data.errors
 
-import net.melisma.core_data.model.GenericAuthErrorType
-
-// New data class to hold structured error details
-data class MappedErrorDetails(
-    val message: String,
-    val type: GenericAuthErrorType,
-    val providerSpecificErrorCode: String? = null
-    // Add msalRequiresInteractiveSignIn if it's generic enough,
-    // otherwise, it's better handled within the Microsoft-specific mapping
-    // and then translated to the msalRequiresInteractiveSignIn flag in GenericAuthResult.Error.
-    // For now, keeping it out of this generic MappedErrorDetails.
-)
+import net.melisma.core_data.model.ErrorDetails
 
 /**
  * Interface defining the contract for mapping various exceptions into user-friendly strings.
@@ -19,11 +8,11 @@ data class MappedErrorDetails(
  */
 interface ErrorMapperService {
     /**
-     * Maps any exception to a structured MappedErrorDetails object.
+     * Maps any exception to a structured ErrorDetails object.
      * This can then be used to construct GenericAuthResult.Error or GenericSignOutResult.Error.
      *
      * @param exception The exception to map.
-     * @return A MappedErrorDetails object.
+     * @return An ErrorDetails object from the core_data.model package.
      */
-    fun mapExceptionToErrorDetails(exception: Throwable?): MappedErrorDetails
+    fun mapExceptionToErrorDetails(exception: Throwable?): ErrorDetails
 }

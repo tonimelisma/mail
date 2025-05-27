@@ -57,7 +57,7 @@ class MainActivity : ComponentActivity() {
                     try {
                         Log.d(TAG, "Launching pending Intent with appAuthLauncher.")
                         appAuthLauncher.launch(it)
-                        viewModel.authIntentLaunched()
+                        viewModel.consumePendingAuthIntent()
                     } catch (e: Exception) {
                         Log.e(TAG, "Error launching pending Intent via appAuthLauncher", e)
                         val errorPrefix = getString(R.string.error_google_signin_failed_generic)
@@ -66,7 +66,7 @@ class MainActivity : ComponentActivity() {
                             "$errorPrefix: ${e.localizedMessage}",
                             Toast.LENGTH_LONG
                         ).show()
-                        viewModel.authIntentLaunched()
+                        viewModel.consumePendingAuthIntent()
                     }
                 }
             }

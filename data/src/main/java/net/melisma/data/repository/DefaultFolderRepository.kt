@@ -6,7 +6,6 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -195,100 +194,136 @@ class DefaultFolderRepository @Inject constructor(
         val accountId = account.id
         val providerType = account.providerType.uppercase()
 
-        if (!forceRefresh && syncJobs[accountId]?.isActive == true) {
-            Log.i(
-                TAG,
-                "Sync job already active for account '${account.username}'. Skipping: $reasonSuffix."
-            )
-            return
-        }
-        syncJobs[accountId]?.cancel(CancellationException("New sync request: $reasonSuffix"))
-
-        val mailApiService = mailApiServices[providerType]
-        val errorMapper = errorMappers[providerType]
-
-        if (mailApiService == null || errorMapper == null) {
-            Log.e(
-                TAG,
-                "Cannot sync folders for ${account.username}. Missing service for provider $providerType."
-            )
-            _folderStates.update { currentMap ->
-                currentMap + (accountId to FolderFetchState.Error("Setup error for $providerType"))
+        // Launch as a new job within the externalScope to manage its lifecycle via syncJobs
+        // and allow cancellation if the account is removed or another sync is explicitly started.
+        syncJobs[accountId]?.cancel(CancellationException("New sync requested for $accountId by $reasonSuffix"))
+        syncJobs[accountId] = externalScope.launch(ioDispatcher) {
+            // Check needsReauthentication flag from DB first
+            val accountEntity = accountDao.getAccountById(accountId).first()
+            if (accountEntity?.needsReauthentication == true) {
+                Log.w(
+                    TAG,
+                    "Account $accountId marked for re-authentication. Skipping folder sync for $reasonSuffix."
+                )
+                _folderStates.update { currentStates ->
+                    currentStates + (accountId to FolderFetchState.Error(
+                        "Account requires re-authentication.",
+                        needsReauth = true
+                    ))
+                }
+                return@launch // Do not proceed with sync
             }
-            return
-        }
 
-        syncJobs[accountId] =
-            externalScope.launch(ioDispatcher + SupervisorJob()) { // Use SupervisorJob for this specific sync
+            if (!forceRefresh && _folderStates.value[accountId] is FolderFetchState.Success && (_folderStates.value[accountId] as FolderFetchState.Success).folders.isNotEmpty()) {
                 Log.i(
                     TAG,
-                    "Starting folder sync for ${account.username} (ID: $accountId). Reason: $reasonSuffix"
+                    "Folders for account $accountId already loaded and forceRefresh is false. Skipping sync for $reasonSuffix."
                 )
-                _folderStates.update { currentMap ->
-                    currentMap + (accountId to FolderFetchState.Loading)
-                }
+                // Ensure the job is removed if we're not actually running it to completion
+                // syncJobs.remove(accountId) // Or let it complete naturally if no more code below
+                return@launch
+            }
+
+
+            Log.i(
+                TAG,
+                "Starting folder sync for $accountId ($providerType) - $reasonSuffix. Force refresh: $forceRefresh. Current coroutine active: $isActive"
+            )
+            _folderStates.update { currentStates ->
+                currentStates + (accountId to FolderFetchState.Loading)
+            }
 
             try {
-                val foldersResult = mailApiService.getMailFolders() // API call
-                ensureActive()
+                ensureActive() // Check if the coroutine was cancelled before network request
 
-                if (foldersResult.isSuccess) {
-                    val apiFolders = foldersResult.getOrThrow()
-                    Log.i(
-                        TAG,
-                        "Successfully fetched ${apiFolders.size} folders for ${account.username} from API."
-                    )
-                    val folderEntities = apiFolders.map { it.toEntity(accountId) }
-                    folderDao.insertOrUpdateFolders(folderEntities) // Save to DB
-                    // DB observation via observeDatabaseChanges will update _folderStates with Success
-                    Log.i(
-                        TAG,
-                        "Saved ${folderEntities.size} folder entities to DB for ${account.username}."
-                    )
-                    // Explicitly update to success if DB observation is too slow or for immediate feedback
-                    // This might cause a quick Loading -> Success -> Success(from DB) flicker.
-                    // Prefer relying on the DB flow to naturally update.
-                    // _folderStates.update { currentMap ->
-                    //     currentMap + (accountId to FolderFetchState.Success(apiFolders)) // apiFolders are List<MailFolder>
-                    // }
+                val service = mailApiServices[providerType]
+                val errorMapper = errorMappers[providerType]
 
-                } else {
-                    val exception = foldersResult.exceptionOrNull()
-                    val errorDetails = errorMapper.mapExceptionToErrorDetails(exception)
-                    Log.e(
-                        TAG,
-                        "Error syncing folders for ${account.username}: ${errorDetails.message}",
-                        exception
-                    )
-                    _folderStates.update { currentMap ->
-                        currentMap + (accountId to FolderFetchState.Error(errorDetails.message))
+                if (service == null || errorMapper == null) {
+                    Log.e(TAG, "No MailApiService or ErrorMapper for provider: $providerType")
+                    _folderStates.update { currentStates ->
+                        currentStates + (accountId to FolderFetchState.Error("Unsupported account type: $providerType"))
                     }
+                    return@launch
                 }
+
+                val remoteFoldersResult = service.getMailFolders(activity, accountId)
+                ensureActive() // Check cancellation after network request
+
+                remoteFoldersResult.fold(
+                    onSuccess = { folderList ->
+                        Log.i(
+                            TAG,
+                            "Successfully fetched ${folderList.size} folders for $accountId from API."
+                        )
+                        val folderEntities = folderList.map { it.toEntity(accountId) }
+                        // Replace folders by deleting all existing for the account then inserting new ones
+                        folderDao.deleteAllFoldersForAccount(accountId)
+                        folderDao.insertOrUpdateFolders(folderEntities)
+                        // The DB observation should update _folderStates to Success
+                        // However, explicitly setting it here might provide faster UI feedback
+                        // if DB observation is slow, but can lead to race conditions.
+                        // For now, rely on DB observation triggered by replaceFoldersForAccount.
+                        // If an explicit update is needed:
+                        // _folderStates.update { currentStates ->
+                        //    currentStates + (accountId to FolderFetchState.Success(folderList))
+                        // }
+                        Log.d(
+                            TAG,
+                            "Folders for $accountId saved to DB. State will update via DB observation."
+                        )
+                    },
+                    onFailure = { exception ->
+                        val errorDetails = errorMapper.mapExceptionToErrorDetails(exception)
+                        Log.e(
+                            TAG,
+                            "Error syncing folders for $accountId: ${errorDetails.message}",
+                            exception
+                        )
+
+                        // Check if the exception is NeedsReauthenticationException specifically
+                        // The TokenProvider should have already marked the account for re-auth.
+                        val needsReauth =
+                            exception is net.melisma.core_data.auth.NeedsReauthenticationException ||
+                                    (exception.cause is net.melisma.core_data.auth.NeedsReauthenticationException)
+
+                        _folderStates.update { currentStates ->
+                            currentStates + (accountId to FolderFetchState.Error(
+                                errorDetails.message,
+                                needsReauth = needsReauth
+                            ))
+                        }
+                    }
+                )
             } catch (e: CancellationException) {
-                Log.w(TAG, "Folder sync cancelled for ${account.username}: $reasonSuffix", e)
-                // If state was loading, it might be appropriate to revert or set to error.
-                // If cancellation was due to account removal, state is already cleared.
-                if (isActive && _folderStates.value[accountId] is FolderFetchState.Loading) {
-                    _folderStates.update { currentMap ->
-                        currentMap + (accountId to FolderFetchState.Error("Sync cancelled"))
-                    }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Exception during folder sync for ${account.username}: $reasonSuffix", e)
-                if (isActive) {
-                    val errorDetails = errorMapper.mapExceptionToErrorDetails(e)
-                    _folderStates.update { currentMap ->
-                        currentMap + (accountId to FolderFetchState.Error(errorDetails.message))
-                    }
+                Log.i(TAG, "Folder sync for $accountId cancelled ($reasonSuffix): ${e.message}")
+                // Don't update state to error if it's a legitimate cancellation
+                // (e.g. account removed, new sync started)
+                // The state will be handled by the cancelling action or new sync.
+            } catch (e: Exception) { // Catch-all for other unexpected errors
+                Log.e(
+                    TAG,
+                    "Unexpected exception during folder sync for $accountId ($reasonSuffix)",
+                    e
+                )
+                val errorDetails = errorMappers[providerType]?.mapExceptionToErrorDetails(e)
+                    ?: net.melisma.core_data.model.ErrorDetails("Unknown error during folder sync.")
+                _folderStates.update { currentStates ->
+                    currentStates + (accountId to FolderFetchState.Error(errorDetails.message))
                 }
             } finally {
-                // remove job only if this is the job that completed, not a new one that started for same account
+                // Only remove the job if this instance of the coroutine is still the one in the map.
+                // This prevents a newer job from being incorrectly removed if this one was slow
+                // and got superseded.
                 if (syncJobs[accountId] == coroutineContext[Job]) {
                     syncJobs.remove(accountId)
                 }
-                Log.d(TAG, "Folder sync job ended for ${account.username}. Reason: $reasonSuffix.")
+                Log.d(
+                    TAG,
+                    "Folder sync job ended for $accountId. Reason: $reasonSuffix. Remaining jobs: ${syncJobs.size}"
+                )
             }
-            }
+        }
     }
 
 

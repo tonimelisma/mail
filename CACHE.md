@@ -1,7 +1,7 @@
 # **Melisma Mail \- Caching & Offline-First Implementation Guide**
 
-Version: 1.2  
-Date: May 26, 2025
+Version: 1.3  
+Date: May 27, 2025
 
 ## **0\. Vision & Introduction**
 
@@ -297,3 +297,120 @@ state**.
   error checking.
 * **Thorough Paging 3 Testing**: While the Paging 3 setup now compiles, runtime testing of initial
   load, append, refresh, and error states for the message list is essential.
+
+---
+
+## **VI. Session Updates (May 27, 2025)**
+
+This session focused on addressing issues identified in "Phase 2c" and moving the Paging 3
+implementation closer to a functional state.
+
+**Key Accomplishments:**
+
+* **Build Stability:**
+    * Identified and fixed a build error in `DefaultMessageRepository.kt` by adding the missing
+      `import androidx.paging.map`.
+    * The project now **builds successfully** again.
+* **Database Migration for `AccountEntity.needsReauthentication`:**
+    * The `AccountEntity.kt` was confirmed to have the `needsReauthentication: Boolean` field.
+    * `AppDatabase.kt` was updated:
+        * Database version incremented from 3 to 4.
+        * A new migration `MIGRATION_3_4` was added to alter the `accounts` table, adding the
+          `needsReauthentication` column (`INTEGER NOT NULL DEFAULT 0`).
+        * This resolves a critical issue that would have caused runtime crashes for existing users.
+* **Investigated `Activity?` Argument in `MainViewModel`**:
+    * Reviewed `MainViewModel.kt`, `ThreadRepository.kt` (interface), and
+      `DefaultThreadRepository.kt` (implementation).
+    * Confirmed that while `setTargetFolderForThreads` accepts an `Activity?` (intended for auth
+      during refresh), the `Activity` parameter is **not currently used** by
+      `DefaultThreadRepository` when called from `MainViewModel.selectFolder` (where `null` is
+      passed) or even during its internal refresh logic triggered by this call.
+    * **Conclusion**: Passing `null` is not causing an issue with the current implementation. This
+      item can be removed from "Potential Issues."
+* **`MessageRemoteMediator` Refactoring for Paging 3:**
+    * Reviewed `MailApiService.kt` and confirmed that the `getMessagesForFolder` method only
+      supports a `maxResults` limit and does not provide pagination keys/tokens. This means true
+      network-level append via `RemoteMediator` is not possible with the current API definition.
+    * Refactored `data/src/main/java/net/melisma/data/paging/MessageRemoteMediator.kt`:
+        * The simulated API call was replaced.
+        * For `LoadType.REFRESH`, it now calls the actual `mailApiService.getMessagesForFolder()`
+          with a defined `REFRESH_PAGE_SIZE` (100).
+        * Fetched messages are stored in the database (clearing previous ones for that
+          folder/account).
+        * `MediatorResult.Success(endOfPaginationReached = true)` is returned after a `REFRESH`, as
+          the API doesn't support further pagination via the mediator.
+        * `LoadType.APPEND` and `LoadType.PREPEND` now correctly return
+          `MediatorResult.Success(endOfPaginationReached = true)` immediately, as network-driven
+          append/prepend is not supported by this mediator with the current API. The `PagingSource`
+          from the DAO is responsible for serving data from the database.
+        * This change makes the `RemoteMediator` primarily responsible for the initial/refresh
+          network fetch, aligning with SSoT and API capabilities.
+
+**Build Status**: The project is **BUILDING SUCCESSFULLY**.
+
+## **VII. Revised Known Technical Debt & Shortcuts (As of May 27, 2025)**
+
+This section consolidates all known shortcuts and areas needing improvement.
+
+* **API-Model Discrepancies**: The core_data.model.Message was enhanced to align with the database
+  entity, but the backing MailApiService might not provide all the new fields. Mappers currently use
+  default values, which could lead to incomplete cached data. *(Unchanged)*
+* **Stubbed API Services**: Methods like `getMessageAttachments` in `DefaultMessageRepository` are
+  stubbed. *(Unchanged)*
+* **Sync Transactionality**: Broader sync processes (API call + DAO ops) are not fully
+  transactional. *(Unchanged)*
+* **Error Handling in Mappers**: Date parsing in `MessageMappers` defaults to current time on
+  failure. *(Unchanged)*
+* **Limited Offline Writes**: Full offline outbox pattern for actions like delete, move, send is
+  needed. *(Unchanged)*
+* **Log Spam**: Numerous debug logs need review. *(Unchanged)*
+* **`MailApiService` Pagination Limitation**: The `MailApiService.getMessagesForFolder` method does
+  **not** support true pagination (e.g., page tokens/cursors). It only supports a `maxResults`
+  limit. This means:
+    * `MessageRemoteMediator` cannot implement network-level `APPEND` for infinite scrolling from
+      the network. It can only perform a `REFRESH` (e.g., load top N messages).
+    * "Infinite scroll" of messages relies entirely on the `PagingSource` from the Room database
+      serving already-fetched-and-stored messages.
+* **Missing `ButtonPrimary` Composable**: The custom `ButtonPrimary` was replaced with a standard
+  `androidx.compose.material3.Button` in `MessageListContent.kt` (for the retry action). If
+  `ButtonPrimary` had specific app-wide styling or functionality, this has been lost and might need
+  to be recreated or the standard `Button` styled appropriately for UI consistency. This is
+  currently a minor UI debt.
+* **Simplified RemoteMediator (Partially Addressed)**: `MessageRemoteMediator` no longer uses a
+  *simulated* API call. It calls the real `MailApiService`. However, due to API limitations (see "
+  MailApiService Pagination Limitation"), it cannot implement full network-backed pagination and has
+  a simplified role (REFRESH only from network).
+
+## **VIII. Potential Next Steps & Future Considerations**
+
+1. **Runtime Testing of Paging 3 Message List:**
+    * **Goal**: Verify the message list powered by `Pager`, `MessageRemoteMediator` (for refresh),
+      and `MessageDao`'s `PagingSource` works correctly at runtime.
+    * **Tasks**:
+        * Manually test initial message load when selecting a folder.
+        * Test pull-to-refresh functionality.
+        * Observe behavior with empty folders and folders that return API errors during the refresh.
+        * Ensure loading indicators and error states in `MessageListContent.kt` are displayed
+          correctly based on `LazyPagingItems.loadState`.
+2. **Enhance `MailApiService` for Pagination (Longer Term):**
+    * **Goal**: Introduce proper pagination support in `MailApiService` and its implementations if
+      backend APIs allow.
+    * **Tasks**:
+        * Investigate if Gmail/Graph APIs offer cursor/token-based pagination for
+          `getMessagesForFolder`.
+        * If so, update `MailApiService.getMessagesForFolder` to accept a page token and return a
+          `PagedMessageResponse` (or similar) containing messages and the next page token.
+        * Update `MessageRemoteMediator` to implement a full `RemoteKeys` strategy for
+          `LoadType.APPEND` if the API is enhanced.
+3. **Implement "True Offline" for Simple Actions with WorkManager (As per original plan):**
+    * Focus on `markMessageRead` using `WorkManager` for background sync.
+4. **Implement On-Demand Fetch for Message Bodies (As per original plan):**
+    * Add `MessageBodyEntity`, migration, and DAO/ViewModel logic.
+5. **Address Other Tech Debt:**
+    * Systematically review and fix items in "Revised Known Technical Debt" (API-Model
+      discrepancies, mappers, offline writes, log spam).
+    * Decide on the `ButtonPrimary` styling.
+
+The old "IV. Next Manageable Increment" and "V. Session Updates (Current Session Summary)"
+including "Potential Issues & Areas for Future Review from this Session" should be considered
+superseded by these new sections.

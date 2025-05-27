@@ -27,7 +27,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import net.melisma.core_data.model.Account
 import net.melisma.core_data.model.FolderFetchState
-import net.melisma.core_data.model.GenericAuthErrorType
 import net.melisma.core_data.model.GenericAuthResult
 import net.melisma.core_data.model.GenericSignOutResult
 import net.melisma.core_data.model.MailFolder
@@ -309,117 +308,115 @@ class MainViewModel @Inject constructor(
         }
     }
 
-    fun startSignInProcess(activity: Activity, providerType: String, loginHint: String? = null) {
-        Timber.tag(TAG).i("startSignInProcess called for provider: $providerType, loginHint: $loginHint")
-        _uiState.update { it.copy(isLoadingAccountAction = true) }
+    fun signIn(activity: Activity, providerType: String, loginHint: String? = null) {
+        Timber.tag(TAG).d("signIn called for provider: $providerType")
+        if (!isOnline()) {
+            _uiState.update { it.copy(toastMessage = "No network connection available.") }
+            return
+        }
         viewModelScope.launch {
+            _uiState.update { it.copy(isLoadingAccountAction = true) }
             defaultAccountRepository.signIn(activity, loginHint, providerType)
-                .collect { result ->
-                    val isLoading = result is GenericAuthResult.UiActionRequired
-                    _uiState.update { it.copy(isLoadingAccountAction = isLoading) }
-
-                    when (result) {
-                        is GenericAuthResult.Success -> {
-                            val message = if (result.account.needsReauthentication) {
-                                "Signed in as ${result.account.username} (Some permissions were declined. You may need to sign in again later.)"
-                            } else {
-                                "Signed in as ${result.account.username}"
+                .collect { result -> // GenericAuthResult
+                    _uiState.update { currentState ->
+                        when (result) {
+                            is GenericAuthResult.Loading -> {
+                                Timber.tag(TAG).d("Sign-in process loading...")
+                                currentState.copy(isLoadingAccountAction = true)
                             }
-                            _uiState.update { it.copy(toastMessage = message) }
-                            Timber.tag(TAG).i("Sign-in success for ${result.account.username}")
-                        }
-                        is GenericAuthResult.UiActionRequired -> {
-                            _pendingAuthIntent.value = result.intent
-                            Timber.tag(TAG).i("Sign-in UI Action Required. Intent posted.")
-                        }
-                        is GenericAuthResult.Error -> {
-                            val errorMessage = when (result.type) {
-                                GenericAuthErrorType.MSAL_INTERACTIVE_AUTH_REQUIRED -> {
-                                    Timber.tag(TAG)
-                                        .w("Sign-in error (MSAL): Interactive sign-in required. Message: ${result.message}")
-                                    "Sign-in failed: Please try signing in again. (Interactive action needed)"
-                                }
 
-                                GenericAuthErrorType.OPERATION_CANCELLED -> {
-                                    Timber.tag(TAG).i("Sign-in cancelled by user")
-                                    "Sign-in cancelled"
-                                }
-
-                                GenericAuthErrorType.AUTHENTICATION_FAILED -> {
-                                    Timber.tag(TAG)
-                                        .e("Sign-in error: ${result.message}, type: ${result.type}")
-                                    result.message
-                                }
-
-                                else -> {
-                                    Timber.tag(TAG)
-                                        .e("Sign-in error: ${result.message}, type: ${result.type}")
-                                    "Error: ${result.message}"
-                                }
+                            is GenericAuthResult.Success -> {
+                                Timber.tag(TAG).d("Sign-in successful: ${result.account.username}")
+                                currentState.copy(
+                                    isLoadingAccountAction = false,
+                                    toastMessage = "Signed in as ${result.account.username}"
+                                )
                             }
-                            _uiState.update { ui ->
-                                ui.copy(toastMessage = errorMessage)
+
+                            is GenericAuthResult.Error -> {
+                                Timber.tag(TAG).w(
+                                    result.details.cause,
+                                    "Sign-in error: ${result.details.message} (Code: ${result.details.code})"
+                                )
+                                currentState.copy(
+                                    isLoadingAccountAction = false,
+                                    toastMessage = "Sign-in error: ${result.details.message}"
+                                )
                             }
-                        }
-                        is GenericAuthResult.Cancelled -> {
-                            Timber.tag(TAG).i("Sign-in cancelled (GenericAuthResult.Cancelled)")
-                            _uiState.update { it.copy(toastMessage = "Sign-in cancelled") }
+
+                            is GenericAuthResult.UiActionRequired -> {
+                                Timber.tag(TAG).d("Sign-in UI Action Required. Emitting intent.")
+                                _pendingAuthIntent.value = result.intent
+                                // isLoadingAccountAction remains true as we are waiting for UI
+                                currentState.copy(isLoadingAccountAction = true)
+                            }
+                            // No Cancelled state here as it should be an Error with details
                         }
                     }
                 }
         }
     }
 
-    fun authIntentLaunched() {
+    fun completeSignIn() {
         _pendingAuthIntent.value = null
+        // isLoadingAccountAction will be set to false once the actual sign-in result (Success/Error)
+        // is processed from the channel by the signIn flow in DefaultAccountRepository
+        // and then collected here.
+        // For now, we can keep it as is, or optimistically set to false if UI returns immediately.
+        // Let's assume the flow will update it.
+        Timber.tag(TAG).d("completeSignIn called, cleared pending intent.")
     }
 
-    fun handleAuthenticationResult(
-        providerType: String,
-        resultCode: Int,
-        data: Intent?
-    ) {
+    fun signOut(account: Account) {
+        Timber.tag(TAG).d("signOut called for account: ${account.username}")
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoadingAccountAction = true) }
+            defaultAccountRepository.signOut(account)
+                .collect { result -> // GenericSignOutResult
+                    _uiState.update { currentState ->
+                        when (result) {
+                            is GenericSignOutResult.Loading -> {
+                                Timber.tag(TAG)
+                                    .d("Sign-out process loading for ${account.username}...")
+                                currentState.copy(isLoadingAccountAction = true) // Already true, but explicit
+                            }
+
+                            is GenericSignOutResult.Success -> {
+                                Timber.tag(TAG).d("Sign-out successful for ${account.username}")
+                                currentState.copy(
+                                    isLoadingAccountAction = false,
+                                    toastMessage = "Signed out ${account.username}"
+                                )
+                            }
+
+                            is GenericSignOutResult.Error -> {
+                                Timber.tag(TAG).w(
+                                    result.details.cause,
+                                    "Sign-out error for ${account.username}: ${result.details.message} (Code: ${result.details.code})"
+                                )
+                                currentState.copy(
+                                    isLoadingAccountAction = false,
+                                    toastMessage = "Sign-out error for ${account.username}: ${result.details.message}"
+                                )
+                            }
+                        }
+                    }
+                }
+        }
+    }
+
+    fun handleAuthenticationResult(providerType: String, resultCode: Int, data: Intent?) {
         Timber.tag(TAG)
             .d("handleAuthenticationResult in ViewModel. Provider: $providerType, ResultCode: $resultCode, Data: ${data != null}")
-        viewModelScope.launch {
-            try {
-                defaultAccountRepository.handleAuthenticationResult(
-                    providerType,
-                    resultCode,
-                    data
-                )
-            } catch (e: Exception) {
-                Timber.tag(TAG).e(e, "Error calling repository handleAuthenticationResult for $providerType")
-                _uiState.update {
-                    it.copy(
-                        isLoadingAccountAction = false,
-                        toastMessage = "Error processing sign-in: ${e.localizedMessage}"
-                    )
-                }
-            }
-        }
-    }
-
-    fun signOutAndRemoveAccount(account: Account) {
-        Timber.tag(TAG).i("signOutAndRemoveAccount called for account: ${account.username}")
+        // Set loading state. This will be cleared when account/auth state flows update.
         _uiState.update { it.copy(isLoadingAccountAction = true) }
+
         viewModelScope.launch {
-            defaultAccountRepository.signOut(account)
-                .collect { result ->
-                    _uiState.update { it.copy(isLoadingAccountAction = false) }
-                    when (result) {
-                        is GenericSignOutResult.Success -> {
-                            _uiState.update { it.copy(toastMessage = "Signed out ${account.username}") }
-                            Timber.tag(TAG).i("Sign-out success for ${account.username}")
-                        }
-                        is GenericSignOutResult.Error -> {
-                            _uiState.update { ui ->
-                                ui.copy(toastMessage = "Sign-out error: ${result.message}")
-                            }
-                            Timber.tag(TAG).e("Sign-out error for ${account.username}: ${result.message}")
-                        }
-                    }
-                }
+            defaultAccountRepository.handleAuthenticationResult(providerType, resultCode, data)
+            // After this call, changes to account status will be picked up by
+            // observeAccountRepositoryState() which observes overallApplicationAuthState and getAccounts().
+            // Those observers will then update isLoadingAccountAction to false when appropriate.
+            // No direct collect or UI update here is needed from the result of handleAuthenticationResult itself.
         }
     }
 
@@ -743,22 +740,39 @@ class MainViewModel @Inject constructor(
                 activity = activity,
                 scopes = null
             ).collect { result: GenericAuthResult ->
-                _uiState.update { it.copy(isLoadingAccountAction = false) }
-                when (result) {
-                    is GenericAuthResult.Success -> {
-                        _uiState.update { it.copy(toastMessage = "Sign-in flow for ${providerType} initiated.") }
-                    }
+                _uiState.update { currentState ->
+                    when (result) {
+                        is GenericAuthResult.Loading -> {
+                            Timber.tag(TAG).d("Get auth intent loading...")
+                            currentState.copy(isLoadingAccountAction = true)
+                        }
 
-                    is GenericAuthResult.Error -> {
-                        _uiState.update { it.copy(toastMessage = "Sign-in error: ${result.type.name} - ${result.message}") }
-                    }
+                        is GenericAuthResult.Success -> {
+                            Timber.tag(TAG)
+                                .i("Get auth intent success for $providerType - unexpected by default for this call.")
+                            currentState.copy(
+                                isLoadingAccountAction = false,
+                                toastMessage = "Sign-in flow for ${providerType} initiated."
+                            )
+                        }
 
-                    is GenericAuthResult.UiActionRequired -> {
-                        _pendingAuthIntent.value = result.intent
-                    }
+                        is GenericAuthResult.Error -> {
+                            Timber.tag(TAG).w(
+                                result.details.cause,
+                                "Get auth intent error: ${result.details.message} (Code: ${result.details.code})"
+                            )
+                            currentState.copy(
+                                isLoadingAccountAction = false,
+                                toastMessage = "Sign-in error: ${result.details.message}${if (result.details.code != null) " (${result.details.code})" else ""}"
+                            )
+                        }
 
-                    is GenericAuthResult.Cancelled -> {
-                        _uiState.update { it.copy(toastMessage = "Sign-in cancelled.") }
+                        is GenericAuthResult.UiActionRequired -> {
+                            Timber.tag(TAG)
+                                .d("Get auth intent UI Action Required. Emitting intent.")
+                            _pendingAuthIntent.value = result.intent
+                            currentState.copy(isLoadingAccountAction = true)
+                        }
                     }
                 }
             }

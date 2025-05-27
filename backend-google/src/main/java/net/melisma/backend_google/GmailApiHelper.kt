@@ -82,9 +82,12 @@ class GmailApiHelper @Inject constructor(
     // Ensure Json parser is configured to ignore unknown keys
     private val jsonParser = Json { ignoreUnknownKeys = true }
 
-    override suspend fun getMailFolders(): Result<List<MailFolder>> {
+    override suspend fun getMailFolders(
+        activity: android.app.Activity?,
+        accountId: String
+    ): Result<List<MailFolder>> {
         return try {
-            Log.d(TAG, "Fetching Gmail labels from API...")
+            Log.d(TAG, "Fetching Gmail labels for accountId: $accountId from API...")
             val response: HttpResponse = httpClient.get("$BASE_URL/labels") {
                 accept(ContentType.Application.Json)
             }

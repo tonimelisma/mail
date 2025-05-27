@@ -11,8 +11,7 @@ import io.ktor.client.plugins.ClientRequestException
 import io.ktor.client.plugins.ServerResponseException
 import kotlinx.serialization.SerializationException
 import net.melisma.core_data.errors.ErrorMapperService
-import net.melisma.core_data.errors.MappedErrorDetails
-import net.melisma.core_data.model.GenericAuthErrorType
+import net.melisma.core_data.model.ErrorDetails
 import java.io.IOException
 import java.net.UnknownHostException
 import javax.inject.Inject
@@ -74,62 +73,51 @@ class MicrosoftErrorMapper @Inject constructor() : ErrorMapperService {
         return Exception(errorMessage)
     }
 
-    private fun mapMsalExceptionToDetails(exception: MsalException): MappedErrorDetails {
+    private fun mapMsalExceptionToDetails(exception: MsalException): ErrorDetails {
         val defaultMessage =
             exception.message ?: "An error occurred during Microsoft authentication."
         val errorCode = exception.errorCode
 
         return when (exception) {
-            is MsalUiRequiredException -> MappedErrorDetails(
-                exception.message ?: "Your session has expired. Please sign in again.",
-                GenericAuthErrorType.MSAL_INTERACTIVE_AUTH_REQUIRED,
-                errorCode
+            is MsalUiRequiredException -> ErrorDetails(
+                message = exception.message ?: "Your session has expired. Please sign in again.",
+                code = errorCode,
+                cause = exception
             )
 
-            is MsalUserCancelException -> MappedErrorDetails(
-                exception.message ?: "Operation cancelled by user.",
-                GenericAuthErrorType.OPERATION_CANCELLED,
-                errorCode
+            is MsalUserCancelException -> ErrorDetails(
+                message = exception.message ?: "Operation cancelled by user.",
+                code = errorCode,
+                cause = exception
             )
 
-            is MsalDeclinedScopeException -> MappedErrorDetails(
-                "Please accept all permissions, including offline access. This is required for the app to function properly.",
-                GenericAuthErrorType.AUTHENTICATION_FAILED,
-                errorCode
+            is MsalDeclinedScopeException -> ErrorDetails(
+                message = "Please accept all permissions, including offline access. This is required for the app to function properly.",
+                code = errorCode,
+                cause = exception
             )
 
             is MsalClientException -> {
                 val msg =
                     exception.message ?: "A client error occurred during Microsoft authentication."
-                val type = when (exception.errorCode) {
-                    "no_current_account" -> GenericAuthErrorType.ACCOUNT_NOT_FOUND
-                    "invalid_parameter" -> GenericAuthErrorType.INVALID_REQUEST
-                    // Add more mappings here based on actual MsalClientException.errorCode strings
-                    else -> GenericAuthErrorType.AUTHENTICATION_FAILED
-                }
-                MappedErrorDetails(msg, type, errorCode)
+                ErrorDetails(message = msg, code = errorCode, cause = exception)
             }
 
             is MsalServiceException -> {
                 val msg =
                     exception.message ?: "A service error occurred with Microsoft authentication."
-                val type = when (exception.errorCode) {
-                    // Add specific service error code mappings here
-                    // Example: MsalServiceException.INVALID_GRANT might map to AUTHENTICATION_FAILED
-                    else -> GenericAuthErrorType.SERVICE_UNAVAILABLE // Or AUTHENTICATION_FAILED
-                }
-                MappedErrorDetails(msg, type, errorCode)
+                ErrorDetails(message = msg, code = errorCode, cause = exception)
             }
 
-            else -> MappedErrorDetails(
-                defaultMessage,
-                GenericAuthErrorType.AUTHENTICATION_FAILED,
-                errorCode
+            else -> ErrorDetails(
+                message = defaultMessage,
+                code = errorCode,
+                cause = exception
             )
         }
     }
 
-    override fun mapExceptionToErrorDetails(exception: Throwable?): MappedErrorDetails {
+    override fun mapExceptionToErrorDetails(exception: Throwable?): ErrorDetails {
         Log.w(
             TAG,
             "mapExceptionToErrorDetails: ${exception?.let { it::class.java.simpleName + " - " + it.message } ?: "null"}"
@@ -137,46 +125,53 @@ class MicrosoftErrorMapper @Inject constructor() : ErrorMapperService {
 
         return when (exception) {
             is MsalException -> mapMsalExceptionToDetails(exception)
-            is CancellationException -> MappedErrorDetails(
-                exception.message ?: "Operation cancelled.",
-                GenericAuthErrorType.OPERATION_CANCELLED,
-                "Cancellation"
+            is CancellationException -> ErrorDetails(
+                message = exception.message ?: "Operation cancelled.",
+                code = "Cancellation",
+                cause = exception
             )
 
-            is UnknownHostException -> MappedErrorDetails(
-                "No internet connection. Please check your network.",
-                GenericAuthErrorType.NETWORK_ERROR,
-                "UnknownHost"
+            is UnknownHostException -> ErrorDetails(
+                message = "No internet connection. Please check your network.",
+                code = "UnknownHost",
+                cause = exception
             )
 
-            is ClientRequestException -> MappedErrorDetails(
-                "Error connecting to Microsoft services (HTTP ${exception.response.status.value}). Check network or server status.",
-                GenericAuthErrorType.NETWORK_ERROR,
-                "KtorClientRequest-${exception.response.status.value}"
+            is ClientRequestException -> ErrorDetails(
+                message = "Error connecting to Microsoft services (HTTP ${exception.response.status.value}). Check network or server status.",
+                code = "KtorClientRequest-${exception.response.status.value}",
+                cause = exception
             )
 
-            is ServerResponseException -> MappedErrorDetails(
-                "Microsoft service error (HTTP ${exception.response.status.value}). Please try again later.",
-                GenericAuthErrorType.SERVICE_UNAVAILABLE,
-                "KtorServerResponse-${exception.response.status.value}"
+            is ServerResponseException -> ErrorDetails(
+                message = "Microsoft service error (HTTP ${exception.response.status.value}). Please try again later.",
+                code = "KtorServerResponse-${exception.response.status.value}",
+                cause = exception
             )
 
-            is SerializationException -> MappedErrorDetails(
-                "Error processing data from Microsoft. ${exception.message ?: ""}",
-                GenericAuthErrorType.UNKNOWN_ERROR,
-                "Serialization"
+            is SerializationException -> ErrorDetails(
+                message = "Error processing data from Microsoft. ${exception.message ?: ""}",
+                code = "Serialization",
+                cause = exception
             )
 
-            is IOException -> MappedErrorDetails(
-                exception.message ?: "A network error occurred. Please check your connection.",
-                GenericAuthErrorType.NETWORK_ERROR,
-                "IOException"
+            is IOException -> ErrorDetails(
+                message = exception.message
+                    ?: "A network error occurred. Please check your connection.",
+                code = "IOException",
+                cause = exception
             )
 
-            else -> MappedErrorDetails(
-                exception?.message?.takeIf { it.isNotBlank() } ?: "An unexpected error occurred.",
-                GenericAuthErrorType.UNKNOWN_ERROR,
-                exception?.javaClass?.simpleName ?: "UnknownThrowable"
+            null -> ErrorDetails(
+                message = "An unknown error occurred.",
+                code = "UnknownThrowableNull"
+            )
+
+            else -> ErrorDetails(
+                message = exception.message?.takeIf { it.isNotBlank() }
+                    ?: "An unexpected error occurred.",
+                code = exception.javaClass.simpleName ?: "UnknownThrowable",
+                cause = exception
             )
         }
     }
@@ -186,34 +181,6 @@ class MicrosoftErrorMapper @Inject constructor() : ErrorMapperService {
             TAG,
             "mapAuthExceptionToUserMessage (legacy): ${exception?.let { it::class.java.simpleName + " - " + it.message } ?: "null"}"
         )
-        if (exception is CancellationException) {
-            return exception.message ?: "Authentication cancelled."
-        }
-
-        if (exception is MsalException) {
-            val details = mapMsalExceptionToDetails(exception)
-            return when (exception) {
-                is MsalUserCancelException -> "Authentication cancelled."
-                is MsalUiRequiredException -> "Your session has expired. Please sign in again or refresh your session."
-                is MsalClientException -> when (exception.errorCode) {
-                    "no_current_account" -> "No account found or your session is invalid. Please sign in."
-                    "invalid_parameter" -> "The authentication request was invalid. Please try again."
-                    else -> details.message
-                }
-
-                is MsalServiceException -> details.message
-                else -> details.message
-            }
-        }
-
-        val mappedDetails = mapExceptionToErrorDetails(exception)
-
-        return when (mappedDetails.type) {
-            GenericAuthErrorType.NETWORK_ERROR -> "A network error occurred. Please check your internet connection and try again."
-            GenericAuthErrorType.SERVICE_UNAVAILABLE -> "Microsoft services are temporarily unavailable. Please try again later."
-            GenericAuthErrorType.OPERATION_CANCELLED -> mappedDetails.message
-            else -> mappedDetails.message.takeIf { it.isNotBlank() }
-                ?: "An unknown authentication error occurred."
-        }
+        return mapExceptionToErrorDetails(exception).message
     }
 }

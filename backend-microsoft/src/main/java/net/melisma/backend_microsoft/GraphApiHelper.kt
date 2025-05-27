@@ -105,9 +105,12 @@ class GraphApiHelper @Inject constructor(
         private const val APP_DISPLAY_NAME_SPAM = "Spam"
     }
 
-    override suspend fun getMailFolders(): Result<List<MailFolder>> {
+    override suspend fun getMailFolders(
+        activity: android.app.Activity?,
+        accountId: String
+    ): Result<List<MailFolder>> {
         return try {
-            Log.d(TAG, "Fetching mail folders...")
+            Log.d(TAG, "Fetching mail folders for accountId: $accountId...")
             val response: HttpResponse = httpClient.get("$MS_GRAPH_ROOT_ENDPOINT/me/mailFolders") {
                 url {
                     parameters.append("\$top", "100")

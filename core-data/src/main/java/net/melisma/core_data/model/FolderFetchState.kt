@@ -18,6 +18,7 @@ sealed class FolderFetchState {
     /**
      * Indicates that an error occurred while fetching folders for an account.
      * @param error A user-friendly error message describing the failure.
+     * @param needsReauth Indicates if the error is due to an authentication issue requiring user sign-in.
      */
-    data class Error(val error: String) : FolderFetchState()
+    data class Error(val error: String, val needsReauth: Boolean = false) : FolderFetchState()
 }

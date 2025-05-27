@@ -55,10 +55,18 @@ class MicrosoftKtorTokenProvider @Inject constructor(
     override suspend fun refreshBearerTokens(oldTokens: BearerTokens?): BearerTokens? {
         Timber.tag(TAG).d("refreshBearerTokens() called.")
         // The accountId should be stored in oldTokens.refreshToken as per getBearerTokens logic
-        val accountId = oldTokens?.refreshToken
+        // MODIFICATION: Fetch accountId from ActiveMicrosoftAccountHolder directly
+        // val accountId = oldTokens?.refreshToken
+        val accountId = activeAccountHolder.getActiveMicrosoftAccountIdValue()
         if (accountId == null) {
-            Timber.tag(TAG).w("No accountId found in oldTokens for refresh. Cannot refresh tokens.")
-            return null
+            Timber.tag(TAG)
+                .w("No active Microsoft account ID found via ActiveMicrosoftAccountHolder. Cannot refresh tokens.")
+            // Optionally, we could still try oldTokens?.refreshToken as a fallback,
+            // but if activeAccountHolder doesn't have it, it's a systemic issue.
+            // For now, failing directly is cleaner.
+            // Consider if this state (active account ID is null but we are trying to refresh)
+            // should throw a specific exception.
+            throw TokenProviderException("Cannot refresh tokens: No active Microsoft account ID available.")
         }
         Timber.tag(TAG).d("Attempting to refresh tokens for Microsoft account ID: $accountId")
 

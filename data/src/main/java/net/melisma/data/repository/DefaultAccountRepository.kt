@@ -3,7 +3,6 @@ package net.melisma.data.repository
 
 import android.app.Activity
 import android.content.Intent
-import android.util.Log
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.BufferOverflow
@@ -15,7 +14,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
@@ -24,9 +22,9 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.receiveAsFlow
-import kotlinx.coroutines.launch
 import net.melisma.backend_google.auth.ActiveGoogleAccountHolder
 import net.melisma.backend_google.auth.GoogleAuthManager
+import net.melisma.backend_google.auth.GoogleGetTokenResult
 import net.melisma.backend_google.auth.GoogleSignInResult
 import net.melisma.backend_google.auth.GoogleSignOutResult
 import net.melisma.backend_google.common.GooglePersistenceErrorType
@@ -36,9 +34,8 @@ import net.melisma.core_data.di.Dispatcher
 import net.melisma.core_data.di.MailDispatchers
 import net.melisma.core_data.di.MicrosoftRepo
 import net.melisma.core_data.errors.ErrorMapperService
-import net.melisma.core_data.errors.MappedErrorDetails
 import net.melisma.core_data.model.Account
-import net.melisma.core_data.model.GenericAuthErrorType
+import net.melisma.core_data.model.ErrorDetails
 import net.melisma.core_data.model.GenericAuthResult
 import net.melisma.core_data.model.GenericSignOutResult
 import net.melisma.core_data.repository.AccountRepository
@@ -110,7 +107,7 @@ class DefaultAccountRepository @Inject constructor(
                     _overallApplicationAuthState.value = newAuthState
                 }
 
-                if (activeGoogleAccountHolder.activeAccountId.value == null) {
+                if (activeGoogleAccountHolder.getActiveAccountIdValue() == null) {
                     accounts.firstOrNull { it.providerType == Account.PROVIDER_TYPE_GOOGLE && !it.needsReauthentication }
                         ?.let { googleAccount ->
                             Timber.tag(TAG)
@@ -201,381 +198,481 @@ class DefaultAccountRepository @Inject constructor(
         }
     }
 
+    private fun mapGooglePersistenceFailureToAuthError(
+        failure: PersistenceResult.Failure<GooglePersistenceErrorType>
+    ): GenericAuthResult.Error {
+        Timber.tag(TAG).w(failure.cause, "Google Persistence Failure: ${failure.errorType}")
+        val message = failure.message ?: "Failed to save Google account details."
+        val code = failure.errorType.name // Using enum name as code
+        return GenericAuthResult.Error(
+            ErrorDetails(
+                message = message,
+                code = code,
+                cause = failure.cause
+            )
+        )
+    }
+
     override fun signIn(
         activity: Activity,
         loginHint: String?,
         providerType: String
     ): Flow<GenericAuthResult> {
-        Timber.tag(TAG).d("signIn called for provider: $providerType, loginHint: $loginHint")
-        _accountActionMessage.tryEmit(null)
+        Timber.tag(TAG).i("signIn called for provider: $providerType, loginHint: $loginHint")
+        _accountActionMessage.tryEmit(null) // Clear previous messages
 
         return when (providerType.uppercase()) {
-            Account.PROVIDER_TYPE_MS -> microsoftAccountRepository.signIn(
-                activity,
-                loginHint,
-                providerType
-            )
-            Account.PROVIDER_TYPE_GOOGLE -> {
-                externalScope.launch {
-                    try {
-                        Timber.tag(TAG)
-                            .d("Google Sign-In: Calling googleAuthManager.signInInteractive.")
-                        val authIntent = googleAuthManager.signInInteractive(activity, loginHint)
-                        googleAuthResultChannel.send(
-                            GenericAuthResult.UiActionRequired(authIntent)
-                        )
-                        Timber.tag(TAG).d("Google Sign-In: UiActionRequired emitted to channel.")
-                    } catch (e: Exception) {
-                        Timber.tag(TAG).e(
-                            e,
-                            "Google Sign-In: Error during signInInteractive or sending to channel."
-                        )
-                        val googleErrorMapper =
-                            getErrorMapperForProvider(Account.PROVIDER_TYPE_GOOGLE)
-                        val details = googleErrorMapper?.mapExceptionToErrorDetails(e)
-                            ?: MappedErrorDetails(
-                                "Failed to initiate Google sign-in: ${e.message ?: "Unknown cause"}",
-                                GenericAuthErrorType.UNKNOWN_ERROR,
-                                e.javaClass.simpleName
-                            )
-                        googleAuthResultChannel.trySend(
-                            GenericAuthResult.Error(
-                                message = details.message,
-                                type = details.type,
-                                providerSpecificErrorCode = details.providerSpecificErrorCode
-                            )
-                        )
-                    }
-                }
-                googleAuthResultChannel.receiveAsFlow()
-                    .onEach { Timber.tag(TAG).d("Google signIn Flow emitting: $it") }
+            Account.PROVIDER_TYPE_MS -> {
+                microsoftAccountRepository.signIn(activity, loginHint, providerType)
             }
-            else -> {
-                Timber.tag(TAG).w("Unsupported providerType for signIn: $providerType")
-                flowOf(
-                    GenericAuthResult.Error(
-                        message = "Unsupported provider: $providerType",
-                        type = GenericAuthErrorType.INVALID_REQUEST
+
+            Account.PROVIDER_TYPE_GOOGLE -> flow {
+                emit(GenericAuthResult.Loading)
+                // For Google, we first get the intent, emit UiActionRequired,
+                // then the actual result comes via handleAuthenticationResult -> googleAuthResultChannel
+                try {
+                    // Use the existing getAuthenticationIntentRequest structure
+                    // GMAIL_SCOPES_FOR_LOGIN is passed but GoogleAuthManager.signInInteractive may not use it.
+                    getAuthenticationIntentRequest(providerType, activity, GMAIL_SCOPES_FOR_LOGIN)
+                        .collect { intentResult ->
+                            // We expect UiActionRequired or an immediate Error from intent creation
+                            emit(intentResult)
+                            if (intentResult is GenericAuthResult.UiActionRequired) {
+                                // Once intent is emitted, further results will come via the channel
+                                googleAuthResultChannel.receiveAsFlow().collect { channelResult ->
+                                    emit(channelResult)
+                                }
+                            }
+                        }
+                } catch (e: Exception) {
+                    Timber.tag(TAG).e(e, "Exception during Google signIn (intent request phase)")
+                    val errorMapper = getErrorMapperForProvider(Account.PROVIDER_TYPE_GOOGLE)
+                    val errorDetails = errorMapper?.mapExceptionToErrorDetails(e)
+                        ?: ErrorDetails(
+                            message = e.message ?: "Failed to initiate Google sign-in.",
+                            code = "GoogleSignInSetupException"
+                        )
+                    emit(GenericAuthResult.Error(errorDetails))
+                }
+            }
+
+            else -> flowOf(
+                GenericAuthResult.Error(
+                    ErrorDetails(
+                        message = "Unsupported provider type: $providerType",
+                        code = "UnsupportedProvider"
                     )
                 )
-            }
-        }
-    }
-
-    override suspend fun handleAuthenticationResult(
-        providerType: String,
-        resultCode: Int,
-        data: Intent?
-    ) {
-        Timber.tag(TAG)
-            .d("handleAuthenticationResult for provider: $providerType, resultCode: $resultCode")
-        _accountActionMessage.tryEmit(null)
-
-        when (providerType.uppercase()) {
-            Account.PROVIDER_TYPE_MS -> {
-                microsoftAccountRepository.handleAuthenticationResult(
-                    providerType,
-                    resultCode,
-                    data
-                )
-            }
-            Account.PROVIDER_TYPE_GOOGLE -> {
-                val authResponse = data?.let { AuthorizationResponse.fromIntent(it) }
-                val authException = data?.let { AuthorizationException.fromIntent(it) }
-
-                googleAuthManager.handleAuthorizationResponse(authResponse, authException)
-                    .onEach { result ->
-                        Timber.tag(TAG).d("Google handleAuthorizationResponse result: $result")
-                        val genericResult: GenericAuthResult = when (result) {
-                            is GoogleSignInResult.Success -> {
-                                val account =
-                                    mapManagedGoogleAccountToGenericAccount(result.managedAccount)
-                                externalScope.launch(ioDispatcher) {
-                                    Timber.tag(TAG)
-                                        .d("Google Auth Success: Saving account ${account.username} to DAO.")
-                                    accountDao.insertOrUpdateAccount(account.toEntity())
-                                    activeGoogleAccountHolder.setActiveAccountId(account.id)
-                                }
-                                GenericAuthResult.Success(account)
-                            }
-                            is GoogleSignInResult.Error -> {
-                                val details =
-                                    getErrorMapperForProvider(Account.PROVIDER_TYPE_GOOGLE)
-                                        ?.mapExceptionToErrorDetails(result.exception)
-                                        ?: MappedErrorDetails(
-                                            result.errorMessage,
-                                            GenericAuthErrorType.AUTHENTICATION_FAILED,
-                                            result.exception?.javaClass?.simpleName
-                                        )
-                                GenericAuthResult.Error(
-                                    message = details.message,
-                                    type = details.type,
-                                    providerSpecificErrorCode = details.providerSpecificErrorCode
-                                )
-                            }
-                            is GoogleSignInResult.Cancelled -> GenericAuthResult.Cancelled
-                            else -> {
-                                Timber.tag(TAG).e("Unexpected GoogleSignInResult type: $result")
-                                GenericAuthResult.Error(
-                                    message = "Unexpected Google sign-in result: ${result::class.java.simpleName}",
-                                    type = GenericAuthErrorType.UNKNOWN_ERROR,
-                                    providerSpecificErrorCode = "UNEXPECTED_TYPE"
-                                )
-                            }
-                        }
-                        googleAuthResultChannel.trySend(genericResult)
-                        if (genericResult is GenericAuthResult.Success) {
-                            _accountActionMessage.tryEmit("Signed in as ${genericResult.account.username}")
-                        } else if (genericResult is GenericAuthResult.Error) {
-                            _accountActionMessage.tryEmit("Google sign-in error: ${genericResult.message}")
-                        }
-                    }
-                    .catch { e ->
-                        Timber.tag(TAG).e(e, "Error in Google handleAuthorizationResponse flow.")
-                        val details = getErrorMapperForProvider(Account.PROVIDER_TYPE_GOOGLE)
-                            ?.mapExceptionToErrorDetails(e)
-                            ?: MappedErrorDetails(
-                                "Google sign-in processing error: ${e.message ?: "Unknown cause"}",
-                                GenericAuthErrorType.UNKNOWN_ERROR,
-                                e.javaClass.simpleName
-                            )
-                        googleAuthResultChannel.trySend(
-                            GenericAuthResult.Error(
-                                message = details.message,
-                                type = details.type,
-                                providerSpecificErrorCode = details.providerSpecificErrorCode
-                            )
-                        )
-                    }
-                    .launchIn(externalScope)
-            }
+            )
         }
     }
 
     override fun signOut(account: Account): Flow<GenericSignOutResult> {
         Timber.tag(TAG)
             .i("signOut called for account: ${account.username} (Provider: ${account.providerType})")
-        return flow {
-            val providerTypeUpper = account.providerType.uppercase()
-            try {
-                val result: GenericSignOutResult = when (providerTypeUpper) {
-                    Account.PROVIDER_TYPE_MS -> {
-                        microsoftAccountRepository.signOut(account).firstOrNull()?.also {
-                            if (it is GenericSignOutResult.Success) {
-                                externalScope.launch(ioDispatcher) {
-                                    Timber.tag(TAG)
-                                        .d("MS Sign-Out Success for ${account.username}: Deleting from DAO.")
-                                    accountDao.deleteAccount(account.id)
-                                }
-                            }
-                        } ?: GenericSignOutResult.Error(
-                            message = "MS sign out failed or flow empty",
-                            type = GenericAuthErrorType.AUTHENTICATION_FAILED
-                        )
-                    }
-                    Account.PROVIDER_TYPE_GOOGLE -> {
-                        // Collect the single result from the Flow returned by googleAuthManager.signOut
-                        val actualSignOutResult = googleAuthManager.signOut(account.id).first()
-                        when (actualSignOutResult) {
+        _accountActionMessage.tryEmit(null)
+        return when (account.providerType.uppercase()) {
+            Account.PROVIDER_TYPE_MS -> {
+                microsoftAccountRepository.signOut(account)
+            }
+
+            Account.PROVIDER_TYPE_GOOGLE -> flow {
+                emit(GenericSignOutResult.Loading)
+                try {
+                    Timber.tag(TAG).d("Attempting Google sign-out for account ID: ${account.id}")
+                    googleAuthManager.signOut(account.id).collect { signOutResult ->
+                        when (signOutResult) {
                             is GoogleSignOutResult.Success -> {
-                                externalScope.launch(ioDispatcher) {
-                                    Timber.tag(TAG)
-                                        .d("Google Sign-Out Success for ${account.username}: Deleting from DAO.")
-                                    accountDao.deleteAccount(account.id)
-                                }
-                                if (activeGoogleAccountHolder.activeAccountId.value == account.id) {
-                                    activeGoogleAccountHolder.setActiveAccountId(null)
-                                }
-                                GenericSignOutResult.Success
-                            }
-                            is GoogleSignOutResult.Error -> {
                                 Timber.tag(TAG)
-                                    .w("GoogleAuthManager sign out failed for ${account.username}: ${actualSignOutResult.errorMessage}. DAO state not changed.")
-                                GenericSignOutResult.Error(
-                                    message = "Google sign out failed: ${actualSignOutResult.errorMessage}",
-                                    type = GenericAuthErrorType.AUTHENTICATION_FAILED
-                                )
+                                    .i("Google sign-out successful for account: ${account.username}")
+                                accountDao.deleteAccount(account.id)
+                                Timber.tag(TAG).i("Account ${account.username} removed from DB.")
+                                if (activeGoogleAccountHolder.getActiveAccountIdValue() == account.id) {
+                                    activeGoogleAccountHolder.setActiveAccountId(null) // Clear active account
+                                    Timber.tag(TAG).d("Cleared active Google account ID.")
+                                }
+                                emit(GenericSignOutResult.Success)
+                                _accountActionMessage.tryEmit("Signed out ${account.username}")
                             }
 
-                            else -> {
-                                Timber.tag(TAG)
-                                    .e("Unexpected GoogleSignOutResult type: $actualSignOutResult")
-                                GenericSignOutResult.Error(
-                                    message = "Unexpected Google sign-out result: ${actualSignOutResult::class.simpleName}",
-                                    type = GenericAuthErrorType.UNKNOWN_ERROR,
-                                    providerSpecificErrorCode = "UNEXPECTED_SIGNOUT_TYPE"
+                            is GoogleSignOutResult.Error -> {
+                                val errorMapper =
+                                    getErrorMapperForProvider(Account.PROVIDER_TYPE_GOOGLE)
+                                // signOutResult.exception might be null if it's a persistenceFailure
+                                val finalException = signOutResult.exception
+                                    ?: signOutResult.persistenceFailure?.cause
+                                val errorDetails = errorMapper?.mapExceptionToErrorDetails(
+                                    finalException ?: Throwable(signOutResult.errorMessage)
                                 )
+                                    ?: ErrorDetails(
+                                        message = signOutResult.errorMessage,
+                                        code = signOutResult.persistenceFailure?.errorType?.name
+                                            ?: "GoogleSignOutError"
+                                    )
+
+                                Timber.tag(TAG).w(
+                                    finalException,
+                                    "Google Sign-Out error: ${errorDetails.message}"
+                                )
+                                accountDao.deleteAccount(account.id) // Still attempt local cleanup
+                                Timber.tag(TAG)
+                                    .w("Account ${account.username} removed from DB despite sign-out error.")
+                                if (activeGoogleAccountHolder.getActiveAccountIdValue() == account.id) {
+                                    activeGoogleAccountHolder.setActiveAccountId(null)
+                                }
+                                emit(GenericSignOutResult.Error(errorDetails))
+                                _accountActionMessage.tryEmit("Sign out error for ${account.username}: ${errorDetails.message}")
                             }
                         }
                     }
-
-                    else -> GenericSignOutResult.Error(
-                        message = "Unsupported provider for sign out: ${account.providerType}",
-                        type = GenericAuthErrorType.INVALID_REQUEST
-                    )
-                }
-                emit(result)
-                if (result is GenericSignOutResult.Success) {
-                    tryEmitMessage("Signed out ${account.username}")
-                } else if (result is GenericSignOutResult.Error) {
-                    tryEmitMessage("Sign out error for ${account.username}: ${result.message}")
-                }
-            } catch (e: Exception) {
-                Timber.tag(TAG).e(e, "Exception during signOut for ${account.username}")
-                val mappedDetailsFromErrorMapper: MappedErrorDetails? =
-                    getErrorMapperForProvider(providerTypeUpper)?.mapExceptionToErrorDetails(e)
-
-                val finalErrorDetails: MappedErrorDetails =
-                    mappedDetailsFromErrorMapper ?: MappedErrorDetails(
-                        message = "Sign out failed: ${e.message ?: "Unknown cause"}",
-                        type = GenericAuthErrorType.UNKNOWN_ERROR
+                } catch (e: Exception) {
+                    Timber.tag(TAG)
+                        .e(e, "Exception during Google sign-out flow for ${account.username}")
+                    val errorMapper = getErrorMapperForProvider(Account.PROVIDER_TYPE_GOOGLE)
+                    val errorDetails = errorMapper?.mapExceptionToErrorDetails(e)
+                        ?: ErrorDetails(
+                            message = e.message ?: "Unexpected error during sign-out.",
+                            code = "GoogleSignOutException"
                         )
-                emit(
-                    GenericSignOutResult.Error(
-                        message = finalErrorDetails.message,
-                        type = finalErrorDetails.type,
-                        providerSpecificErrorCode = finalErrorDetails.providerSpecificErrorCode
+                    accountDao.deleteAccount(account.id) // Local cleanup on unexpected error
+                    if (activeGoogleAccountHolder.getActiveAccountIdValue() == account.id) {
+                        activeGoogleAccountHolder.setActiveAccountId(null)
+                    }
+                    emit(GenericSignOutResult.Error(errorDetails))
+                    _accountActionMessage.tryEmit("Sign out error: ${errorDetails.message}")
+                }
+            }
+
+            else -> flowOf(
+                GenericSignOutResult.Error(
+                    // Use account.providerType as providerType from argument might be out of scope or incorrect
+                    ErrorDetails(
+                        message = "Unsupported provider type: ${account.providerType}",
+                        code = "UnsupportedProvider"
                     )
                 )
-                tryEmitMessage("Sign out error for ${account.username}: ${finalErrorDetails.message}")
-            }
+            )
         }
     }
 
-    override fun clearActionMessage() {
-        Timber.tag(TAG).d("clearActionMessage called.")
-        _accountActionMessage.tryEmit(null)
-    }
-
-    override suspend fun markAccountForReauthentication(accountId: String, providerType: String) {
+    override suspend fun handleAuthenticationResult(
+        providerType: String,
+        resultCode: Int, // Unused for new Google flow, AppAuth handles it. Kept for interface.
+        data: Intent?
+    ) {
         Timber.tag(TAG)
-            .d("Marking account for re-authentication: ID $accountId, Provider: $providerType")
-        if (providerType == Account.PROVIDER_TYPE_GOOGLE) {
-            val authManagerResult = googleAuthManager.requestReauthentication(accountId)
-            val accountEntity = accountDao.getAccountById(accountId).firstOrNull()
-
-            if (accountEntity != null) {
+            .d("handleAuthenticationResult called for provider: $providerType, resultCode: $resultCode")
+        _accountActionMessage.tryEmit(null)
+        if (providerType.equals(Account.PROVIDER_TYPE_GOOGLE, ignoreCase = true)) {
+            if (data == null) {
                 Timber.tag(TAG)
-                    .i("GoogleAuthManager.requestReauthentication for ${accountEntity.username} (ID: $accountId) completed. Result: $authManagerResult")
-
-                val updatedEntity = accountEntity.copy(needsReauthentication = true)
-                accountDao.insertOrUpdateAccount(updatedEntity)
-                Timber.tag(TAG)
-                    .d("Account $accountId in DAO marked for needsReauthentication = true")
-
-                if (authManagerResult is PersistenceResult.Failure<*>) {
-                    @Suppress("UNCHECKED_CAST")
-                    val failure =
-                        authManagerResult as PersistenceResult.Failure<GooglePersistenceErrorType>
-                    Timber.tag(TAG).w(
-                        "GoogleAuthManager.requestReauthentication call returned failure for $accountId: ${failure.errorType}.",
-                        failure.cause
+                    .w("Google Auth: Null data intent received in handleAuthenticationResult.")
+                googleAuthResultChannel.send(
+                    GenericAuthResult.Error(
+                        ErrorDetails(
+                            message = "Authentication failed: No data received.",
+                            code = "NullAuthIntentData"
+                        )
                     )
-                    _accountActionMessage.tryEmit("Could not fully process re-auth request with Google: ${failure.message}")
-                } else {
-                    _accountActionMessage.tryEmit("Account ${accountEntity.username} marked for re-authentication.")
-                }
-            } else {
-                Timber.tag(TAG)
-                    .w("Could not find Google account with ID $accountId in DAO to mark for re-authentication.")
-                _accountActionMessage.tryEmit("Account not found to mark for re-authentication.")
+                )
+                return
             }
-        } else if (providerType == Account.PROVIDER_TYPE_MS) {
-            Timber.tag(TAG)
-                .d("Marking Microsoft account $accountId for re-authentication. Delegating to MicrosoftAccountRepository.")
-            microsoftAccountRepository.markAccountForReauthentication(accountId, providerType)
+
+            val authResponse = AuthorizationResponse.fromIntent(data)
+            val authException = AuthorizationException.fromIntent(data)
+
+            googleAuthManager.handleAuthorizationResponse(authResponse, authException)
+                .collect { googleResult ->
+                    when (googleResult) {
+                        is GoogleSignInResult.Success -> {
+                            val genericAccount =
+                                mapManagedGoogleAccountToGenericAccount(googleResult.managedAccount)
+                            Timber.tag(TAG)
+                                .i("Google Auth (handleResult) successful for: ${genericAccount.username}, saving to DB.")
+                            val saveOpResult = saveAndSetAccountActive(
+                                genericAccount,
+                                Account.PROVIDER_TYPE_GOOGLE
+                            )
+                            googleAuthResultChannel.send(saveOpResult)
+                            if (saveOpResult is GenericAuthResult.Success) {
+                                _accountActionMessage.tryEmit("Signed in as ${saveOpResult.account.username}")
+                            } else if (saveOpResult is GenericAuthResult.Error) {
+                                _accountActionMessage.tryEmit("Google sign-in error: ${saveOpResult.details.message}")
+                            }
+                        }
+
+                        is GoogleSignInResult.Error -> {
+                            val errorMapper =
+                                getErrorMapperForProvider(Account.PROVIDER_TYPE_GOOGLE)
+                            val errorDetails = errorMapper?.mapExceptionToErrorDetails(
+                                googleResult.exception ?: Throwable(googleResult.errorMessage)
+                            )
+                                ?: ErrorDetails(
+                                    message = googleResult.errorMessage,
+                                    code = googleResult.persistenceFailure?.errorType?.name
+                                        ?: "GoogleAuthError"
+                                )
+                            Timber.tag(TAG).w(
+                                googleResult.exception,
+                                "Google Auth (handleResult) error: ${errorDetails.message}"
+                            )
+                            googleAuthResultChannel.send(GenericAuthResult.Error(errorDetails))
+                            _accountActionMessage.tryEmit("Google sign-in error: ${errorDetails.message}")
+                        }
+
+                        is GoogleSignInResult.Cancelled -> {
+                            Timber.tag(TAG).i("Google Auth (handleResult) cancelled by user.")
+                            val errorDetails = ErrorDetails(
+                                message = "Sign-in cancelled by user.",
+                                code = "UserCancellation"
+                            )
+                            googleAuthResultChannel.send(GenericAuthResult.Error(errorDetails))
+                            _accountActionMessage.tryEmit("Sign-in cancelled.")
+                        }
+                    }
+                }
         } else {
-            Timber.tag(TAG).w("Unknown provider type for marking re-authentication: $providerType")
+            microsoftAccountRepository.handleAuthenticationResult(providerType, resultCode, data)
         }
-    }
-
-    fun getGoogleLoginScopes(): List<String> {
-        return GMAIL_SCOPES_FOR_LOGIN
-    }
-
-    fun GooglePersistenceErrorType.toGenericAuthErrorType(): GenericAuthErrorType {
-        return when (this) {
-            GooglePersistenceErrorType.ACCOUNT_NOT_FOUND,
-            GooglePersistenceErrorType.MISSING_AUTH_STATE_JSON,
-            GooglePersistenceErrorType.AUTH_STATE_DESERIALIZATION_FAILED -> GenericAuthErrorType.ACCOUNT_NOT_FOUND_OR_INVALID
-            GooglePersistenceErrorType.ENCRYPTION_FAILED,
-            GooglePersistenceErrorType.DECRYPTION_FAILED -> GenericAuthErrorType.SECURITY_ERROR
-            GooglePersistenceErrorType.STORAGE_FAILED,
-            GooglePersistenceErrorType.TOKEN_UPDATE_FAILED -> GenericAuthErrorType.STORAGE_ERROR
-            GooglePersistenceErrorType.TOKEN_REFRESH_INVALID_GRANT -> GenericAuthErrorType.AUTHENTICATION_FAILED
-            GooglePersistenceErrorType.UNKNOWN_ERROR,
-            GooglePersistenceErrorType.AUTH_STATE_SERIALIZATION_FAILED -> GenericAuthErrorType.UNKNOWN_ERROR
-        }
-    }
-
-    override suspend fun syncAccount(accountId: String): Result<Unit> {
-        Log.d(TAG, "syncAccount called for accountId: $accountId")
-        Timber.tag(TAG).w("syncAccount for $accountId not fully implemented. Placeholder.")
-        return Result.failure(NotImplementedError("syncAccount not implemented for $accountId"))
     }
 
     override fun getAuthenticationIntentRequest(
         providerType: String,
         activity: Activity,
-        scopes: List<String>?
+        scopes: List<String>? // Scopes for Google are now typically managed by GoogleAuthManager or are standard
     ): Flow<GenericAuthResult> {
-        Timber.tag(TAG).d("getAuthenticationIntentRequest called for provider: $providerType")
         _accountActionMessage.tryEmit(null)
-
         return when (providerType.uppercase()) {
+            Account.PROVIDER_TYPE_GOOGLE -> flow {
+                emit(GenericAuthResult.Loading)
+                try {
+                    // loginHint is not directly passed to signInInteractive in this revised flow,
+                    // but could be retrieved from a user input field if needed.
+                    // For now, passing null as loginHint.
+                    val authRequestIntent = googleAuthManager.signInInteractive(
+                        activity,
+                        null
+                    ) // loginHint can be passed if available
+                    emit(GenericAuthResult.UiActionRequired(authRequestIntent))
+                } catch (e: Exception) {
+                    Timber.tag(TAG).e(e, "Failed to get Google authentication intent")
+                    val errorMapper = getErrorMapperForProvider(Account.PROVIDER_TYPE_GOOGLE)
+                    val errorDetails = errorMapper?.mapExceptionToErrorDetails(e)
+                        ?: ErrorDetails(
+                            message = e.message ?: "Could not prepare Google authentication.",
+                            code = "GoogleIntentPrepError"
+                        )
+                    emit(GenericAuthResult.Error(errorDetails))
+                }
+            }
+
             Account.PROVIDER_TYPE_MS -> {
-                (microsoftAccountRepository as? AccountRepository)?.getAuthenticationIntentRequest(
+                microsoftAccountRepository.getAuthenticationIntentRequest(
                     providerType,
                     activity,
                     scopes
-                ) ?: flowOf(
-                    GenericAuthResult.Error(
-                        message = "Microsoft provider does not support getAuthenticationIntentRequest or is not of expected type.",
-                        type = GenericAuthErrorType.INVALID_REQUEST
-                    )
                 )
             }
-            Account.PROVIDER_TYPE_GOOGLE -> {
-                flow {
+
+            else -> flowOf(
+                GenericAuthResult.Error(
+                    ErrorDetails(
+                        message = "Unsupported provider: $providerType for auth intent.",
+                        code = "UnsupportedProviderIntent"
+                    )
+                )
+            )
+        }
+    }
+
+    override suspend fun markAccountForReauthentication(accountId: String, providerType: String) {
+        Timber.tag(TAG)
+            .i("Marking account $accountId (Provider: $providerType) for re-authentication.")
+        _accountActionMessage.tryEmit(null)
+        val accountEntity = accountDao.getAccountById(accountId).firstOrNull()
+        if (accountEntity != null) {
+            val updatedEntity = accountEntity.copy(needsReauthentication = true)
+            val result: PersistenceResult<Unit> =
+                try {
+                    accountDao.insertOrUpdateAccount(updatedEntity)
+                    PersistenceResult.Success(Unit)
+                } catch (e: Exception) {
+                    Timber.tag(TAG)
+                        .e(e, "DAO error marking account $accountId for re-authentication.")
+                    PersistenceResult.Failure(
+                        errorType = GooglePersistenceErrorType.STORAGE_FAILED, // Or a more generic DB error type if available
+                        message = e.message ?: "Failed to update account in DB.",
+                        cause = e
+                    )
+                }
+
+            if (result is PersistenceResult.Failure<*>) { // Use wildcard for the type if not specific
+                Timber.tag(TAG).e(
+                    result.cause,
+                    "Failed to mark account $accountId for re-authentication in DB: ${result.message}"
+                )
+                _accountActionMessage.tryEmit("Error updating account state for re-authentication.")
+            } else {
+                Timber.tag(TAG)
+                    .i("Account $accountId successfully marked for re-authentication in DB.")
+                _accountActionMessage.tryEmit("Account ${accountEntity.toDomainAccount().username} marked for re-authentication.")
+            }
+
+        } else {
+            Timber.tag(TAG)
+                .w("Account $accountId not found in DB. Cannot mark for re-authentication.")
+            _accountActionMessage.tryEmit("Could not find account to mark for re-authentication.")
+        }
+    }
+
+    override fun clearActionMessage() {
+        Timber.tag(TAG).d("Clearing action message.")
+        _accountActionMessage.tryEmit(null)
+    }
+
+    // Centralized function for handling account saving and active account setting
+    private suspend fun saveAndSetAccountActive(
+        account: Account,
+        providerType: String
+    ): GenericAuthResult {
+        // Ensure PersistenceResult type is correctly handled
+        val saveResult: PersistenceResult<Unit> =
+            try {
+                accountDao.insertOrUpdateAccount(account.toEntity())
+                PersistenceResult.Success(Unit)
+            } catch (e: Exception) {
+                Timber.tag(TAG).e(e, "DAO error saving account ${account.username}.")
+                PersistenceResult.Failure(
+                    errorType = GooglePersistenceErrorType.STORAGE_FAILED, // Or a more generic DB error type
+                    message = e.message ?: "Failed to save account ${account.username} to DB.",
+                    cause = e
+                )
+            }
+
+        return if (saveResult is PersistenceResult.Success<Unit>) { // Specify type for Success
+            Timber.tag(TAG)
+                .i("Account ${account.username} ($providerType) saved to DB successfully.")
+            if (providerType == Account.PROVIDER_TYPE_GOOGLE) {
+                activeGoogleAccountHolder.setActiveAccountId(account.id)
+            }
+            GenericAuthResult.Success(account)
+        } else {
+            // Assuming saveResult must be Failure if not Success
+            val failure = saveResult as PersistenceResult.Failure<*> // Use wildcard
+            Timber.tag(TAG).e(
+                failure.cause,
+                "Failed to save $providerType account ${account.username} to DB: ${failure.message}"
+            )
+
+            val errorCode = if (failure.errorType is Enum<*>) {
+                (failure.errorType as Enum<*>).name
+            } else {
+                failure.errorType?.toString() ?: "DB_SAVE_ERROR"
+            }
+
+            val errorDetails = ErrorDetails(
+                message = failure.message ?: "Failed to save account.",
+                code = errorCode,
+                cause = failure.cause
+            )
+            GenericAuthResult.Error(errorDetails)
+        }
+    }
+
+    override suspend fun syncAccount(accountId: String): Result<Unit> {
+        Timber.tag(TAG).i("syncAccount called for accountId: $accountId")
+        _accountActionMessage.tryEmit(null)
+        val account = accountDao.getAccountById(accountId).firstOrNull()?.toDomainAccount()
+
+        return if (account == null) {
+            Timber.tag(TAG).w("Account $accountId not found in DB for sync.")
+            _accountActionMessage.tryEmit("Account not found for sync.")
+            Result.failure(Exception("Account $accountId not found for sync."))
+        } else {
+            when (account.providerType.uppercase()) {
+                Account.PROVIDER_TYPE_MS -> microsoftAccountRepository.syncAccount(accountId)
+                Account.PROVIDER_TYPE_GOOGLE -> {
+                    Timber.tag(TAG)
+                        .d("Google account sync for ${account.username}: checking token status.")
                     try {
-                        Timber.tag(TAG)
-                            .d("Google getAuthenticationIntentRequest: Calling googleAuthManager.signInInteractive.")
-                        val authIntent = googleAuthManager.signInInteractive(activity, null)
-                        emit(GenericAuthResult.UiActionRequired(authIntent))
-                        Timber.tag(TAG)
-                            .d("Google getAuthenticationIntentRequest: UiActionRequired emitted.")
+                        when (val tokenResult = googleAuthManager.getFreshAccessToken(account.id)) {
+                            is GoogleGetTokenResult.Success -> {
+                                Timber.tag(TAG)
+                                    .i("Google token refresh successful for ${account.username}.")
+                                if (account.needsReauthentication) {
+                                    Timber.tag(TAG)
+                                        .i("Google account ${account.username} no longer requires re-authentication. Updating DB.")
+                                    val updatedEntity =
+                                        account.toEntity().copy(needsReauthentication = false)
+                                    accountDao.insertOrUpdateAccount(updatedEntity)
+                                    _accountActionMessage.tryEmit("${account.username} is now re-authenticated.")
+                                }
+                                Result.success(Unit)
+                            }
+
+                            is GoogleGetTokenResult.NeedsReauthentication -> {
+                                Timber.tag(TAG)
+                                    .w("Google account ${account.username} requires re-authentication (explicit). Marking in DB.")
+                                if (!account.needsReauthentication) {
+                                    markAccountForReauthentication(
+                                        account.id,
+                                        Account.PROVIDER_TYPE_GOOGLE
+                                    ) // This will also emit a message
+                                } else {
+                                    _accountActionMessage.tryEmit("${account.username} still requires re-authentication.")
+                                }
+                                // For sync, this is still a "successful" sync in that we determined state.
+                                // The re-auth is a state of the account, not necessarily a sync failure.
+                                // However, the calling UI might want to know this. For now, treat as success.
+                                Result.success(Unit) // Or Result.failure if strict "synced" means "token valid"
+                            }
+
+                            is GoogleGetTokenResult.Error -> {
+                                Timber.tag(TAG).w(
+                                    tokenResult.exception,
+                                    "Google token refresh error for ${account.username}: ${tokenResult.errorMessage}"
+                                )
+                                val needsReAuthError =
+                                    tokenResult.errorType == GooglePersistenceErrorType.TOKEN_REFRESH_INVALID_GRANT ||
+                                            tokenResult.errorMessage.contains(
+                                                "invalid_grant",
+                                                ignoreCase = true
+                                            )
+
+                                if (needsReAuthError && !account.needsReauthentication) {
+                                    Timber.tag(TAG)
+                                        .i("Google account ${account.username} needs re-auth due to token error. Marking.")
+                                    markAccountForReauthentication(
+                                        account.id,
+                                        Account.PROVIDER_TYPE_GOOGLE
+                                    )
+                                } else if (needsReAuthError) {
+                                    _accountActionMessage.tryEmit("${account.username} still requires re-authentication.")
+                                } else {
+                                    _accountActionMessage.tryEmit("Error syncing ${account.username}: ${tokenResult.errorMessage}")
+                                }
+                                // Depending on severity, could be success (state determined) or failure
+                                Result.failure(
+                                    tokenResult.exception
+                                        ?: Exception("Token refresh failed: ${tokenResult.errorMessage}")
+                                )
+                            }
+                        }
                     } catch (e: Exception) {
                         Timber.tag(TAG).e(
                             e,
-                            "Google getAuthenticationIntentRequest: Error during signInInteractive."
+                            "Exception during Google account sync check for ${account.username}"
                         )
-                        val googleErrorMapper =
-                            getErrorMapperForProvider(Account.PROVIDER_TYPE_GOOGLE)
-                        val details = googleErrorMapper?.mapExceptionToErrorDetails(e)
-                            ?: MappedErrorDetails(
-                                "Failed to create Google sign-in intent: ${e.message ?: "Unknown cause"}",
-                                GenericAuthErrorType.UNKNOWN_ERROR,
-                                e.javaClass.simpleName
-                            )
-                        emit(
-                            GenericAuthResult.Error(
-                                message = details.message,
-                                type = details.type,
-                                providerSpecificErrorCode = details.providerSpecificErrorCode
-                            )
-                        )
+                        _accountActionMessage.tryEmit("Error syncing ${account.username}: ${e.message}")
+                        Result.failure(e)
                     }
                 }
-            }
-            else -> {
-                Timber.tag(TAG)
-                    .w("Unsupported providerType for getAuthenticationIntentRequest: $providerType")
-                flowOf(
-                    GenericAuthResult.Error(
-                        message = "Unsupported provider: $providerType",
-                        type = GenericAuthErrorType.INVALID_REQUEST
-                    )
-                )
+
+                else -> {
+                    Timber.tag(TAG).w("Unsupported provider type for sync: ${account.providerType}")
+                    _accountActionMessage.tryEmit("Cannot sync account: Unsupported provider.")
+                    Result.failure(Exception("Unsupported provider type for sync: ${account.providerType}"))
+                }
             }
         }
     }
