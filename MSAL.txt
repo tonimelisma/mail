@@ -1,0 +1,742 @@
+SKIP NAVIGATION LINKS OVERVIEWPACKAGECLASSTREEDEPRECATEDINDEXHELP PREV CLASSNEXT CLASSFRAMESNO FRAMESSUMMARY: NESTED | FIELD | CONSTR | METHODDETAIL: FIELD | CONSTR | METHOD
+com.microsoft.identity.client
+Interface IPublicClientApplication
+
+All Known Subinterfaces:
+IMultipleAccountPublicClientApplication, ISingleAccountPublicClientApplication
+All Known Implementing Classes:
+MultipleAccountPublicClientApplication, PublicClientApplication, SingleAccountPublicClientApplication
+
+public interface IPublicClientApplication
+Nested Class Summary
+
+Nested Classes
+Modifier and Type	Interface and Description
+static interface 	IPublicClientApplication.ApplicationCreatedListener
+Listener callback for asynchronous initialization of IPublicClientApplication object.
+static interface 	IPublicClientApplication.DeviceCodeFlowCallback
+Callback object used in Device Code Flow.
+static interface 	IPublicClientApplication.IMultipleAccountApplicationCreatedListener
+Listener callback for asynchronous initialization of IMultipleAccountPublicClientApplication object.
+static interface 	IPublicClientApplication.ISingleAccountApplicationCreatedListener
+Listener callback for asynchronous initialization of ISingleAccountPublicClientApplication object.
+static interface 	IPublicClientApplication.LoadAccountsCallback 
+static interface 	IPublicClientApplication.SignedHttpRequestRequestCallback
+Callback used to receive the result of generateSignedHttpRequest(IAccount, PoPAuthenticationScheme).
+Method Summary
+
+All MethodsInstance MethodsAbstract Methods
+Modifier and Type	Method and Description
+void	acquireToken(AcquireTokenParameters acquireTokenParameters)
+Acquire token interactively, will pop-up webUI.
+void	acquireToken(android.app.Activity activity, java.lang.String[] scopes, AuthenticationCallback callback)
+Acquire token interactively, will pop-up webUI.
+IAuthenticationResult	acquireTokenSilent(AcquireTokenSilentParameters acquireTokenSilentParameters)
+Perform acquire token silent call.
+void	acquireTokenSilentAsync(AcquireTokenSilentParameters acquireTokenSilentParameters)
+Perform acquire token silent call.
+void	acquireTokenWithDeviceCode(java.lang.String[] scopes, IPublicClientApplication.DeviceCodeFlowCallback callback)
+Perform the Device Code Flow (DCF) protocol to allow a device without input capability to authenticate and get a new access token.
+java.lang.String	generateSignedHttpRequest(IAccount account, PoPAuthenticationScheme popParameters)
+Signs the provided PoPAuthenticationScheme parameters into a JWT on behalf of the provided IAccount.
+void	generateSignedHttpRequest(IAccount account, PoPAuthenticationScheme popParameters, IPublicClientApplication.SignedHttpRequestRequestCallback callback)
+Signs the provided PoPAuthenticationScheme parameters into a JWT on behalf of the provided IAccount.
+PublicClientApplicationConfiguration	getConfiguration()
+Returns the PublicClientConfiguration for this instance of PublicClientApplication.
+boolean	isSharedDevice()
+Returns whether the application is being run on a device that is marked as a shared.
+Method Detail
+
+acquireToken
+void acquireToken(android.app.Activity activity,
+                  java.lang.String[] scopes,
+                  AuthenticationCallback callback)
+Acquire token interactively, will pop-up webUI. Interactive flow will skip the cache lookup. Default value for Prompt is Prompt.SELECT_ACCOUNT.
+Parameters:
+activity - Non-null Activity that is used as the parent activity for launching the com.microsoft.identity.common.internal.providers.oauth2.AuthorizationActivity.
+scopes - The non-null array of scopes to be requested for the access token. MSAL always sends the scopes 'openid profile offline_access'. Do not include any of these scopes in the scope parameter.
+callback - The AuthenticationCallback to receive the result back. 1) If user cancels the flow by pressing the device back button, the result will be sent back via AuthenticationCallback.onCancel(). 2) If the sdk successfully receives the token back, result will be sent back via SilentAuthenticationCallback.onSuccess(IAuthenticationResult) 3) All the other errors will be sent back via SilentAuthenticationCallback.onError(MsalException).
+acquireToken
+void acquireToken(AcquireTokenParameters acquireTokenParameters)
+Acquire token interactively, will pop-up webUI. Interactive flow will skip the cache lookup. Default value for Prompt is Prompt.SELECT_ACCOUNT.
+Convey parameters via the AquireTokenParameters object
+
+Parameters:
+acquireTokenParameters -
+acquireTokenSilentAsync
+void acquireTokenSilentAsync(AcquireTokenSilentParameters acquireTokenSilentParameters)
+Perform acquire token silent call. If there is a valid access token in the cache, the sdk will return the access token; If no valid access token exists, the sdk will try to find a refresh token and use the refresh token to get a new access token. If refresh token does not exist or it fails the refresh, exception will be sent back via callback.
+Parameters:
+acquireTokenSilentParameters -
+acquireTokenSilent
+IAuthenticationResult acquireTokenSilent(AcquireTokenSilentParameters acquireTokenSilentParameters)
+                                  throws java.lang.InterruptedException,
+                                         MsalException
+Perform acquire token silent call. If there is a valid access token in the cache, the sdk will return the access token; If no valid access token exists, the sdk will try to find a refresh token and use the refresh token to get a new access token. If refresh token does not exist or it fails the refresh, exception will be sent back via callback.
+Parameters:
+acquireTokenSilentParameters -
+Throws:
+java.lang.InterruptedException
+MsalException
+acquireTokenWithDeviceCode
+void acquireTokenWithDeviceCode(java.lang.String[] scopes,
+                                IPublicClientApplication.DeviceCodeFlowCallback callback)
+Perform the Device Code Flow (DCF) protocol to allow a device without input capability to authenticate and get a new access token. Currently, flow is only supported in local MSAL. No Broker support.
+Parameters:
+scopes - the desired access scopes
+callback - callback object used to communicate with the API throughout the protocol
+getConfiguration
+PublicClientApplicationConfiguration getConfiguration()
+Returns the PublicClientConfiguration for this instance of PublicClientApplication.
+Returns:
+The PublicClientApplicationConfiguration.
+isSharedDevice
+boolean isSharedDevice()
+Returns whether the application is being run on a device that is marked as a shared. Only SingleAccountPublicClientApplications may be used on shared devices
+Returns:
+generateSignedHttpRequest
+java.lang.String generateSignedHttpRequest(IAccount account,
+                                           PoPAuthenticationScheme popParameters)
+                                    throws MsalException
+Signs the provided PoPAuthenticationScheme parameters into a JWT on behalf of the provided IAccount.
+Important: Use of this API requires setting the minimum_required_broker_protocol_version to "6.0" or higher.
+
+Parameters:
+account - The account for whom signing shall occur.
+popParameters - The input parameters.
+Returns:
+The resulting SHR.
+Throws:
+MsalException
+generateSignedHttpRequest
+void generateSignedHttpRequest(IAccount account,
+                               PoPAuthenticationScheme popParameters,
+                               IPublicClientApplication.SignedHttpRequestRequestCallback callback)
+Signs the provided PoPAuthenticationScheme parameters into a JWT on behalf of the provided IAccount.
+Important: Use of this API requires setting the minimum_required_broker_protocol_version to "6.0" or higher.
+
+Parameters:
+account - The account for whom signing shall occur.
+popParameters - The input parameters.
+callback - The callback object to receive the result (or error).
+SKIP NAVIGATION LINKS OVERVIEWPACKAGECLASSTREEDEPRECATEDINDEXHELP PREV CLASSNEXT CLASSFRAMESNO FRAMESSUMMARY: NESTED | FIELD | CONSTR | METHODDETAIL: FIELD | CONSTR | METHOD
+
+SKIP NAVIGATION LINKS OVERVIEWPACKAGECLASSTREEDEPRECATEDINDEXHELP PREV CLASSNEXT CLASSFRAMESNO FRAMESSUMMARY: NESTED | FIELD | CONSTR | METHODDETAIL: FIELD | CONSTR | METHOD
+com.microsoft.identity.client
+Interface IMultipleAccountPublicClientApplication
+
+All Superinterfaces:
+IPublicClientApplication
+All Known Implementing Classes:
+MultipleAccountPublicClientApplication
+
+public interface IMultipleAccountPublicClientApplication
+extends IPublicClientApplication
+An interface that contains list of operations that are available when MSAL is in 'multiple account' mode. - This mode allows an application to make API calls with more than one accounts. - The application will only be able to retrieve/remove accounts that have been used to acquire token interactively in this application - API calls' scope is limited to 'the calling app'. (i.e. removeAccount() will not remove credentials of the same account in other apps).
+This is MSAL's default mode.
+
+Nested Class Summary
+
+Nested Classes
+Modifier and Type	Interface and Description
+static interface 	IMultipleAccountPublicClientApplication.GetAccountCallback 
+static interface 	IMultipleAccountPublicClientApplication.RemoveAccountCallback 
+Nested classes/interfaces inherited from interface com.microsoft.identity.client.IPublicClientApplication
+IPublicClientApplication.ApplicationCreatedListener, IPublicClientApplication.DeviceCodeFlowCallback, IPublicClientApplication.IMultipleAccountApplicationCreatedListener, IPublicClientApplication.ISingleAccountApplicationCreatedListener, IPublicClientApplication.LoadAccountsCallback, IPublicClientApplication.SignedHttpRequestRequestCallback
+Method Summary
+
+All MethodsInstance MethodsAbstract Methods
+Modifier and Type	Method and Description
+void	acquireToken(android.app.Activity activity, java.lang.String[] scopes, java.lang.String loginHint, AuthenticationCallback callback)
+Acquire token interactively, will pop-up webUI.
+IAuthenticationResult	acquireTokenSilent(java.lang.String[] scopes, IAccount account, java.lang.String authority)
+Perform acquire token silent call.
+void	acquireTokenSilentAsync(java.lang.String[] scopes, IAccount account, java.lang.String authority, SilentAuthenticationCallback callback)
+Perform acquire token silent call.
+IAccount	getAccount(java.lang.String identifier)
+Retrieve the IAccount object matching the identifier.
+void	getAccount(java.lang.String identifier, IMultipleAccountPublicClientApplication.GetAccountCallback callback)
+Retrieve the IAccount object matching the identifier.
+java.util.List<IAccount>	getAccounts()
+Returns a List of IAccount objects for which this application has RefreshTokens.
+void	getAccounts(IPublicClientApplication.LoadAccountsCallback callback)
+Asynchronously returns a List of IAccount objects for which this application has RefreshTokens.
+boolean	removeAccount(IAccount account)
+Removes the Account and Credentials (tokens) for the supplied IAccount.
+void	removeAccount(IAccount account, IMultipleAccountPublicClientApplication.RemoveAccountCallback callback)
+Removes the Account and Credentials (tokens) for the supplied IAccount.
+Methods inherited from interface com.microsoft.identity.client.IPublicClientApplication
+acquireToken, acquireToken, acquireTokenSilent, acquireTokenSilentAsync, acquireTokenWithDeviceCode, generateSignedHttpRequest, generateSignedHttpRequest, getConfiguration, isSharedDevice
+Method Detail
+
+getAccounts
+void getAccounts(IPublicClientApplication.LoadAccountsCallback callback)
+Asynchronously returns a List of IAccount objects for which this application has RefreshTokens.
+Parameters:
+callback - The callback to notify once this action has finished.
+getAccounts
+java.util.List<IAccount> getAccounts()
+                              throws java.lang.InterruptedException,
+                                     MsalException
+Returns a List of IAccount objects for which this application has RefreshTokens.
+Throws:
+java.lang.InterruptedException
+MsalException
+getAccount
+void getAccount(java.lang.String identifier,
+                IMultipleAccountPublicClientApplication.GetAccountCallback callback)
+Retrieve the IAccount object matching the identifier. The identifier could be homeAccountIdentifier, localAccountIdentifier or username.
+Parameters:
+identifier - String of the identifier
+callback - The callback to notify once this action has finished.
+getAccount
+IAccount getAccount(java.lang.String identifier)
+             throws java.lang.InterruptedException,
+                    MsalException
+Retrieve the IAccount object matching the identifier. The identifier could be homeAccountIdentifier, localAccountIdentifier or username.
+Parameters:
+identifier - String of the identifier
+Throws:
+java.lang.InterruptedException
+MsalException
+removeAccount
+void removeAccount(IAccount account,
+                   IMultipleAccountPublicClientApplication.RemoveAccountCallback callback)
+Removes the Account and Credentials (tokens) for the supplied IAccount.
+Parameters:
+account - The IAccount whose entry and associated tokens should be removed.
+removeAccount
+boolean removeAccount(IAccount account)
+               throws MsalException,
+                      java.lang.InterruptedException
+Removes the Account and Credentials (tokens) for the supplied IAccount.
+Parameters:
+account - The IAccount whose entry and associated tokens should be removed.
+Returns:
+True, if the account was removed. False otherwise.
+Throws:
+MsalException
+java.lang.InterruptedException
+acquireToken
+void acquireToken(android.app.Activity activity,
+                  java.lang.String[] scopes,
+                  java.lang.String loginHint,
+                  AuthenticationCallback callback)
+Acquire token interactively, will pop-up webUI. Interactive flow will skip the cache lookup.
+Parameters:
+activity - Non-null Activity that will be used as the parent activity for launching the com.microsoft.identity.common.internal.providers.oauth2.AuthorizationActivity.
+scopes - The non-null array of scopes to be requested for the access token. MSAL always sends the scopes 'openid profile offline_access'. Do not include any of these scopes in the scope parameter.
+loginHint - Optional. If provided, will be used as the query parameter sent for authenticating the user, which will have the UPN pre-populated.
+callback - The Non-null AuthenticationCallback to receive the result back. 1) If user cancels the flow by pressing the device back button, the result will be sent back via AuthenticationCallback.onCancel(). 2) If the sdk successfully receives the token back, result will be sent back via SilentAuthenticationCallback.onSuccess(IAuthenticationResult) 3) All the other errors will be sent back via SilentAuthenticationCallback.onError(MsalException).
+acquireTokenSilent
+IAuthenticationResult acquireTokenSilent(java.lang.String[] scopes,
+                                         IAccount account,
+                                         java.lang.String authority)
+                                  throws MsalException,
+                                         java.lang.InterruptedException
+Perform acquire token silent call. If there is a valid access token in the cache, the sdk will return the access token; If no valid access token exists, the sdk will try to find a refresh token and use the refresh token to get a new access token. If refresh token does not exist or it fails the refresh, exception will be sent back via callback.
+Parameters:
+scopes - The non-null array of scopes to be requested for the access token. MSAL always sends the scopes 'openid profile offline_access'. Do not include any of these scopes in the scope parameter.
+account - IAccount represents the account to silently request tokens for.
+authority - Authority to issue the token.
+Throws:
+MsalException
+java.lang.InterruptedException
+acquireTokenSilentAsync
+void acquireTokenSilentAsync(java.lang.String[] scopes,
+                             IAccount account,
+                             java.lang.String authority,
+                             SilentAuthenticationCallback callback)
+Perform acquire token silent call. If there is a valid access token in the cache, the sdk will return the access token; If no valid access token exists, the sdk will try to find a refresh token and use the refresh token to get a new access token. If refresh token does not exist or it fails the refresh, exception will be sent back via callback.
+Parameters:
+scopes - The non-null array of scopes to be requested for the access token. MSAL always sends the scopes 'openid profile offline_access'. Do not include any of these scopes in the scope parameter.
+account - IAccount represents the account to silently request tokens for.
+authority - Authority to issue the token.
+callback - SilentAuthenticationCallback that is used to send the result back. The success result will be sent back via SilentAuthenticationCallback.onSuccess(IAuthenticationResult). Failure case will be sent back via {
+SKIP NAVIGATION LINKS OVERVIEWPACKAGECLASSTREEDEPRECATEDINDEXHELP PREV CLASSNEXT CLASSFRAMESNO FRAMESSUMMARY: NESTED | FIELD | CONSTR | METHODDETAIL: FIELD | CONSTR | METHOD
+
+SKIP NAVIGATION LINKS OVERVIEWPACKAGECLASSTREEDEPRECATEDINDEXHELP PREV CLASSNEXT CLASSFRAMESNO FRAMESSUMMARY: NESTED | FIELD | CONSTR | METHODDETAIL: FIELD | CONSTR | METHOD
+com.microsoft.identity.client
+Interface IAccount
+
+All Superinterfaces:
+IClaimable, java.io.Serializable
+All Known Subinterfaces:
+IMultiTenantAccount, ITenantProfile
+All Known Implementing Classes:
+Account, MultiTenantAccount, TenantProfile
+
+public interface IAccount
+extends java.io.Serializable, IClaimable
+Method Summary
+
+All MethodsInstance MethodsAbstract Methods
+Modifier and Type	Method and Description
+java.lang.String	getAuthority() 
+java.lang.String	getId()
+Gets the id of the account.
+Methods inherited from interface com.microsoft.identity.client.IClaimable
+getClaims, getIdToken, getTenantId, getUsername
+Method Detail
+
+getId
+java.lang.String getId()
+Gets the id of the account.
+For the Microsoft Identity Platform: the OID of the account in its home tenant.
+
+Returns:
+The id.
+getAuthority
+java.lang.String getAuthority()
+SKIP NAVIGATION LINKS OVERVIEWPACKAGECLASSTREEDEPRECATEDINDEXHELP PREV CLASSNEXT CLASSFRAMESNO FRAMESSUMMARY: NESTED | FIELD | CONSTR | METHODDETAIL: FIELD | CONSTR | METHOD
+
+SKIP NAVIGATION LINKS OVERVIEWPACKAGECLASSTREEDEPRECATEDINDEXHELP PREV CLASSNEXT CLASSFRAMESNO FRAMESSUMMARY: NESTED | FIELD | CONSTR | METHODDETAIL: FIELD | CONSTR | METHOD
+com.microsoft.identity.client
+Interface IAuthenticationResult
+
+All Known Implementing Classes:
+AuthenticationResult
+
+public interface IAuthenticationResult
+Method Summary
+
+All MethodsInstance MethodsAbstract Methods
+Modifier and Type	Method and Description
+java.lang.String	getAccessToken() 
+IAccount	getAccount()
+Gets the Account.
+java.lang.String	getAuthenticationScheme()
+Gets the authentication scheme (Bearer, PoP, etc)....
+java.lang.String	getAuthorizationHeader()
+Gets the fully-formed Authorization header value.
+java.util.UUID	getCorrelationId()
+Gets the correlation id used during the acquire token request.
+java.util.Date	getExpiresOn() 
+java.lang.String[]	getScope() 
+java.lang.String	getTenantId() 
+Method Detail
+
+getAccessToken
+java.lang.String getAccessToken()
+Returns:
+The access token requested.
+getAuthorizationHeader
+java.lang.String getAuthorizationHeader()
+Gets the fully-formed Authorization header value. Includes the Authentication scheme.
+Example: Bearer eyJ1aWQiOiJj.......
+
+Returns:
+The Authorization header value.
+getAuthenticationScheme
+java.lang.String getAuthenticationScheme()
+Gets the authentication scheme (Bearer, PoP, etc)....
+Returns:
+The authentication scheme name.
+getExpiresOn
+java.util.Date getExpiresOn()
+Returns:
+The expiration time of the access token returned in the Token property. This value is calculated based on current UTC time measured locally and the value expiresIn returned from the service.
+getTenantId
+java.lang.String getTenantId()
+Returns:
+A unique tenant identifier that was used in token acquisition. Could be null if tenant information is not returned by the service.
+getAccount
+IAccount getAccount()
+Gets the Account.
+Returns:
+The Account to get.
+getScope
+java.lang.String[] getScope()
+Returns:
+The scopes returned from the service.
+getCorrelationId
+java.util.UUID getCorrelationId()
+Gets the correlation id used during the acquire token request. Could be null if an error occurs when parsing from String or if not set.
+Returns:
+a UUID representing a correlation id
+SKIP NAVIGATION LINKS OVERVIEWPACKAGECLASSTREEDEPRECATEDINDEXHELP PREV CLASSNEXT CLASSFRAMESNO FRAMESSUMMARY: NESTED | FIELD | CONSTR | METHODDETAIL: FIELD | CONSTR | METHOD
+
+SKIP NAVIGATION LINKS OVERVIEWPACKAGECLASSTREEDEPRECATEDINDEXHELP PREV CLASSNEXT CLASSFRAMESNO FRAMESSUMMARY: NESTED | FIELD | CONSTR | METHODDETAIL: FIELD | CONSTR | METHOD
+com.microsoft.identity.client
+Class AcquireTokenParameters
+
+java.lang.Object
+com.microsoft.identity.client.TokenParameters
+com.microsoft.identity.client.AcquireTokenParameters
+Direct Known Subclasses:
+IntuneAcquireTokenParameters
+
+public class AcquireTokenParameters
+extends TokenParameters
+Encapsulates the parameters passed to the acquireToken methods of PublicClientApplication
+Nested Class Summary
+
+Nested Classes
+Modifier and Type	Class and Description
+static class 	AcquireTokenParameters.Builder 
+Constructor Summary
+
+Constructors
+Constructor and Description
+AcquireTokenParameters(AcquireTokenParameters.Builder builder) 
+Method Summary
+
+All MethodsInstance MethodsConcrete Methods
+Modifier and Type	Method and Description
+android.app.Activity	getActivity()
+Non-null Activity that will be used as the parent activity for launching the com.microsoft.identity.common.internal.providers.oauth2.AuthorizationActivity
+AuthenticationCallback	getCallback()
+The Non-null AuthenticationCallback to receive the result back.
+java.util.List<android.util.Pair<java.lang.String,java.lang.String>>	getExtraQueryStringParameters()
+If you've been instructed to pass additional query string parameters to the authorization endpoint.
+java.util.List<java.lang.String>	getExtraScopesToConsent()
+These are additional scopes that you would like the user to authorize the use of, while getting consent for the first set of scopes
+Fragment	getFragment()
+Optional Fragment that will be replaced by com.microsoft.identity.common.internal.providers.oauth2.AuthorizationFragment
+java.lang.String	getLoginHint()
+Optional.
+Prompt	getPrompt()
+Controls the value of the prompt parameter sent along with the authorization request.
+Methods inherited from class com.microsoft.identity.client.TokenParameters
+getAccount, getAccountRecord, getAuthenticationScheme, getAuthority, getClaimsRequest, getCorrelationId, getScopes
+Methods inherited from class java.lang.Object
+equals, getClass, hashCode, notify, notifyAll, toString, wait, wait, wait
+Constructor Detail
+
+AcquireTokenParameters
+public AcquireTokenParameters(AcquireTokenParameters.Builder builder)
+Method Detail
+
+getActivity
+public android.app.Activity getActivity()
+Non-null Activity that will be used as the parent activity for launching the com.microsoft.identity.common.internal.providers.oauth2.AuthorizationActivity
+getFragment
+public Fragment getFragment()
+Optional Fragment that will be replaced by com.microsoft.identity.common.internal.providers.oauth2.AuthorizationFragment
+getLoginHint
+public java.lang.String getLoginHint()
+Optional. Gets the login hint sent along with the authorization request.
+Returns:
+getPrompt
+public Prompt getPrompt()
+Controls the value of the prompt parameter sent along with the authorization request.
+Returns:
+getExtraScopesToConsent
+public java.util.List<java.lang.String> getExtraScopesToConsent()
+These are additional scopes that you would like the user to authorize the use of, while getting consent for the first set of scopes
+Returns:
+getExtraQueryStringParameters
+public java.util.List<android.util.Pair<java.lang.String,java.lang.String>> getExtraQueryStringParameters()
+If you've been instructed to pass additional query string parameters to the authorization endpoint. You can get these here. Otherwise... would recommend not touching.
+Returns:
+getCallback
+public AuthenticationCallback getCallback()
+The Non-null AuthenticationCallback to receive the result back. 1) If user cancels the flow by pressing the device back button, the result will be sent back via AuthenticationCallback.onCancel(). 2) If the sdk successfully receives the token back, result will be sent back via SilentAuthenticationCallback.onSuccess(IAuthenticationResult) 3) All the other errors will be sent back via SilentAuthenticationCallback.onError(com.microsoft.identity.client.exception.MsalException).
+Returns:
+SKIP NAVIGATION LINKS OVERVIEWPACKAGECLASSTREEDEPRECATEDINDEXHELP PREV CLASSNEXT CLASSFRAMESNO FRAMESSUMMARY: NESTED | FIELD | CONSTR | METHODDETAIL: FIELD | CONSTR | METHOD
+
+SKIP NAVIGATION LINKS OVERVIEWPACKAGECLASSTREEDEPRECATEDINDEXHELP PREV CLASSNEXT CLASSFRAMESNO FRAMESSUMMARY: NESTED | FIELD | CONSTR | METHODDETAIL: FIELD | CONSTR | METHOD
+com.microsoft.identity.client
+Class AcquireTokenSilentParameters
+
+java.lang.Object
+com.microsoft.identity.client.TokenParameters
+com.microsoft.identity.client.AcquireTokenSilentParameters
+
+public class AcquireTokenSilentParameters
+extends TokenParameters
+Nested Class Summary
+
+Nested Classes
+Modifier and Type	Class and Description
+static class 	AcquireTokenSilentParameters.Builder 
+Constructor Summary
+
+Constructors
+Constructor and Description
+AcquireTokenSilentParameters(AcquireTokenSilentParameters.Builder builder) 
+Method Summary
+
+All MethodsInstance MethodsConcrete Methods
+Modifier and Type	Method and Description
+SilentAuthenticationCallback	getCallback()
+The Non-null SilentAuthenticationCallback to receive the result back.
+boolean	getForceRefresh()
+Boolean.
+void	setForceRefresh(boolean forceRefresh)
+Boolean.
+Methods inherited from class com.microsoft.identity.client.TokenParameters
+getAccount, getAccountRecord, getAuthenticationScheme, getAuthority, getClaimsRequest, getCorrelationId, getScopes
+Methods inherited from class java.lang.Object
+equals, getClass, hashCode, notify, notifyAll, toString, wait, wait, wait
+Constructor Detail
+
+AcquireTokenSilentParameters
+public AcquireTokenSilentParameters(AcquireTokenSilentParameters.Builder builder)
+Method Detail
+
+getCallback
+public SilentAuthenticationCallback getCallback()
+The Non-null SilentAuthenticationCallback to receive the result back.
+1) If the sdk successfully receives the token back, result will be sent back via SilentAuthenticationCallback.onSuccess(IAuthenticationResult)
+
+2) All the other errors will be sent back via SilentAuthenticationCallback.onError(com.microsoft.identity.client.exception.MsalException).
+
+Returns:
+The silent request callback.
+setForceRefresh
+public void setForceRefresh(boolean forceRefresh)
+Boolean. Indicates whether MSAL should refresh the access token. Default is false and unless you have good reason to. You should not use this parameter.
+Parameters:
+forceRefresh -
+getForceRefresh
+public boolean getForceRefresh()
+Boolean. Indicates whether MSAL should refresh the access token. Default is false and unless you have good reason to. You should not use this parameter.
+Returns:
+boolean
+SKIP NAVIGATION LINKS OVERVIEWPACKAGECLASSTREEDEPRECATEDINDEXHELP PREV CLASSNEXT CLASSFRAMESNO FRAMESSUMMARY: NESTED | FIELD | CONSTR | METHODDETAIL: FIELD | CONSTR | METHOD
+
+SKIP NAVIGATION LINKS OVERVIEWPACKAGECLASSTREEDEPRECATEDINDEXHELP PREV CLASSNEXT CLASSFRAMESNO FRAMESSUMMARY: NESTED | FIELD | CONSTR | METHODDETAIL: FIELD | CONSTR | METHOD
+com.microsoft.identity.client
+Class Logger
+
+java.lang.Object
+com.microsoft.identity.client.Logger
+
+public final class Logger
+extends java.lang.Object
+MSAL Logger for diagnostic purpose. The sdk generates logs with both logcat logging or the external logger. By default, the sdk enables logging with logcat. To turn off logging:
+ 
+     Logger.getInstance().setEnableLogcatLog(false);
+ 
+ 
+To enable the custom logger, set the external logger implementing ILoggerCallback.
+ 
+     Logger.getInstance().setExternalLogger(new Logger.ILoggerCallback() {
+     @Override
+     public void log(String tag, Logger.LogLevel logLevel, String message,
+         boolean containsPII) { }
+     });
+ 
+ 
+Loglevel can be specified at Logger.LogLevel.ERROR, Logger.LogLevel.WARNING, Logger.LogLevel.INFO and Logger.LogLevel.VERBOSE. The sdk enables the verbose level logging by default, to set different level logging:
+ 
+     Logger.getInstance().setLogLevel(Loglevel)
+ 
+ 
+By default, the sdk doesn't send any log messages that contain PII (personal identifiable information) info. To enable PII logging:
+ 
+     Logger.getInstance().setEnablePII(true);
+ 
+ 
+Nested Class Summary
+
+Nested Classes
+Modifier and Type	Class and Description
+static class 	Logger.LogLevel
+Enum class for LogLevel that the sdk recognizes.
+Constructor Summary
+
+Constructors
+Constructor and Description
+Logger() 
+Method Summary
+
+All MethodsStatic MethodsInstance MethodsConcrete Methods
+Modifier and Type	Method and Description
+static Logger	getInstance() 
+void	setEnableLogcatLog(boolean enableLogcatLog)
+Enable/Disable the Android logcat logging.
+void	setEnablePII(boolean enablePII)
+Enable log message with PII (personal identifiable information) info.
+void	setExternalLogger(ILoggerCallback externalLogger)
+Set the custom logger.
+void	setLogLevel(Logger.LogLevel logLevel)
+Set the log level for diagnostic purpose.
+Methods inherited from class java.lang.Object
+equals, getClass, hashCode, notify, notifyAll, toString, wait, wait, wait
+Constructor Detail
+
+Logger
+public Logger()
+Method Detail
+
+getInstance
+public static Logger getInstance()
+Returns:
+The single instance of Logger.
+setLogLevel
+public void setLogLevel(Logger.LogLevel logLevel)
+Set the log level for diagnostic purpose. By default, the sdk enables the verbose level logging.
+Parameters:
+logLevel - The Logger.LogLevel to be enabled for the diagnostic logging.
+setExternalLogger
+public void setExternalLogger(ILoggerCallback externalLogger)
+Set the custom logger. Configures external logging to configure a callback that the sdk will use to pass each log message. Overriding the logger callback is not allowed.
+Parameters:
+externalLogger - The reference to the ILoggerCallback that can output the logs to the designated places.
+Throws:
+java.lang.IllegalStateException - if external logger is already set, and the caller is trying to set it again.
+setEnableLogcatLog
+public void setEnableLogcatLog(boolean enableLogcatLog)
+Enable/Disable the Android logcat logging. By default, the sdk enables it.
+Parameters:
+enableLogcatLog - True if enabling the logcat logging, false otherwise.
+setEnablePII
+public void setEnablePII(boolean enablePII)
+Enable log message with PII (personal identifiable information) info. By default, MSAL doesn't log any PII.
+Parameters:
+enablePII - True if enabling PII info to be logged, false otherwise.
+SKIP NAVIGATION LINKS OVERVIEWPACKAGECLASSTREEDEPRECATEDINDEXHELP PREV CLASSNEXT CLASSFRAMESNO FRAMESSUMMARY: NESTED | FIELD | CONSTR | METHODDETAIL: FIELD | CONSTR | METHOD
+
+SKIP NAVIGATION LINKS OVERVIEWPACKAGECLASSTREEDEPRECATEDINDEXHELP PREV CLASSNEXT CLASSFRAMESNO FRAMESSUMMARY: NESTED | FIELD | CONSTR | METHODDETAIL: FIELD | CONSTR | METHOD
+com.microsoft.identity.client.exception
+Class MsalException
+
+java.lang.Object
+BaseException
+com.microsoft.identity.client.exception.MsalException
+Direct Known Subclasses:
+MsalArgumentException, MsalClientException, MsalDeclinedScopeException, MsalServiceException, MsalUiRequiredException, MsalUserCancelException
+
+public class MsalException
+extends BaseException
+MsalException thrown or sent back via callback, representing the detailed exception thrown by the sdk. It will contain the error code, error description (could be null) or throwable (could be null).
+Method Summary
+
+All MethodsInstance MethodsConcrete Methods
+Modifier and Type	Method and Description
+java.lang.String	getErrorCode() 
+java.lang.String	getMessage()
+Return the detailed description explaining why the exception is returned back.
+Methods inherited from class java.lang.Object
+equals, getClass, hashCode, notify, notifyAll, toString, wait, wait, wait
+Method Detail
+
+getErrorCode
+public java.lang.String getErrorCode()
+Returns:
+The error code for the exception, could be null. MsalException is the top level base exception, for the constants value of all the error code.
+getMessage
+public java.lang.String getMessage()
+Return the detailed description explaining why the exception is returned back.
+SKIP NAVIGATION LINKS OVERVIEWPACKAGECLASSTREEDEPRECATEDINDEXHELP PREV CLASSNEXT CLASSFRAMESNO FRAMESSUMMARY: NESTED | FIELD | CONSTR | METHODDETAIL: FIELD | CONSTR | METHOD
+
+SKIP NAVIGATION LINKS OVERVIEWPACKAGECLASSTREEDEPRECATEDINDEXHELP PREV CLASSNEXT CLASSFRAMESNO FRAMESSUMMARY: NESTED | FIELD | CONSTR | METHODDETAIL: FIELD | CONSTR | METHOD
+com.microsoft.identity.client.exception
+Class MsalUiRequiredException
+
+java.lang.Object
+BaseException
+com.microsoft.identity.client.exception.MsalException
+com.microsoft.identity.client.exception.MsalUiRequiredException
+
+public final class MsalUiRequiredException
+extends MsalException
+This exception indicates that UI is required for authentication to succeed.
+Error codes that can be returned from this exception:
+
+invalid_grant: The refresh token used to redeem access token is invalid, expired or revoked.
+no_tokens_found: Access token doesn't exist and no refresh token can be found to redeem access token.
+Field Summary
+
+Fields
+Modifier and Type	Field and Description
+static java.lang.String	INVALID_GRANT
+The refresh token used to redeem access token is invalid, expired, revoked.
+static java.lang.String	NO_ACCOUNT_FOUND
+The supplied Account cannot be found in the cache.
+static java.lang.String	NO_TOKENS_FOUND
+Access token doesn't exist and there is no refresh token can be found to redeem access token.
+Constructor Summary
+
+Constructors
+Constructor and Description
+MsalUiRequiredException(java.lang.String errorCode) 
+MsalUiRequiredException(java.lang.String errorCode, java.lang.String errorMessage) 
+MsalUiRequiredException(java.lang.String errorCode, java.lang.String errorMessage, java.lang.Throwable throwable) 
+Method Summary
+
+Methods inherited from class com.microsoft.identity.client.exception.MsalException
+getErrorCode, getMessage
+Methods inherited from class java.lang.Object
+equals, getClass, hashCode, notify, notifyAll, toString, wait, wait, wait
+Field Detail
+
+INVALID_GRANT
+public static final java.lang.String INVALID_GRANT
+The refresh token used to redeem access token is invalid, expired, revoked.
+NO_TOKENS_FOUND
+public static final java.lang.String NO_TOKENS_FOUND
+Access token doesn't exist and there is no refresh token can be found to redeem access token.
+NO_ACCOUNT_FOUND
+public static final java.lang.String NO_ACCOUNT_FOUND
+The supplied Account cannot be found in the cache.
+Constructor Detail
+
+MsalUiRequiredException
+public MsalUiRequiredException(java.lang.String errorCode)
+MsalUiRequiredException
+public MsalUiRequiredException(java.lang.String errorCode,
+                               java.lang.String errorMessage)
+MsalUiRequiredException
+public MsalUiRequiredException(java.lang.String errorCode,
+                               java.lang.String errorMessage,
+                               java.lang.Throwable throwable)
+SKIP NAVIGATION LINKS OVERVIEWPACKAGECLASSTREEDEPRECATEDINDEXHELP PREV CLASSNEXT CLASSFRAMESNO FRAMESSUMMARY: NESTED | FIELD | CONSTR | METHODDETAIL: FIELD | CONSTR | METHOD
+
+SKIP NAVIGATION LINKS OVERVIEWPACKAGECLASSTREEDEPRECATEDINDEXHELP PREV CLASSNEXT CLASSFRAMESNO FRAMESSUMMARY: NESTED | FIELD | CONSTR | METHODDETAIL: FIELD | CONSTR | METHOD
+com.microsoft.identity.client.exception
+Class MsalDeclinedScopeException
+
+java.lang.Object
+BaseException
+com.microsoft.identity.client.exception.MsalException
+com.microsoft.identity.client.exception.MsalDeclinedScopeException
+
+public class MsalDeclinedScopeException
+extends MsalException
+Exception class to indicate that one or more requested scopes have been declined by the server. Developers can opt to continue acquiring token by passing the silentParametersForGrantedScopes and calling acquireTokenSilent call on this error.
+Constructor Summary
+
+Constructors
+Constructor and Description
+MsalDeclinedScopeException(java.util.List<java.lang.String> grantedScopes, java.util.List<java.lang.String> declinedScopes, AcquireTokenSilentParameters silentParametersForGrantedScopes) 
+Method Summary
+
+All MethodsInstance MethodsConcrete Methods
+Modifier and Type	Method and Description
+java.util.List<java.lang.String>	getDeclinedScopes()
+List of scopes declined by the server.
+java.util.List<java.lang.String>	getGrantedScopes()
+List of scopes granted by the server.
+AcquireTokenSilentParameters	getSilentParametersForGrantedScopes()
+Returns pre configured AcquireTokenSilentParameters from the original request to make a subsequent silent request for granted scopes.
+Methods inherited from class com.microsoft.identity.client.exception.MsalException
+getErrorCode, getMessage
+Methods inherited from class java.lang.Object
+equals, getClass, hashCode, notify, notifyAll, toString, wait, wait, wait
+Constructor Detail
+
+MsalDeclinedScopeException
+public MsalDeclinedScopeException(java.util.List<java.lang.String> grantedScopes,
+                                  java.util.List<java.lang.String> declinedScopes,
+                                  AcquireTokenSilentParameters silentParametersForGrantedScopes)
+Method Detail
+
+getGrantedScopes
+public java.util.List<java.lang.String> getGrantedScopes()
+List of scopes granted by the server.
+Returns:
+List
+getDeclinedScopes
+public java.util.List<java.lang.String> getDeclinedScopes()
+List of scopes declined by the server. This can happen due to multiple reasons. * Requested scope is not supported * Requested scope is not recognized (According to OIDC, any scope values used that are not understood by an implementation should be ignored.) * Requested scope is not supported for a particular account (Organizational scopes when it is a consumer account)
+Returns:
+List
+getSilentParametersForGrantedScopes
+public AcquireTokenSilentParameters getSilentParametersForGrantedScopes()
+Returns pre configured AcquireTokenSilentParameters from the original request to make a subsequent silent request for granted scopes.
+Returns:
+AcquireTokenSilentParameters
+SKIP NAVIGATION LINKS OVERVIEWPACKAGECLASSTREEDEPRECATEDINDEXHELP PREV CLASSNEXT CLASSFRAMESNO FRAMESSUMMARY: NESTED | FIELD | CONSTR | METHODDETAIL: FIELD | CONSTR | METHOD

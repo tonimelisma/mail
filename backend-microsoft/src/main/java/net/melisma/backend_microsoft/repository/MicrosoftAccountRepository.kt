@@ -9,27 +9,22 @@ import com.microsoft.identity.client.exception.MsalDeclinedScopeException
 import com.microsoft.identity.client.exception.MsalUiRequiredException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.collectLatest
-import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.shareIn
 import net.melisma.backend_microsoft.auth.AcquireTokenResult
-import net.melisma.backend_microsoft.auth.ActiveMicrosoftAccountHolder
 import net.melisma.backend_microsoft.auth.AuthenticationResultWrapper
 import net.melisma.backend_microsoft.auth.MicrosoftAuthManager
 import net.melisma.backend_microsoft.auth.SignOutResultWrapper
-import net.melisma.backend_microsoft.errors.MicrosoftErrorMapper
-import net.melisma.backend_microsoft.model.ManagedMicrosoftAccount
+import net.melisma.backend_microsoft.mapper.toDomainAccount
+import net.melisma.core_data.di.ApplicationScope
 import net.melisma.core_data.di.Dispatcher
 import net.melisma.core_data.di.MailDispatchers
 import net.melisma.core_data.model.Account
@@ -39,118 +34,57 @@ import net.melisma.core_data.model.GenericSignOutResult
 import net.melisma.core_data.repository.AccountRepository
 import net.melisma.core_data.repository.OverallApplicationAuthState
 import timber.log.Timber
-import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
 @Singleton
 class MicrosoftAccountRepository @Inject constructor(
     private val microsoftAuthManager: MicrosoftAuthManager,
-    private val externalScope: CoroutineScope,
-    private val microsoftErrorMapper: MicrosoftErrorMapper,
-    private val activeMicrosoftAccountHolder: ActiveMicrosoftAccountHolder,
-    @Dispatcher(MailDispatchers.IO) private val ioDispatcher: CoroutineDispatcher
+    @ApplicationScope private val externalScope: CoroutineScope,
+    @Dispatcher(MailDispatchers.IO) private val ioDispatcher: CoroutineDispatcher,
+    private val activeMicrosoftAccountHolder: net.melisma.backend_microsoft.auth.ActiveMicrosoftAccountHolder
 ) : AccountRepository {
 
-    private val TAG = "MicrosoftAccountRepo"
+    private val TAG = "MsAccountRepo"
 
-    private val _msAccounts = MutableStateFlow<List<Account>>(emptyList())
-
-    private val _overallApplicationAuthState =
-        MutableStateFlow<OverallApplicationAuthState>(OverallApplicationAuthState.UNKNOWN)
-    override val overallApplicationAuthState: StateFlow<OverallApplicationAuthState> =
-        _overallApplicationAuthState.asStateFlow()
-
-    private val _accountActionMessage = MutableSharedFlow<String?>(
-        replay = 0, extraBufferCapacity = 1, onBufferOverflow = BufferOverflow.DROP_OLDEST
-    )
-
-    init {
-        Timber.tag(TAG).i("MicrosoftAccountRepository Initializing.")
-        observeMicrosoftAuthManagerChanges()
-    }
-
-    private fun observeMicrosoftAuthManagerChanges() {
-        externalScope.launch {
-            microsoftAuthManager.isMsalInitialized.collectLatest { isInitialized ->
-                if (isInitialized) {
-                    Timber.tag(TAG).d("MSAL is initialized. Fetching and processing MS accounts.")
-                    try {
-                        val managedAccountsList: List<ManagedMicrosoftAccount> =
-                            microsoftAuthManager.getManagedAccountsFromMSAL()
-
-                        Timber.tag(TAG)
-                            .d("Received ${managedAccountsList.size} ManagedMicrosoftAccounts from MicrosoftAuthManager.")
-                        val genericAccounts = mutableListOf<Account>()
-
-                        for (managedAccount: ManagedMicrosoftAccount in managedAccountsList) {
-                            var needsReAuth = false
-                            try {
-                                val iAccountFromManaged = managedAccount.iAccount
-                                val tokenResult: AcquireTokenResult =
-                                    microsoftAuthManager.acquireTokenSilent(
-                                        iAccountFromManaged,
-                                        MicrosoftAuthManager.MICROSOFT_SCOPES
-                                    )
-                                when (tokenResult) {
-                                    is AcquireTokenResult.UiRequired -> needsReAuth = true
-                                    is AcquireTokenResult.Error -> {
-                                        if (tokenResult.exception is MsalUiRequiredException || tokenResult.exception is MsalDeclinedScopeException) {
-                                            needsReAuth = true
-                                        }
-                                    }
-
-                                    else -> { /* No action for Success, Cancelled, etc. in this context */
-                                    }
-                                }
-                            } catch (e: Exception) {
-                                Timber.tag(TAG).e(
-                                    e,
-                                    "Exception during silent token check for ${managedAccount.iAccount.username}"
-                                )
-                                needsReAuth = true
-                            }
-                            val accountUsername =
-                                managedAccount.displayName ?: managedAccount.iAccount.username
-                                ?: "Unknown MS User"
-                            genericAccounts.add(
-                                Account(
-                                    id = managedAccount.iAccount.id ?: UUID.randomUUID().toString(),
-                                    username = accountUsername,
-                                    providerType = Account.PROVIDER_TYPE_MS,
-                                    needsReauthentication = needsReAuth
-                                )
-                            )
-                        }
-                        _msAccounts.value = genericAccounts
-                        updateOverallApplicationAuthState(true) // Pass flag to check active account
-
-                    } catch (e: Exception) {
-                        Timber.tag(TAG).e(e, "Error fetching/processing MSAL accounts.")
-                        _msAccounts.value = emptyList()
-                        updateOverallApplicationAuthState()
-                    }
-                } else {
-                    Timber.tag(TAG).d("MSAL is not initialized yet. Clearing MS accounts.")
-                    _msAccounts.value = emptyList()
-                    updateOverallApplicationAuthState()
-                }
+    override fun getAccounts(): Flow<List<Account>> {
+        Timber.tag(TAG).d("getAccounts called")
+        return microsoftAuthManager.msalAccounts
+            .map { iAccountList ->
+                Timber.tag(TAG)
+                    .d("getAccounts: Received ${iAccountList.size} IAccounts from AuthManager. Mapping to domain models.")
+                iAccountList.map { it.toDomainAccount() }
             }
-        }
+            .catch { e ->
+                Timber.tag(TAG).e(e, "Error in getAccounts flow")
+                emit(emptyList())
+            }
+            .flowOn(ioDispatcher)
     }
-
-    override fun getAccounts(): Flow<List<Account>> = _msAccounts.asStateFlow()
 
     override fun getAccountById(accountId: String): Flow<Account?> {
-        return _msAccounts.map { accounts -> accounts.find { it.id == accountId } }
+        Timber.tag(TAG).d("getAccountById called for: ${accountId.take(5)}...")
+        return getAccounts().map { accounts ->
+            accounts.find { it.id == accountId }
+        }.flowOn(ioDispatcher)
     }
 
     override fun getActiveAccount(providerType: String): Flow<Account?> {
-        if (providerType != Account.PROVIDER_TYPE_MS) return flowOf(null)
-        return activeMicrosoftAccountHolder.activeMicrosoftAccountId.flatMapLatest { activeId ->
-            if (activeId == null) flowOf(null)
-            else getAccountById(activeId)
+        Timber.tag(TAG).d("getActiveAccount called for provider: $providerType")
+        if (providerType.equals(Account.PROVIDER_TYPE_MS, ignoreCase = true)) {
+            return activeMicrosoftAccountHolder.activeMicrosoftAccountId.combine(
+                microsoftAuthManager.msalAccounts
+            ) { activeId, msalAccounts ->
+                activeId?.let { msalAccounts.find { it.id == activeId }?.toDomainAccount() }
+            }
+                .distinctUntilChanged()
+                .catch { e ->
+                    Timber.tag(TAG).e(e, "Error in getActiveAccount flow for Microsoft")
+                    emit(null)
+                }
+                .flowOn(ioDispatcher)
         }
+        return flowOf(null)
     }
 
     override fun signIn(
@@ -158,140 +92,56 @@ class MicrosoftAccountRepository @Inject constructor(
         loginHint: String?,
         providerType: String
     ): Flow<GenericAuthResult> = flow {
-        if (providerType != Account.PROVIDER_TYPE_MS) {
+        Timber.tag(TAG).i("signIn called for provider: $providerType, loginHint: $loginHint")
+        if (!providerType.equals(Account.PROVIDER_TYPE_MS, ignoreCase = true)) {
+            Timber.tag(TAG).w("signIn: Unsupported provider type: $providerType")
             emit(
                 GenericAuthResult.Error(
                     ErrorDetails(
-                        "signIn called for non-Microsoft provider",
-                        "invalid_provider"
+                        message = "Unsupported provider: $providerType",
+                        code = "UNSUPPORTED_PROVIDER"
                     )
                 )
             )
             return@flow
         }
+
         emit(GenericAuthResult.Loading)
-        try {
-            // signInInteractive expects scopes. loginHint is not directly used by this specific MSAL call structure.
-            // We'll use the standard MICROSOFT_SCOPES.
-            microsoftAuthManager.signInInteractive(activity, MicrosoftAuthManager.MICROSOFT_SCOPES)
-                .collect { authResultWrapper ->
-                    when (authResultWrapper) {
-                    is AuthenticationResultWrapper.Success -> {
-                        val msalResult = authResultWrapper.authenticationResult
-                        val iAccount =
-                            msalResult.account // Directly use the account from the result
-                        Timber.tag(TAG)
-                            .i("MSAL Sign-in successful. Account: ${iAccount.username}, ID: ${iAccount.id}")
-                        val account = Account(
-                            id = iAccount.id ?: UUID.randomUUID().toString(),
-                            username = iAccount.claims?.get("name") as? String ?: iAccount.username
-                            ?: "Unknown MS User",
-                            providerType = Account.PROVIDER_TYPE_MS,
-                            needsReauthentication = false
-                        )
-                        _msAccounts.value =
-                            _msAccounts.value.filterNot { it.id == account.id } + account
-                        activeMicrosoftAccountHolder.setActiveMicrosoftAccountId(account.id)
-                        updateOverallApplicationAuthState(checkActiveAccount = true)
-                        emit(GenericAuthResult.Success(account))
-                    }
-                    is AuthenticationResultWrapper.Error -> {
-                        Timber.tag(TAG)
-                            .w(authResultWrapper.exception, "MSAL Sign-in failed with exception.")
-                        val errorDetails =
-                            microsoftErrorMapper.mapExceptionToErrorDetails(authResultWrapper.exception)
 
-                        // If MsalUiRequiredException occurs during an interactive sign-in, 
-                        // it means the interactive process itself needs UI or has failed in a way that requires it.
-                        // For MSAL v2.2.3, MsalUiRequiredException does not directly provide the IAccount.
-                        // So, we don't attempt to mark a specific account from this exception here.
-                        // The re-authentication marking for existing accounts is handled during silent token acquisition checks.
-                        val msalAuthException = authResultWrapper.exception
-                        if (msalAuthException is MsalUiRequiredException) {
-                            Timber.tag(TAG)
-                                .w("Interactive sign-in resulted in MsalUiRequiredException: ${msalAuthException.errorCode}")
-                            // No account to mark directly from this exception in MSAL v2.2.3
+        try {
+            val scopes = MicrosoftAuthManager.MICROSOFT_SCOPES
+            microsoftAuthManager.signInInteractive(activity, scopes)
+                .map { resultWrapper ->
+                    Timber.tag(TAG).d("signIn: AuthManager emitted: $resultWrapper")
+                    when (resultWrapper) {
+                        is AuthenticationResultWrapper.Success -> {
+                            val domainAccount =
+                                resultWrapper.managedAccount.iAccount.toDomainAccount()
+                            GenericAuthResult.Success(domainAccount)
                         }
-                        emit(GenericAuthResult.Error(errorDetails))
-                    }
-                    is AuthenticationResultWrapper.Cancelled -> {
-                        Timber.tag(TAG).i("MSAL Sign-in cancelled by user.")
-                        emit(
+
+                        is AuthenticationResultWrapper.Error -> {
+                            val errorDetails =
+                                mapMsalExceptionToErrorDetails(resultWrapper.exception)
+                            GenericAuthResult.Error(errorDetails)
+                        }
+
+                        is AuthenticationResultWrapper.Cancelled -> {
+                            Timber.tag(TAG).i("signIn: User cancelled sign-in flow.")
                             GenericAuthResult.Error(
-                                microsoftErrorMapper.mapExceptionToErrorDetails(
-                                    MsalClientException(
-                                        "msal_user_cancelled",
-                                        "Sign-in was cancelled by the user."
-                                    )
+                                ErrorDetails(
+                                    message = "User cancelled sign-in.",
+                                    code = "USER_CANCELLED"
                                 )
                             )
-                        )
-                    }
-                    }
-                }
-        } catch (e: Exception) {
-            Timber.tag(TAG).e(e, "Exception during MSAL sign-in attempt.")
-            emit(GenericAuthResult.Error(microsoftErrorMapper.mapExceptionToErrorDetails(e)))
-        }
-    }.flowOn(ioDispatcher)
-
-    override fun signOut(account: Account): Flow<GenericSignOutResult> = flow {
-        if (account.providerType != Account.PROVIDER_TYPE_MS) {
-            emit(
-                GenericSignOutResult.Error(
-                    ErrorDetails(
-                        "signOut called for non-MS account",
-                        "invalid_provider"
-                    )
-                )
-            )
-            return@flow
-        }
-        emit(GenericSignOutResult.Loading)
-        try {
-            val iAccount = microsoftAuthManager.getAccount(account.id) // Fetch IAccount
-            if (iAccount == null) {
-                Timber.tag(TAG)
-                    .w("MSAL IAccount not found for ID ${account.id} during sign-out. Clearing local state only.")
-                _msAccounts.value = _msAccounts.value.filterNot { it.id == account.id }
-                if (activeMicrosoftAccountHolder.getActiveMicrosoftAccountIdValue() == account.id) {
-                    activeMicrosoftAccountHolder.setActiveMicrosoftAccountId(null)
-                }
-                updateOverallApplicationAuthState(checkActiveAccount = true)
-                emit(GenericSignOutResult.Success)
-                return@flow
-            }
-
-            microsoftAuthManager.signOut(iAccount).collect { signOutResultWrapper ->
-                when (signOutResultWrapper) {
-                    is SignOutResultWrapper.Success -> {
-                        Timber.tag(TAG).i("MSAL Sign-out successful for account ID: ${account.id}")
-                        _msAccounts.value = _msAccounts.value.filterNot { it.id == account.id }
-                        if (activeMicrosoftAccountHolder.getActiveMicrosoftAccountIdValue() == account.id) {
-                            activeMicrosoftAccountHolder.setActiveMicrosoftAccountId(null)
                         }
-                        updateOverallApplicationAuthState(checkActiveAccount = true)
-                        emit(GenericSignOutResult.Success)
-                    }
-
-                    is SignOutResultWrapper.Error -> {
-                        Timber.tag(TAG).w(
-                            signOutResultWrapper.exception,
-                            "MSAL Sign-out failed for account ID: ${account.id}"
-                        )
-                        emit(
-                            GenericSignOutResult.Error(
-                                microsoftErrorMapper.mapExceptionToErrorDetails(
-                                    signOutResultWrapper.exception
-                                )
-                            )
-                        )
                     }
                 }
-            }
+                .collect { emit(it) }
+
         } catch (e: Exception) {
-            Timber.tag(TAG).e(e, "Exception during MSAL sign-out for account ID ${account.id}")
-            emit(GenericSignOutResult.Error(microsoftErrorMapper.mapExceptionToErrorDetails(e)))
+            Timber.tag(TAG).e(e, "signIn: Exception during Microsoft sign-in process")
+            emit(GenericAuthResult.Error(mapMsalExceptionToErrorDetails(e)))
         }
     }.flowOn(ioDispatcher)
 
@@ -300,119 +150,214 @@ class MicrosoftAccountRepository @Inject constructor(
         resultCode: Int,
         data: Intent?
     ) {
-        if (providerType == Account.PROVIDER_TYPE_MS) {
-            Timber.tag(TAG)
-                .d("handleAuthenticationResult called for MS. MSAL handles this internally.")
-        } else {
-            Timber.tag(TAG)
-                .w("handleAuthenticationResult called for unexpected provider: $providerType")
+        Timber.tag(TAG)
+            .d("handleAuthenticationResult called for provider: $providerType, resultCode: $resultCode")
+        if (!providerType.equals(Account.PROVIDER_TYPE_MS, ignoreCase = true)) {
+            Timber.tag(TAG).w("handleAuthenticationResult: Unsupported provider: $providerType")
+            return
         }
+        microsoftAuthManager.processPotentialAuthenticationResult(resultCode, data)
     }
 
-    override fun observeActionMessages(): Flow<String?> = _accountActionMessage.asSharedFlow()
+    override fun signOut(account: Account): Flow<GenericSignOutResult> = flow {
+        Timber.tag(TAG)
+            .i("signOut called for account: ${account.username} (ID: ${account.id.take(5)}...)")
+        if (!account.providerType.equals(Account.PROVIDER_TYPE_MS, ignoreCase = true)) {
+            Timber.tag(TAG).w("signOut: Unsupported provider type: ${account.providerType}")
+            emit(
+                GenericSignOutResult.Error(
+                    ErrorDetails(
+                        message = "Unsupported provider: ${account.providerType}",
+                        code = "UNSUPPORTED_PROVIDER"
+                    )
+                )
+            )
+            return@flow
+        }
+
+        try {
+            val resultWrapper = microsoftAuthManager.signOut(account.id)
+            Timber.tag(TAG).d("signOut: AuthManager returned: $resultWrapper")
+            when (resultWrapper) {
+                is SignOutResultWrapper.Success -> {
+                    emit(GenericSignOutResult.Success)
+                }
+
+                is SignOutResultWrapper.Error -> {
+                    emit(
+                        GenericSignOutResult.Error(
+                            ErrorDetails(
+                                message = resultWrapper.exception.message ?: "MSAL Sign out error",
+                                code = resultWrapper.exception.errorCode
+                            )
+                        )
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            Timber.tag(TAG)
+                .e(e, "signOut: Exception during Microsoft sign-out for ${account.username}")
+            emit(GenericSignOutResult.Error(ErrorDetails(message = "Sign out failed: ${e.message}")))
+        }
+    }.flowOn(ioDispatcher)
+
+    override fun observeActionMessages(): Flow<String?> {
+        Timber.tag(TAG).d("observeActionMessages called (MSAL - Not Implemented)")
+        return flowOf(null)
+    }
 
     override fun clearActionMessage() {
-        _accountActionMessage.tryEmit(null)
+        Timber.tag(TAG).d("clearActionMessage called (MSAL - Not Implemented)")
     }
 
     override suspend fun markAccountForReauthentication(accountId: String, providerType: String) {
-        if (providerType.equals(Account.PROVIDER_TYPE_MS, ignoreCase = true)) {
-            _msAccounts.value = _msAccounts.value.map { acc ->
-                if (acc.id == accountId) acc.copy(needsReauthentication = true) else acc
-            }
-            Timber.tag(TAG).i("Marked MS account $accountId for re-authentication.")
-            updateOverallApplicationAuthState()
-        } else {
-            Timber.tag(TAG)
-                .w("markAccountForReauthentication called for non-MS account: $accountId, provider: $providerType")
+        Timber.tag(TAG)
+            .d("markAccountForReauthentication called for $accountId, provider $providerType")
+        if (!providerType.equals(Account.PROVIDER_TYPE_MS, ignoreCase = true)) {
+            Timber.tag(TAG).w("markAccountForReauthentication: Unsupported provider: $providerType")
+            return
         }
-    }
-
-    private fun updateOverallApplicationAuthState(checkActiveAccount: Boolean = false) {
-        val currentMsAccounts = _msAccounts.value
-        val newState = when {
-            currentMsAccounts.isEmpty() -> OverallApplicationAuthState.NO_ACCOUNTS_CONFIGURED
-            currentMsAccounts.all { it.needsReauthentication } -> OverallApplicationAuthState.ALL_ACCOUNTS_NEED_REAUTHENTICATION
-            // Check if activeMicrosoftAccountHolder.activeMicrosoftAccountId is null AND there's at least one account that doesn't need reauth
-            // This can happen if an account was signed out, and we need to determine if we can auto-select another.
-            currentMsAccounts.any { it.needsReauthentication } -> OverallApplicationAuthState.PARTIAL_ACCOUNTS_NEED_REAUTHENTICATION
-            else -> OverallApplicationAuthState.AT_LEAST_ONE_ACCOUNT_AUTHENTICATED
-        }
-        if (_overallApplicationAuthState.value != newState) {
-            _overallApplicationAuthState.value = newState
-        }
-        Timber.tag(TAG).d("Updated OverallApplicationAuthState to: $newState")
-
-        // Logic to manage active account
-        val activeMsId = activeMicrosoftAccountHolder.getActiveMicrosoftAccountIdValue()
-        if (checkActiveAccount) { // Only run this more complex logic if explicitly asked
-            if (activeMsId == null && currentMsAccounts.isNotEmpty()) {
-                // If no active account, try to set one if possible
-                currentMsAccounts.firstOrNull { !it.needsReauthentication }
-                    ?.let { newActiveAccount ->
-                        Timber.tag(TAG)
-                            .i("Setting active MS account to ${newActiveAccount.id} as no active account was set and one is available.")
-                        activeMicrosoftAccountHolder.setActiveMicrosoftAccountId(newActiveAccount.id)
-                    }
-            } else if (activeMsId != null) {
-                // If there is an active account, ensure it's still valid (exists and not needing re-auth)
-                val activeAccountStillValid =
-                    currentMsAccounts.any { it.id == activeMsId && !it.needsReauthentication }
-                if (!activeAccountStillValid) {
-                    Timber.tag(TAG)
-                        .i("Active MS account $activeMsId is no longer valid (removed or needs re-auth). Clearing active account.")
-                    activeMicrosoftAccountHolder.setActiveMicrosoftAccountId(null)
-                    // After clearing, try to set a new one if possible
-                    currentMsAccounts.firstOrNull { !it.needsReauthentication }
-                        ?.let { newActiveAccount ->
-                            Timber.tag(TAG)
-                                .i("Setting new active MS account to ${newActiveAccount.id} after previous one became invalid.")
-                            activeMicrosoftAccountHolder.setActiveMicrosoftAccountId(
-                                newActiveAccount.id
-                            )
-                        }
-                }
-            }
-        } else { // Simpler check if not full checkActiveAccount
-            if (activeMsId != null && currentMsAccounts.none { it.id == activeMsId }) {
-                Timber.tag(TAG)
-                    .i("Active MS account $activeMsId was removed. Clearing active account.")
-                activeMicrosoftAccountHolder.setActiveMicrosoftAccountId(null)
-            }
-        }
+        Timber.tag(TAG)
+            .w("markAccountForReauthentication: MicrosoftAuthManager does not have a public method to mark account for re-auth. This is a TODO.")
     }
 
     override suspend fun syncAccount(accountId: String): Result<Unit> {
-        Timber.tag(TAG)
-            .d("syncAccount called for MS account $accountId. Relies on MSAL observation.")
-        return Result.success(Unit)
+        Timber.tag(TAG).d("syncAccount called for $accountId (MSAL)")
+        return try {
+            val iAccount = microsoftAuthManager.getMsalAccount(accountId)
+            if (iAccount == null) {
+                Timber.tag(TAG)
+                    .w("syncAccount: MSAL account $accountId not found for token refresh.")
+                markAccountForReauthentication(accountId, Account.PROVIDER_TYPE_MS)
+                return Result.failure(Exception("MSAL account $accountId not found for sync."))
+            }
+            val scopes = MicrosoftAuthManager.MICROSOFT_SCOPES
+            val tokenResult = microsoftAuthManager.acquireTokenSilent(iAccount, scopes)
+            when (tokenResult) {
+                is AcquireTokenResult.Success -> Result.success(Unit)
+                is AcquireTokenResult.UiRequired -> {
+                    Timber.tag(TAG).w("syncAccount for $accountId requires UI interaction.")
+                    markAccountForReauthentication(accountId, Account.PROVIDER_TYPE_MS)
+                    Result.failure(
+                        MsalUiRequiredException(
+                            "UI_REQUIRED_FOR_SYNC",
+                            "UI required for sync/token refresh for $accountId"
+                        )
+                    )
+                }
+
+                is AcquireTokenResult.Error -> {
+                    Timber.tag(TAG).e(
+                        tokenResult.exception,
+                        "syncAccount for $accountId failed with MSAL error."
+                    )
+                    Result.failure(tokenResult.exception)
+                }
+
+                else -> {
+                    Timber.tag(TAG)
+                        .w("syncAccount for $accountId returned unexpected token result: $tokenResult")
+                    Result.failure(Exception("Unexpected token result during sync for $accountId"))
+                }
+            }
+        } catch (e: MsalUiRequiredException) {
+            Timber.tag(TAG)
+                .w(e, "syncAccount for $accountId requires UI interaction (caught exception).")
+            markAccountForReauthentication(accountId, Account.PROVIDER_TYPE_MS)
+            Result.failure(e)
+        } catch (e: Exception) {
+            Timber.tag(TAG).e(e, "syncAccount for $accountId failed with generic exception.")
+            Result.failure(e)
+        }
     }
+
+    override val overallApplicationAuthState: Flow<OverallApplicationAuthState> =
+        microsoftAuthManager.msalAccounts
+            .map { iAccounts ->
+                if (iAccounts.isEmpty()) {
+                    OverallApplicationAuthState.NO_ACCOUNTS_CONFIGURED
+                } else {
+                    val anyNeedsReauth = iAccounts.any { account ->
+                        false
+                    }
+
+                    if (anyNeedsReauth) {
+                        if (iAccounts.all { false }) {
+                            OverallApplicationAuthState.ALL_ACCOUNTS_NEED_REAUTHENTICATION
+                        } else {
+                            OverallApplicationAuthState.PARTIAL_ACCOUNTS_NEED_REAUTHENTICATION
+                        }
+                    } else {
+                        OverallApplicationAuthState.AT_LEAST_ONE_ACCOUNT_AUTHENTICATED
+                    }
+                }
+            }
+            .distinctUntilChanged()
+            .catch { e ->
+                Timber.tag(TAG).e(e, "Error in overallApplicationAuthState flow")
+                emit(OverallApplicationAuthState.UNKNOWN)
+            }
+            .flowOn(ioDispatcher)
+            .shareIn(externalScope, SharingStarted.WhileSubscribed(5000), replay = 1)
 
     override fun getAuthenticationIntentRequest(
         providerType: String,
         activity: Activity,
         scopes: List<String>?
-    ): Flow<GenericAuthResult> {
-        if (providerType != Account.PROVIDER_TYPE_MS) {
-            return flowOf(
+    ): Flow<GenericAuthResult> = flow {
+        Timber.tag(TAG)
+            .d("getAuthenticationIntentRequest called for provider: $providerType (MSAL)")
+        if (!providerType.equals(Account.PROVIDER_TYPE_MS, ignoreCase = true)) {
+            emit(
                 GenericAuthResult.Error(
                     ErrorDetails(
-                        "getAuthenticationIntentRequest for non-MS provider",
-                        "invalid_provider"
+                        message = "Unsupported provider: $providerType",
+                        code = "UNSUPPORTED_PROVIDER"
                     )
                 )
             )
+            return@flow
         }
         Timber.tag(TAG)
-            .i("getAuthenticationIntentRequest called for MS. MSAL manages its own UI. Use signIn().")
-        return flowOf(
+            .w("getAuthenticationIntentRequest for MSAL: MSAL's acquireToken handles UI internally. Use signIn().")
+        emit(
             GenericAuthResult.Error(
                 ErrorDetails(
-                    "MSAL manages its own UI. Use signIn() instead.",
-                    "msal_ui_managed_internally"
+                    message = "MSAL does not typically provide a separate sign-in intent. Use signIn().",
+                    code = "MSAL_INTENT_NOT_APPLICABLE"
                 )
             )
         )
+    }.flowOn(ioDispatcher)
+
+    private fun mapMsalExceptionToErrorDetails(exception: Throwable?): ErrorDetails {
+        if (exception == null) {
+            return ErrorDetails("Unknown authentication error.", "UNKNOWN_AUTH_ERROR")
+        }
+        Timber.tag(TAG).w(exception, "Mapping MSAL exception to ErrorDetails")
+        return when (exception) {
+            is MsalUiRequiredException -> ErrorDetails(
+                message = "Authentication requires user interaction. Please sign in again.",
+                code = exception.errorCode ?: "UI_REQUIRED"
+            )
+
+            is MsalClientException -> ErrorDetails(
+                message = exception.message ?: "A client error occurred during authentication.",
+                code = exception.errorCode ?: "CLIENT_ERROR"
+            )
+
+            is MsalDeclinedScopeException -> ErrorDetails(
+                message = "Some requested permissions were declined. Granted: ${exception.grantedScopes.joinToString()}, Declined: ${exception.declinedScopes.joinToString()}",
+                code = "SCOPES_DECLINED"
+            )
+
+            else -> ErrorDetails(
+                message = exception.message
+                    ?: "An unexpected error occurred during authentication.",
+                code = "GENERIC_AUTH_FAILURE",
+                cause = exception
+            )
+        }
     }
 }
 

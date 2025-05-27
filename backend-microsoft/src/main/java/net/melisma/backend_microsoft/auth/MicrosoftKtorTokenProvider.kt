@@ -34,19 +34,26 @@ class MicrosoftKtorTokenProvider @Inject constructor(
         val accountId = activeAccountHolder.getActiveMicrosoftAccountIdValue()
         if (accountId == null) {
             Timber.tag(TAG).w("No active Microsoft account ID. Cannot load tokens.")
+            // Consider throwing NoActiveAccountException here as discussed in alternatives.
             return null
         }
         Timber.tag(TAG).d("Active Microsoft account ID: $accountId")
 
-        val msalAccount = findMsalAccount(accountId)
+        // Use the new getMsalAccount from MicrosoftAuthManager
+        val msalAccount = microsoftAuthManager.getMsalAccount(accountId)
+
         if (msalAccount == null) {
             Timber.tag(TAG)
-                .e("MSAL IAccount not found for active ID: $accountId. This is unexpected.")
-            // This could be due to a race condition (e.g. account removed right before this call)
-            // Or an issue with account loading/persistence.
-            // Returning null will likely cause the API call to fail.
-            // Throwing an exception might be too aggressive if Ktor can't handle it gracefully.
-            return null
+                .e("MSAL IAccount not found via MicrosoftAuthManager for active ID: $accountId.")
+            // This could trigger a re-auth needed state more proactively.
+            // For now, returning null will cause API call to fail, which Ktor might retry or bubble up.
+            // Consider throwing a specific exception like AccountNotFoundException or NeedsReauthenticationException.
+            accountRepository.markAccountForReauthentication(accountId, Account.PROVIDER_TYPE_MS)
+            throw NeedsReauthenticationException(
+                accountIdToReauthenticate = accountId,
+                message = "MSAL IAccount not found for active ID $accountId via MicrosoftAuthManager. Account may need re-login or is missing from MSAL cache."
+            )
+            // return null // Old behavior
         }
         Timber.tag(TAG).d("Found MSAL account: ${msalAccount.username}")
         return acquireTokenAndConvertToBearer(msalAccount, isRefreshAttempt = false)
@@ -54,35 +61,28 @@ class MicrosoftKtorTokenProvider @Inject constructor(
 
     override suspend fun refreshBearerTokens(oldTokens: BearerTokens?): BearerTokens? {
         Timber.tag(TAG).d("refreshBearerTokens() called.")
-        // The accountId should be stored in oldTokens.refreshToken as per getBearerTokens logic
-        // MODIFICATION: Fetch accountId from ActiveMicrosoftAccountHolder directly
-        // val accountId = oldTokens?.refreshToken
         val accountId = activeAccountHolder.getActiveMicrosoftAccountIdValue()
         if (accountId == null) {
             Timber.tag(TAG)
                 .w("No active Microsoft account ID found via ActiveMicrosoftAccountHolder. Cannot refresh tokens.")
-            // Optionally, we could still try oldTokens?.refreshToken as a fallback,
-            // but if activeAccountHolder doesn't have it, it's a systemic issue.
-            // For now, failing directly is cleaner.
-            // Consider if this state (active account ID is null but we are trying to refresh)
-            // should throw a specific exception.
             throw TokenProviderException("Cannot refresh tokens: No active Microsoft account ID available.")
         }
         Timber.tag(TAG).d("Attempting to refresh tokens for Microsoft account ID: $accountId")
 
-        val msalAccount = findMsalAccount(accountId)
+        // Use the new getMsalAccount from MicrosoftAuthManager
+        val msalAccount = microsoftAuthManager.getMsalAccount(accountId)
+
         if (msalAccount == null) {
             Timber.tag(TAG).e(
-                "MSAL IAccount not found for active ID: $accountId during refresh. This is unexpected."
+                "MSAL IAccount not found via MicrosoftAuthManager for active ID: $accountId during refresh."
             )
-            // Propagate the issue as a TokenProviderException or NeedsReauthenticationException
+            accountRepository.markAccountForReauthentication(accountId, Account.PROVIDER_TYPE_MS)
             throw NeedsReauthenticationException(
                 accountIdToReauthenticate = accountId,
-                message = "MSAL account not found for ID $accountId during token refresh."
+                message = "MSAL account not found for ID $accountId via MicrosoftAuthManager during token refresh. Account may need re-login or is missing from MSAL cache."
             )
         }
 
-        // Use the centralized AppRequiredScopes for refreshing tokens as well.
         return acquireTokenAndConvertToBearer(msalAccount, isRefreshAttempt = true)
     }
 
@@ -203,17 +203,5 @@ class MicrosoftKtorTokenProvider @Inject constructor(
                 cause = e
             )
         }
-    }
-
-    private suspend fun findMsalAccount(accountId: String): IAccount? {
-        Timber.tag(TAG).d("findMsalAccount called for accountId: $accountId")
-        val iAccount: IAccount? = microsoftAuthManager.getAccount(accountId)
-
-        if (iAccount != null) {
-            Timber.tag(TAG).d("Found MSAL account with username: ${iAccount.username}")
-        } else {
-            Timber.tag(TAG).w("No MSAL account found with ID: $accountId")
-        }
-        return iAccount
     }
 }

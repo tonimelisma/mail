@@ -380,19 +380,106 @@ This section consolidates all known shortcuts and areas needing improvement.
   *simulated* API call. It calls the real `MailApiService`. However, due to API limitations (see "
   MailApiService Pagination Limitation"), it cannot implement full network-backed pagination and has
   a simplified role (REFRESH only from network).
+* **MSAL Token Cache Instability (NEW)**: Frequent MSAL errors related to token decryption (
+  `AdalKey`) and deserialization, potentially indicating corrupted cache or issues with ADAL to MSAL
+  migration remnants. This can lead to failure in retrieving valid tokens.
+* **Delayed Active Account ID for Token Refresh (NEW)**: The `ActiveMicrosoftAccountHolder` may not
+  have the active Microsoft account ID available immediately when a token refresh is critically
+  needed by Ktor's auth plugin, leading to refresh failures (
+  `TokenProviderException: Cannot refresh tokens: No active Microsoft account ID available`). A
+  subsequent silent token acquisition seems to populate this, but too late for the initial failed
+  operation.
+* **Stale Data Presentation During Auth Errors (NEW)**: The UI can display stale data (e.g.,
+  previously fetched messages) while a subsequent data refresh operation (like
+  `MessageRemoteMediator`'s `REFRESH`) fails due to authentication errors. This can be misleading to
+  the user.
+* **Database Migration for `AccountEntity.needsReauthentication` (RESOLVED during previous sessions)
+  **: The addition of `needsReauthentication` to `AccountEntity` required a new Room database
+  migration (MIGRATION_3_4), which was successfully implemented.
+* **`Activity?` Argument in `MainViewModel` (RESOLVED during previous sessions)**: Passing `null`
+  for `Activity?` to `threadRepository.setTargetFolderForThreads` was reviewed and found not to
+  cause issues with the current implementation.
 
-## **VIII. Potential Next Steps & Future Considerations**
+## **VIII. Potential Next Steps & Future Considerations (Revised May 28, 2025)**
 
-1. **Runtime Testing of Paging 3 Message List:**
+Based on recent findings, particularly the MSAL authentication instability, the immediate priority
+is to ensure reliable account authentication and token management before proceeding with further
+caching features.
+
+1. **Stabilize Microsoft Account Authentication (URGENT HIGH PRIORITY):**
+    * **Goal**: Ensure reliable access token acquisition and refresh for Microsoft accounts to
+      resolve observed runtime authentication failures.
+    * **Task 1.1 (Investigate and Resolve MSAL Cache Issues)**:
+        * Research and implement strategies to handle MSAL cache corruption (evidenced by `AdalKey`
+          decryption failures and deserialization errors).
+        * Consider options:
+            * Programmatic cache clearing for an account if persistent decryption errors occur,
+              followed by a prompt for re-authentication.
+            * Review MSAL library version and consult best practices for cache management,
+              especially if ADAL was used previously.
+            * Ensure robust error handling around token storage and retrieval.
+    * **Task 1.2 (Ensure Timely Availability of Active Account ID for Token Refresh)**:
+        * Modify the authentication flow or the `ActiveMicrosoftAccountHolder` logic to guarantee
+          the active Microsoft account ID is reliably available *before* Ktor's `Auth` plugin
+          attempts a token refresh that depends on it.
+        * Possible approaches:
+            * Eagerly load and set the active account ID upon app initialization (after accounts are
+              loaded from DB) or immediately after a successful sign-in/token refresh.
+            * Introduce a mechanism for Ktor's `BearerAuthProvider` or our
+              `MicrosoftKtorTokenProvider` to await confirmation of an available active account ID
+              before proceeding with operations that might trigger a refresh.
+    * **Task 1.3 (Improve Auth Error Handling in UI and Data Flow)**:
+        * When `MessageRemoteMediator` or other data sources encounter an explicit authentication
+          failure (e.g., 401 error leading to "Authentication failed. Please sign in again."):
+            * Ensure the UI clearly and prominently communicates this error to the user, possibly
+              prompting for re-authentication directly or guiding to settings.
+            * Prevent the display of stale data as if it's current. If a refresh fails due to auth,
+              the UI should reflect this by either clearing the stale list, showing a full-screen
+              auth error overlay, or clearly indicating the data is outdated and an action is
+              required.
+            * The `OverallApplicationAuthState` in `DefaultAccountRepository` should robustly
+              reflect states where an account requires re-authentication due to such runtime token
+              issues, and the UI should react accordingly.
+
+2. **Runtime Testing of Paging 3 Message List (Post-Auth Fixes):**
     * **Goal**: Verify the message list powered by `Pager`, `MessageRemoteMediator` (for refresh),
-      and `MessageDao`'s `PagingSource` works correctly at runtime.
+      and `MessageDao`'s `PagingSource` works correctly at runtime once authentication is stable.
     * **Tasks**:
         * Manually test initial message load when selecting a folder.
-        * Test pull-to-refresh functionality.
-        * Observe behavior with empty folders and folders that return API errors during the refresh.
+        * Test pull-to-refresh functionality – ensure it correctly triggers `MessageRemoteMediator`'
+          s `REFRESH`.
+        * Observe behavior with empty folders and folders that return API errors (other than auth)
+          during the refresh.
         * Ensure loading indicators and error states in `MessageListContent.kt` are displayed
           correctly based on `LazyPagingItems.loadState`.
-2. **Enhance `MailApiService` for Pagination (Longer Term):**
+
+3. **Implement "True Offline" for Simple Actions with WorkManager:**
+    * **Goal**: Allow users to mark messages as read/unread or star/unstar them instantly, with the
+      network sync happening reliably in the background.
+    * **Task 3.1**: Implement a `SyncMessageStateWorker` using WorkManager. This worker will take a
+      messageId and its new state as input.
+    * **Task 3.2**: In `DefaultMessageRepository.markMessageRead()`, replace the temporary direct
+      API call with logic to enqueue a unique `OneTimeWorkRequest` for the `SyncMessageStateWorker`.
+      The worker should have a network constraint and a retry policy.
+    * **Task 3.3**: The worker, upon successful API sync, will update the message's `needsSync` flag
+      back to `false` in the database.
+
+4. **Implement On-Demand Fetch for Message Bodies:**
+    * **Goal**: When a user clicks on a message from the list, fetch its full body from the network
+      if it's not already cached.
+    * **Task 4.1**: Add `MessageBodyEntity` to the database and update `AppDatabase` with a
+      migration.
+    * **Task 4.2**: In `MessageDetailViewModel`, upon loading, check the `MessageBodyDao` first.
+    * **Task 4.3**: If the body is missing, trigger a use case that calls
+      `mailApiService.getMessageDetails()`, saves the result to the `MessageBodyDao`, and lets the
+      reactive UI update automatically.
+
+5. **Address Other Tech Debt (Ongoing as opportunities arise):**
+    * Systematically review and fix items in "Revised Known Technical Debt" (API-Model
+      discrepancies, mappers, full offline writes for other actions, log spam).
+    * Decide on the `ButtonPrimary` styling or confirm standard Button is acceptable.
+
+6. **Enhance `MailApiService` for Pagination (Longer Term):**
     * **Goal**: Introduce proper pagination support in `MailApiService` and its implementations if
       backend APIs allow.
     * **Tasks**:
@@ -402,15 +489,190 @@ This section consolidates all known shortcuts and areas needing improvement.
           `PagedMessageResponse` (or similar) containing messages and the next page token.
         * Update `MessageRemoteMediator` to implement a full `RemoteKeys` strategy for
           `LoadType.APPEND` if the API is enhanced.
-3. **Implement "True Offline" for Simple Actions with WorkManager (As per original plan):**
-    * Focus on `markMessageRead` using `WorkManager` for background sync.
-4. **Implement On-Demand Fetch for Message Bodies (As per original plan):**
-    * Add `MessageBodyEntity`, migration, and DAO/ViewModel logic.
-5. **Address Other Tech Debt:**
-    * Systematically review and fix items in "Revised Known Technical Debt" (API-Model
-      discrepancies, mappers, offline writes, log spam).
-    * Decide on the `ButtonPrimary` styling.
 
 The old "IV. Next Manageable Increment" and "V. Session Updates (Current Session Summary)"
 including "Potential Issues & Areas for Future Review from this Session" should be considered
 superseded by these new sections.
+
+## **IX. Session Updates (Late May 2025 - MSAL Authentication Investigation)**
+
+Following the successful build and initial Paging 3 integration, runtime testing and log analysis
+for Microsoft accounts revealed significant authentication issues contributing to the previously
+reported "endless loading messages" problem.
+
+* **Initial Observation**: Users experienced an "endless loading" screen. Logs showed successful
+  initial folder and message fetching (for a small number of messages), but the UI seemed stuck, and
+  `MainAppScreenComposable` was recomposing with `isLoadingAccountAction: true` even after messages
+  were saved.
+
+* **Architectural Change Implemented**: The primary architectural change to address the loading flow
+  was to make Paging 3 the main driver for message list fetching.
+  `DefaultMessageRepository.setTargetFolder()` was modified to no longer automatically trigger
+  `syncMessagesForFolderInternal()`. Instead, `MainViewModel` updates `_messagesPagerFlow` with a
+  new `Pager` instance, causing `MessageRemoteMediator` to handle the network `REFRESH`.
+
+* **MSAL Log Analysis & Key Findings**:
+    * **Token Decryption Failures**: Multiple warnings like
+      `Failed to decrypt with key:AdalKey thumbprint : ...` and `Failed to decrypt value` from MSAL
+      components (`MSAL_StorageHelper`, `StorageEncryptionHelper`, `MSAL_SharedPrefsBroker`) were
+      observed. This suggests problems with decrypting cached authentication tokens or related data,
+      possibly due to corrupted cache or remnants from an older ADAL setup. Messages like
+      `Deserialization failed. Skipping Credential` also appeared.
+    * **Expired Access Token**: Logs explicitly stated
+      `Access token is expired. Removing from cache...`.
+    * **Token Refresh Failure**:
+        * When `KtorMSGraphClient` attempted an API call (e.g., to fetch messages), it received a
+          `401 Unauthorized`.
+        * The subsequent automatic token refresh mechanism failed. A critical log was
+          `MsKtorTokenProvider W No active Microsoft account ID found via ActiveMicrosoftAccountHolder. Cannot refresh tokens.`
+          This resulted in a
+          `TokenProviderException: Cannot refresh tokens: No active Microsoft account ID available.`
+    * **API Error**: The Graph API responded with
+      `{"error":{"code":"InvalidAuthenticationToken","message":"Access token is empty."...}}`.
+    * **`MessageRemoteMediator` Behavior**: The `MessageRemoteMediator` correctly caught this `401`
+      error during its `LoadType.REFRESH` operation and reported it as
+      `REFRESH for ... API call failed: Authentication failed. Please sign in again.`
+    * **UI State Discrepancy**: The UI (`MainAppScreenComposable`, `MessageListContent`) showed that
+      `lazyMessageItems.loadState.refresh` was an `Error` state reflecting the auth failure.
+      However, `lazyMessageItems.itemCount` was 4, meaning previously fetched (now stale) messages
+      were still being displayed by `MessageListSuccessContentPaging` *before* the error UI for the
+      refresh failure could take over or be clearly presented.
+    * **Eventual Silent Token Success**: Towards the end of the log sequence, there were indications
+      that a *later* silent token acquisition attempt *did* succeed (
+      `MicrosoftAuthManager I acquireTokenSilent: Success...`), and `ActiveMicrosoftAccountHolder`
+      was updated with the active account ID. This success, however, occurred *after* the message
+      loading attempt had already failed.
+
+* **Conclusion on "Endless Loading"**: The "endless loading" for Microsoft accounts is strongly tied
+  to this cycle of token issues: inability to decrypt cached tokens, leading to an expired/invalid
+  token state, followed by a failure to refresh the token due to the `ActiveMicrosoftAccountHolder`
+  not providing the account ID at the critical moment. While the Paging 3 and `RemoteMediator`
+  infrastructure correctly identifies and reports the network/auth error, the user experience can be
+  poor if stale data is shown followed by an error, or if the UI doesn't clearly guide the user to
+  re-authenticate. The fact that a silent token refresh *eventually* succeeds suggests the
+  underlying account setup is mostly correct but timing/state issues in the auth pipeline are
+  causing intermittent but severe failures.
+
+This investigation has shifted the immediate priority towards stabilizing the MSAL authentication
+flow.
+
+## **X. Session Updates (Late May 2025 - Build Fixes & MSAL Refactor)**
+
+This session focused on resolving compilation errors that arose after previous refactoring efforts,
+particularly in the `backend-microsoft` and `data` modules. The primary goal was to achieve a
+successfully building project state to enable further runtime testing and debugging of MSAL
+authentication issues.
+
+**Key Accomplishments & Fixes:**
+
+* **`backend-microsoft` Module Compilation:**
+    * **`MicrosoftAuthManager.signOut()` Simplification (SHORTCUT):**
+        * The complex `suspendCancellableCoroutine` logic within `MicrosoftAuthManager.signOut()`
+          was causing persistent "No value passed for parameter 'onCancellation'" compilation
+          errors.
+        * **Shortcut Taken**: This method was temporarily simplified to a basic implementation that
+          clears account data and returns `SignOutResultWrapper.Success` directly, bypassing the
+          problematic coroutine and MSAL `removeAccount` callback bridge. The original complex logic
+          is commented out and marked with a TODO. This was essential to unblock the build.
+    * **`MicrosoftAccountRepository` Refactoring:**
+        * Aligned method signatures and return types with the `AccountRepository` interface and the
+          actual public API of `MicrosoftAuthManager`.
+        * Corrected usage of `msalAccounts` Flow from `MicrosoftAuthManager`.
+        * Updated `signIn` to use `microsoftAuthManager.signInInteractive` and map its
+          `AuthenticationResultWrapper`.
+        * Corrected `GenericSignOutResult.Error` and `GenericAuthResult.Error` constructor calls to
+          use `ErrorDetails`.
+        * Updated `syncAccount` to use `microsoftAuthManager.getMsalAccount` and
+          `acquireTokenSilent`.
+        * Added `TODO` comments for `markAccountForReauthentication` where it calls a non-existent
+          method in `MicrosoftAuthManager`.
+        * Simplified `overallApplicationAuthState` logic with `TODO`s, as the true "needs
+          re-authentication" status per account is not yet reliably determined.
+    * **`MicrosoftAccountMappers.kt` Creation & Correction:**
+        * Created `MicrosoftAccountMappers.kt` in the `backend-microsoft.mapper` package.
+        * Defined `IAccount.toDomainAccount()` and `List<IAccount>.toDomainAccounts()` extension
+          functions.
+        * **`getHomeAccountId()` Issue & Workaround (SHORTCUT/CHALLENGE):**
+            * Encountered persistent "unresolved reference" errors for `IAccount.getHomeAccountId()`
+              despite Javadoc indicating its existence.
+            * **Shortcut Taken**: The mapper was temporarily modified to use only `IAccount.id` for
+              the `Account.id` field. A `TODO` was added to revisit this, as
+              `getHomeAccountId().getIdentifier()` is preferred for a stable unique ID. This
+              workaround was necessary to proceed with compilation.
+            * **Challenge**: The root cause of `getHomeAccountId()` being unresolved remains
+              unknown (potential MSAL library version mismatch with Javadoc, or a subtle
+              build/classpath issue).
+    * **Missing Imports:** Added missing imports for `AcquireTokenResult` in
+      `MicrosoftAccountRepository.kt`.
+
+* **`:data` Module Compilation (Paging 3 Fix):**
+    * **`DefaultMessageRepository.kt` - Paging `map` Operator:**
+        * Resolved an `Argument type mismatch` and `Unresolved reference` error when using `.map` on
+          a `Flow<PagingData<T>>`.
+        * **Fix**: Added an explicit import for `androidx.paging.map`. This helped the Kotlin
+          compiler correctly resolve the Paging 3 library's extension function for
+          `Flow<PagingData<T>>.map`, which handles the item transformation within the `PagingData`
+          stream, as opposed to the standard `kotlinx.coroutines.flow.Flow.map`.
+
+* **Build Status**: The project is now **BUILDING SUCCESSFULLY** after these changes.
+
+**Challenges Encountered:**
+
+* The `suspendCancellableCoroutine` `onCancellation` parameter issue in
+  `MicrosoftAuthManager.signOut` was a significant blocker and proved difficult to resolve directly,
+  necessitating the current simplification.
+* The `IAccount.getHomeAccountId()` unresolved reference was unexpected and required a workaround to
+  continue. This points to potential underlying issues with the MSAL dependency or project
+  configuration that need further investigation by the user.
+* Compiler errors can sometimes be misleading, as seen with the Paging `map` operator where the root
+  cause was a missing specific import leading to type inference problems.
+
+**Revised Technical Debt & Shortcuts from this Session:**
+
+* **`MicrosoftAuthManager.signOut()` Logic (MAJOR SHORTCUT):** The core logic for MSAL account
+  removal and bridging callbacks via `suspendCancellableCoroutine` is currently commented out and
+  replaced with a stub. This needs to be properly fixed.
+* **`IAccount.getHomeAccountId()` Mapper Workaround (CRITICAL SHORTCUT):** Using only `IAccount.id`
+  in `MicrosoftAccountMappers.kt` is a temporary fix. A stable, unique account identifier from
+  MSAL (ideally via `getHomeAccountId().getIdentifier()`) is essential for long-term data integrity.
+* **`needsReauthentication` Placeholder Logic:**
+    * `MicrosoftAccountMappers.kt` defaults `Account.needsReauthentication` to `false`.
+    * `MicrosoftAccountRepository.overallApplicationAuthState` has placeholder logic for determining
+      this state. This remains a significant area for improvement.
+* **Missing `markAccountForReauthentication` Implementation:** The repository calls a `TODO`-marked
+  non-existent method in `MicrosoftAuthManager`.
+
+**Immediate Next Steps (Post-Build Fix):**
+
+1. **Runtime Test MSAL Flows:** With the project building, rigorously test:
+    * Microsoft account sign-in.
+    * Silent token acquisition (`acquireTokenSilent`).
+    * The simplified `signOut` flow.
+    * Observe `ActiveMicrosoftAccountHolder` behavior.
+    * Focus on the scenarios previously causing token decryption errors and refresh failures, as
+      detailed in `CACHE.md` Section IX.
+2. **Investigate and Fix `IAccount.getHomeAccountId()`:** The user needs to determine why this
+   standard MSAL method is unresolved in their project environment and restore its usage in
+   `MicrosoftAccountMappers.kt`.
+3. **Restore and Debug `MicrosoftAuthManager.signOut()`:** Attempt to reinstate the original
+   `signOut` logic, focusing on resolving the `suspendCancellableCoroutine` `onCancellation` issue.
+   This might involve:
+    * Ensuring the coroutine context for MSAL callbacks is correctly handled.
+    * Checking for any Kotlin version / MSAL library version incompatibilities affecting coroutine
+      interop.
+    * Simplifying the callback-to-coroutine bridge if the current channel-based approach remains
+      problematic.
+4. **Address `needsReauthentication` Flag:**
+    * Design and implement a reliable way for `MicrosoftAuthManager` to determine and expose the
+      `needsReauthentication` status for an `IAccount`.
+    * Update `MicrosoftAccountMappers.kt` and
+      `MicrosoftAccountRepository.overallApplicationAuthState` to use this.
+    * Implement the `markAccountForReauthentication` pathway through `MicrosoftAuthManager` to
+      `MicrosoftTokenPersistenceService`.
+5. **Lint Warning Review:** Address the `Check for instance is always 'true'` warning in
+   `DefaultAccountRepository.kt:570:33`.
+
+This session successfully restored the project to a buildable state, which is a critical
+prerequisite for tackling the more complex runtime authentication issues with MSAL. The shortcuts
+taken were necessary trade-offs to unblock compilation and should be addressed to ensure application
+robustness.

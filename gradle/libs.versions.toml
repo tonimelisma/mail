@@ -39,7 +39,7 @@ datastorePreferences = "1.1.7" # <-- ADDED DATASTORE VERSION
 timber = "5.0.1" # Added Timber version
 navigationCompose = "2.9.0" # Added Navigation Compose version
 hiltNavigationCompose = "1.2.0" # Added Hilt Navigation Compose version
-paging = "3.3.0"
+paging = "3.3.6"
 
 [libraries]
 kotlin-stdlib = { group = "org.jetbrains.kotlin", name = "kotlin-stdlib", version.ref = "kotlin" }
