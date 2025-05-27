@@ -125,7 +125,7 @@ fun MainAppScreen(
                 val currentAuthState = state.overallApplicationAuthState
                 Log.d(
                     TAG_COMPOSABLE,
-                    "MainAppScreen content recomposing. AuthState: ${currentAuthState::class.simpleName}, isLoadingAccountAction: ${state.isLoadingAccountAction}, Accounts: ${state.accounts.size}, SelectedFolder: ${state.selectedFolder?.displayName}"
+                    "MainAppScreen recomposing. AuthState: ${currentAuthState::class.simpleName}, isLoadingAccountAction: ${state.isLoadingAccountAction}, Accounts: ${state.accounts.size}, SelectedFolder: ${state.selectedFolder?.displayName}, ViewMode: ${state.currentViewMode}"
                 )
 
                 when (currentAuthState) {
@@ -213,6 +213,10 @@ fun MainAppScreen(
                             ) {
                                 when (state.currentViewMode) {
                                     ViewMode.MESSAGES -> {
+                                        Log.d(
+                                            TAG_COMPOSABLE,
+                                            "MainAppScreen: MESSAGES view. lazyMessageItems.loadState: Refresh=${lazyMessageItems.loadState.refresh}, Append=${lazyMessageItems.loadState.append}, Prepend=${lazyMessageItems.loadState.prepend}. ItemCount: ${lazyMessageItems.itemCount}"
+                                        )
                                         MessageListContent(
                                             messages = lazyMessageItems,
                                             accountContext = selectedAccount,
@@ -240,12 +244,28 @@ fun MainAppScreen(
                                                     )
                                                 }
                                             },
-                                            onRetry = { lazyMessageItems.retry() },
-                                            onRefresh = { lazyMessageItems.refresh() }
+                                            onRetry = {
+                                                Log.i(
+                                                    TAG_COMPOSABLE,
+                                                    "MessageListContent onRetry called. Calling lazyMessageItems.retry()"
+                                                )
+                                                lazyMessageItems.retry()
+                                            },
+                                            onRefresh = {
+                                                Log.i(
+                                                    TAG_COMPOSABLE,
+                                                    "MessageListContent onRefresh called. Calling lazyMessageItems.refresh()"
+                                                )
+                                                lazyMessageItems.refresh()
+                                            }
                                         )
                                     }
 
                                     ViewMode.THREADS -> {
+                                        Log.d(
+                                            TAG_COMPOSABLE,
+                                            "MainAppScreen: THREADS view. threadDataState: ${state.threadDataState::class.simpleName}"
+                                        )
                                         ThreadListContent(
                                             threadDataState = state.threadDataState,
                                             accountContext = selectedAccount,

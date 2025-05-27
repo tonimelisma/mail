@@ -38,6 +38,7 @@ import net.melisma.core_db.dao.FolderDao
 import net.melisma.data.mapper.toDomainAccount
 import net.melisma.data.mapper.toDomainModel
 import net.melisma.data.mapper.toEntity
+import timber.log.Timber
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -139,8 +140,14 @@ class DefaultFolderRepository @Inject constructor(
 
     override suspend fun manageObservedAccounts(accounts: List<Account>) {
         withContext(ioDispatcher) {
-            Log.i(TAG, "manageObservedAccounts called with ${accounts.size} accounts.")
+            Timber.tag(TAG)
+                .i("manageObservedAccounts called with ${accounts.size} accounts. Usernames: ${accounts.joinToString { it.username }}.")
             val currentDbAccountEntities = accountDao.getAllAccounts().first() // Get current state
+            Timber.tag(TAG)
+                .d("manageObservedAccounts: API accounts: ${accounts.joinToString { it.id + ":" + it.username }}")
+            Timber.tag(TAG)
+                .d("manageObservedAccounts: Current DB accounts before any upsert: ${currentDbAccountEntities.joinToString { it.id + ":" + it.username }}")
+
             val currentDbAccountIds = currentDbAccountEntities.map { it.id }.toSet()
             val newApiAccountIds = accounts.map { it.id }.toSet()
 
@@ -151,13 +158,16 @@ class DefaultFolderRepository @Inject constructor(
                 syncJobs[accountId]?.cancel(CancellationException("Account removed"))
                 syncJobs.remove(accountId)
                 folderDao.deleteAllFoldersForAccount(accountId) // Clears folders
-                accountDao.deleteAccount(accountId) // Clears account
+                // accountDao.deleteAccount(accountId) // DefaultAccountRepository handles account deletion
                 _folderStates.update { it - accountId } // Also update local state immediately
             }
 
-            val accountEntitiesToUpsert = accounts.map { it.toEntity() }
-            accountDao.insertOrUpdateAccounts(accountEntitiesToUpsert)
-            Log.i(TAG, "Upserted ${accountEntitiesToUpsert.size} accounts into DB.")
+            accounts.map { it.toEntity() }
+            // accountDao.insertOrUpdateAccounts(accountEntitiesToUpsert) // DefaultAccountRepository handles account upserts
+            // Log.i(TAG, "Upserted ${accountEntitiesToUpsert.size} accounts into DB.")
+            // Timber.i(TAG, "Upserted ${accountEntitiesToUpsert.size} accounts into DB. Account IDs: ${accountEntitiesToUpsert.joinToString { it.id }}. This will trigger AccountDao observers.")
+            Timber.tag(TAG)
+                .d("manageObservedAccounts: Account upsert/delete operations are handled by DefaultAccountRepository. This repository will now proceed to check if folder syncs are needed for the observed accounts.")
 
             // For new or existing accounts, trigger an initial sync if no data or upon request
             // This logic might need refinement based on "initial sync" requirements vs. regular refresh

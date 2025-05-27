@@ -125,69 +125,106 @@ class MainViewModel @Inject constructor(
     private fun observeAccountRepositoryState() {
         Timber.tag(TAG).d("MainViewModel: observeAccountRepositoryState() - Setting up flows")
 
+        // Observe accountActionInProgress for global loading state -- REMOVING THIS as DefaultAccountRepository doesn't expose it directly.
+        // defaultAccountRepository.accountActionInProgress
+        //     .onEach { isInProgress ->
+        //         Timber.tag(TAG).d("AccountRepo accountActionInProgress changed: $isInProgress")
+        //         _uiState.update { it.copy(isLoadingAccountAction = isInProgress) }
+        //     }.launchIn(viewModelScope)
+
         defaultAccountRepository.overallApplicationAuthState
             .onEach { newOverallAuthState ->
                 Timber.tag(TAG)
-                    .d("AccountRepo OverallApplicationAuthState Changed: $newOverallAuthState")
+                    .d("AccountRepo OverallApplicationAuthState Changed: $newOverallAuthState. Current selected folder: ${_uiState.value.selectedFolder?.displayName}")
                 _uiState.update { currentState ->
                     val clearSelection =
                         newOverallAuthState == OverallApplicationAuthState.NO_ACCOUNTS_CONFIGURED ||
                                 newOverallAuthState == OverallApplicationAuthState.ALL_ACCOUNTS_NEED_REAUTHENTICATION ||
                                 newOverallAuthState == OverallApplicationAuthState.UNKNOWN
+
+                    Timber.tag(TAG)
+                        .d("clearSelection based on auth state $newOverallAuthState is $clearSelection. Previously selected account: ${currentState.selectedFolderAccountId}, folder: ${currentState.selectedFolder?.displayName}")
+
                     if (clearSelection && currentState.selectedFolder != null) {
                         Timber.tag(TAG)
                             .d("Clearing folder selection due to auth state change to $newOverallAuthState")
                         viewModelScope.launch {
+                            Timber.tag(TAG)
+                                .d("Clearing target folder in messageRepository and threadRepository due to auth state change.")
                             messageRepository.setTargetFolder(null, null)
                             threadRepository.setTargetFolderForThreads(null, null, null)
+                            _messagesPagerFlow.value = emptyFlow() // Clear pager
+                            Timber.tag(TAG).d("Cleared _messagesPagerFlow.")
                         }
                     }
                     currentState.copy(
                         overallApplicationAuthState = newOverallAuthState,
-                        isLoadingAccountAction = when (newOverallAuthState) {
-                            OverallApplicationAuthState.AT_LEAST_ONE_ACCOUNT_AUTHENTICATED,
-                            OverallApplicationAuthState.NO_ACCOUNTS_CONFIGURED,
-                            OverallApplicationAuthState.ALL_ACCOUNTS_NEED_REAUTHENTICATION,
-                            OverallApplicationAuthState.PARTIAL_ACCOUNTS_NEED_REAUTHENTICATION -> false
-
-                            else -> currentState.isLoadingAccountAction
-                        },
                         selectedFolder = if (clearSelection) null else currentState.selectedFolder,
-                        selectedFolderAccountId = if (clearSelection) null else currentState.selectedFolderAccountId
+                        selectedFolderAccountId = if (clearSelection) null else currentState.selectedFolderAccountId,
+                        messageSyncState = if (clearSelection) MessageSyncState.Idle else currentState.messageSyncState,
+                        threadDataState = if (clearSelection) ThreadDataState.Initial else currentState.threadDataState
                     )
                 }
             }.launchIn(viewModelScope)
 
         defaultAccountRepository.getAccounts()
             .onEach { newAccountList ->
-                Timber.tag(TAG).d(
-                    "AccountRepo Accounts Changed: ${newAccountList.size} accounts. Usernames: ${newAccountList.joinToString { it.username }}"
-                )
-                val previousAccounts = _uiState.value.accounts
+                val previousAccountIds = _uiState.value.accounts.map { it.id }.toSet()
                 val previousSelectedAccountId = _uiState.value.selectedFolderAccountId
+
+                Timber.tag(TAG).d(
+                    "AccountRepo Accounts list changed. New: ${newAccountList.size} (${newAccountList.joinToString { it.username }}), Previous: ${previousAccountIds.size}. Selected Acc ID: $previousSelectedAccountId. Selected Folder: ${_uiState.value.selectedFolder?.displayName}"
+                )
+
                 folderRepository.manageObservedAccounts(newAccountList)
+
+                val newAccountIds = newAccountList.map { it.id }.toSet()
+                val removedAccountIds = previousAccountIds - newAccountIds
+
+                var shouldClearSelectedFolder = false
+                if (previousSelectedAccountId != null && previousSelectedAccountId in removedAccountIds) {
+                    Timber.tag(TAG)
+                        .d("Selected account $previousSelectedAccountId was removed. Clearing folder selection and pager.")
+                    shouldClearSelectedFolder = true
+                }
+
+                if (newAccountList.isEmpty() && previousAccountIds.isNotEmpty()) {
+                    Timber.tag(TAG).d("All accounts removed. Clearing folder selection and pager.")
+                    shouldClearSelectedFolder = true
+                }
+
                 _uiState.update { currentState ->
-                    val removedAccountIds =
-                        previousAccounts.map { it.id } - newAccountList.map { it.id }.toSet()
-                    val selectedAccountRemoved =
-                        previousSelectedAccountId != null && previousSelectedAccountId in removedAccountIds
-                    if (selectedAccountRemoved) {
-                        Timber.tag(TAG)
-                            .d("Selected account $previousSelectedAccountId was removed, clearing folder selection.")
-                        viewModelScope.launch {
+                    if (shouldClearSelectedFolder) {
+                        viewModelScope.launch { // Launch for repository calls
                             messageRepository.setTargetFolder(null, null)
                             threadRepository.setTargetFolderForThreads(null, null, null)
+                            _messagesPagerFlow.value = emptyFlow()
+                            Timber.tag(TAG)
+                                .d("Cleared _messagesPagerFlow due to account removal or all accounts gone.")
                         }
+                        currentState.copy(
+                            accounts = newAccountList,
+                            selectedFolder = null,
+                            selectedFolderAccountId = null,
+                            messageSyncState = MessageSyncState.Idle,
+                            threadDataState = ThreadDataState.Initial
+                        )
+                    } else {
+                        currentState.copy(accounts = newAccountList)
                     }
-                    currentState.copy(
-                        accounts = newAccountList,
-                        selectedFolder = if (selectedAccountRemoved) null else currentState.selectedFolder,
-                        selectedFolderAccountId = if (selectedAccountRemoved) null else currentState.selectedFolderAccountId
-                    )
                 }
+
+                // After accounts update, and if no folder is selected, try default selection
                 if (_uiState.value.selectedFolder == null && newAccountList.isNotEmpty()) {
-                    selectDefaultFolderIfNeeded(_uiState.value)
+                    Timber.tag(TAG)
+                        .d("Accounts list updated to ${newAccountList.size}, and no folder selected. Checking for default folder.")
+                    selectDefaultFolderIfNeeded()
+                } else if (newAccountList.isEmpty() && _uiState.value.selectedFolder != null) {
+                    // This case should be covered by shouldClearSelectedFolder update above.
+                    Timber.tag(TAG)
+                        .d("Accounts list is now empty, but a folder was selected. State should have been cleared.")
                 }
+
             }.launchIn(viewModelScope)
 
         defaultAccountRepository.observeActionMessages()
@@ -206,54 +243,44 @@ class MainViewModel @Inject constructor(
         folderRepository.observeFoldersState()
             .onEach { folderStatesMap ->
                 val previousFolderMap = _uiState.value.foldersByAccountId
-                if (previousFolderMap != folderStatesMap) {
+                // Basic logging for change detection
+                if (previousFolderMap.keys != folderStatesMap.keys ||
+                    folderStatesMap.any { (key, newState) -> previousFolderMap[key] != newState }
+                ) {
                     Timber.tag(TAG).d(
-                        "MainViewModel: FolderRepo State Changed: ${folderStatesMap.entries.joinToString { "${it.key}=${it.value::class.simpleName}" }}"
+                        "MainViewModel: FolderRepo State Changed. New map: ${folderStatesMap.entries.joinToString { "${it.key}=${it.value::class.simpleName}" }}"
                     )
-                    folderStatesMap.forEach { (accountId, state) ->
-                        when (state) {
-                            is FolderFetchState.Success -> {
-                                Timber.tag(TAG).d(
-                                    "MainViewModel: Account $accountId has ${state.folders.size} folders"
-                                )
-                                if (state.folders.isNotEmpty()) {
-                                    Timber.tag(TAG).d(
-                                        "MainViewModel: Folder names: ${state.folders.joinToString { it.displayName }}"
-                                    )
-                                }
-                            }
+                }
 
-                            is FolderFetchState.Loading -> Timber.tag(TAG).d(
-                                "MainViewModel: Account $accountId folders are loading"
-                            )
+                _uiState.update { it.copy(foldersByAccountId = folderStatesMap) }
+                // Timber.tag(TAG).d("MainViewModel: UI state updated with new folder states") // Can be too noisy
 
-                            is FolderFetchState.Error -> Timber.tag(TAG).e(
-                                "MainViewModel: Account $accountId folders error: ${state.error}"
-                            )
-                        }
-                    }
-                    _uiState.update { it.copy(foldersByAccountId = folderStatesMap) }
-                    Timber.tag(TAG).d("MainViewModel: UI state updated with new folder states")
+                val anyFoldersJustLoadedForAnyAccount = folderStatesMap.any { (id, newState) ->
+                    val oldState = previousFolderMap[id]
+                    (oldState is FolderFetchState.Loading || oldState == null) && newState is FolderFetchState.Success
+                }
 
-                    val justLoaded = folderStatesMap.any { (id, state) ->
-                        val wasLoading = previousFolderMap[id] is FolderFetchState.Loading
-                        val isNotLoadingNow = state !is FolderFetchState.Loading
-                        wasLoading && isNotLoadingNow.also {
-                            if (it) Timber.tag(TAG).d(
-                                "MainViewModel: Folders for account $id just finished loading"
-                            )
-                        }
-                    }
+                if (anyFoldersJustLoadedForAnyAccount) {
+                    Timber.tag(TAG)
+                        .d("Some folders just finished loading for at least one account.")
+                }
 
-                    if (justLoaded && _uiState.value.selectedFolder == null) {
-                        Timber.tag(TAG).d(
-                            "MainViewModel: Folders just loaded and no folder selected, attempting default selection"
-                        )
-                        selectDefaultFolderIfNeeded(_uiState.value)
-                    }
+                // Attempt default folder selection if:
+                // 1. No folder is currently selected.
+                // 2. There are accounts.
+                // 3. No folders are globally in a loading state (debounce against rapid changes).
+                // 4. At least one account has successfully loaded some folders.
+                if (_uiState.value.selectedFolder == null &&
+                    _uiState.value.accounts.isNotEmpty() &&
+                    !_uiState.value.isAnyFolderLoading && // isAnyFolderLoading checks current _uiState
+                    folderStatesMap.values.any { it is FolderFetchState.Success && it.folders.isNotEmpty() }
+                ) {
+                    Timber.tag(TAG).d(
+                        "Conditions met for default folder selection check after folder states update. AnyJustLoaded: $anyFoldersJustLoadedForAnyAccount"
+                    )
+                    selectDefaultFolderIfNeeded()
                 }
             }.launchIn(viewModelScope)
-        Timber.tag(TAG).d("MainViewModel: Finished setting up FolderRepository observation flow")
     }
 
     private fun observeMessageRepositorySyncState() {
@@ -315,20 +342,20 @@ class MainViewModel @Inject constructor(
             return
         }
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoadingAccountAction = true) }
+            _uiState.update { it.copy(isLoadingAccountAction = true) } // Set true at start of action
             defaultAccountRepository.signIn(activity, loginHint, providerType)
                 .collect { result -> // GenericAuthResult
                     _uiState.update { currentState ->
                         when (result) {
                             is GenericAuthResult.Loading -> {
                                 Timber.tag(TAG).d("Sign-in process loading...")
-                                currentState.copy(isLoadingAccountAction = true)
+                                currentState.copy(isLoadingAccountAction = true) // Remain true
                             }
 
                             is GenericAuthResult.Success -> {
                                 Timber.tag(TAG).d("Sign-in successful: ${result.account.username}")
                                 currentState.copy(
-                                    isLoadingAccountAction = false,
+                                    isLoadingAccountAction = false, // Set false on terminal success
                                     toastMessage = "Signed in as ${result.account.username}"
                                 )
                             }
@@ -339,7 +366,7 @@ class MainViewModel @Inject constructor(
                                     "Sign-in error: ${result.details.message} (Code: ${result.details.code})"
                                 )
                                 currentState.copy(
-                                    isLoadingAccountAction = false,
+                                    isLoadingAccountAction = false, // Set false on terminal error
                                     toastMessage = "Sign-in error: ${result.details.message}"
                                 )
                             }
@@ -348,7 +375,7 @@ class MainViewModel @Inject constructor(
                                 Timber.tag(TAG).d("Sign-in UI Action Required. Emitting intent.")
                                 _pendingAuthIntent.value = result.intent
                                 // isLoadingAccountAction remains true as we are waiting for UI
-                                currentState.copy(isLoadingAccountAction = true)
+                                currentState.copy(isLoadingAccountAction = true) // Remain true
                             }
                             // No Cancelled state here as it should be an Error with details
                         }
@@ -361,16 +388,15 @@ class MainViewModel @Inject constructor(
         _pendingAuthIntent.value = null
         // isLoadingAccountAction will be set to false once the actual sign-in result (Success/Error)
         // is processed from the channel by the signIn flow in DefaultAccountRepository
-        // and then collected here.
-        // For now, we can keep it as is, or optimistically set to false if UI returns immediately.
-        // Let's assume the flow will update it.
-        Timber.tag(TAG).d("completeSignIn called, cleared pending intent.")
+        // and then collected by the signIn() method above.
+        Timber.tag(TAG)
+            .d("completeSignIn called, cleared pending intent. isLoadingAccountAction will be handled by signIn flow.")
     }
 
     fun signOut(account: Account) {
         Timber.tag(TAG).d("signOut called for account: ${account.username}")
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoadingAccountAction = true) }
+            _uiState.update { it.copy(isLoadingAccountAction = true) } // Set true at start of action
             defaultAccountRepository.signOut(account)
                 .collect { result -> // GenericSignOutResult
                     _uiState.update { currentState ->
@@ -378,13 +404,13 @@ class MainViewModel @Inject constructor(
                             is GenericSignOutResult.Loading -> {
                                 Timber.tag(TAG)
                                     .d("Sign-out process loading for ${account.username}...")
-                                currentState.copy(isLoadingAccountAction = true) // Already true, but explicit
+                                currentState.copy(isLoadingAccountAction = true) // Remain true
                             }
 
                             is GenericSignOutResult.Success -> {
                                 Timber.tag(TAG).d("Sign-out successful for ${account.username}")
                                 currentState.copy(
-                                    isLoadingAccountAction = false,
+                                    isLoadingAccountAction = false, // Set false on terminal success
                                     toastMessage = "Signed out ${account.username}"
                                 )
                             }
@@ -395,7 +421,7 @@ class MainViewModel @Inject constructor(
                                     "Sign-out error for ${account.username}: ${result.details.message} (Code: ${result.details.code})"
                                 )
                                 currentState.copy(
-                                    isLoadingAccountAction = false,
+                                    isLoadingAccountAction = false, // Set false on terminal error
                                     toastMessage = "Sign-out error for ${account.username}: ${result.details.message}"
                                 )
                             }
@@ -408,15 +434,14 @@ class MainViewModel @Inject constructor(
     fun handleAuthenticationResult(providerType: String, resultCode: Int, data: Intent?) {
         Timber.tag(TAG)
             .d("handleAuthenticationResult in ViewModel. Provider: $providerType, ResultCode: $resultCode, Data: ${data != null}")
-        // Set loading state. This will be cleared when account/auth state flows update.
-        _uiState.update { it.copy(isLoadingAccountAction = true) }
+        // Set loading state. This will be cleared when the signIn flow (that initially emitted UiActionRequired)
+        // receives the final result (Success/Error) from the GoogleAuthResultChannel and updates the state.
+        _uiState.update { it.copy(isLoadingAccountAction = true) } // Set true, signIn flow will set to false on completion
 
         viewModelScope.launch {
             defaultAccountRepository.handleAuthenticationResult(providerType, resultCode, data)
             // After this call, changes to account status will be picked up by
-            // observeAccountRepositoryState() which observes overallApplicationAuthState and getAccounts().
-            // Those observers will then update isLoadingAccountAction to false when appropriate.
-            // No direct collect or UI update here is needed from the result of handleAuthenticationResult itself.
+            // the collect block in signIn() for Google, which then updates isLoadingAccountAction.
         }
     }
 
@@ -430,132 +455,130 @@ class MainViewModel @Inject constructor(
         }
     }
 
-    private fun selectDefaultFolderIfNeeded(currentState: MainScreenState) {
-        Log.d(TAG_DEBUG_DEFAULT_SELECT, "Checking if default folder selection is needed...")
-        if ((currentState.overallApplicationAuthState == OverallApplicationAuthState.AT_LEAST_ONE_ACCOUNT_AUTHENTICATED ||
-             currentState.overallApplicationAuthState == OverallApplicationAuthState.PARTIAL_ACCOUNTS_NEED_REAUTHENTICATION) &&
-            currentState.accounts.isNotEmpty() &&
-            currentState.selectedFolder == null &&
-            !currentState.isAnyFolderLoading
-        ) {
-            Log.d(TAG_DEBUG_DEFAULT_SELECT, "Attempting default folder selection...")
-            var folderToSelect: MailFolder? = null
-            var accountForFolder: Account? = null
+    private fun selectDefaultFolderIfNeeded() {
+        // Use the most current state from the ViewModel directly
+        val currentState = _uiState.value
 
-            val accountToConsider = currentState.accounts.firstOrNull()
+        Timber.tag(TAG_DEBUG_DEFAULT_SELECT)
+            .d("selectDefaultFolderIfNeeded: Checking. Current selected: ${currentState.selectedFolder?.displayName}, Accounts: ${currentState.accounts.size}, Folders Loading: ${currentState.isAnyFolderLoading}")
 
-            if (accountToConsider != null) {
-                val folderState = currentState.foldersByAccountId[accountToConsider.id]
-                if (folderState is FolderFetchState.Success && folderState.folders.isNotEmpty()) {
-                    folderToSelect = folderState.folders.find { folder ->
-                        folder.isInboxFolder()
-                    }
-                    if (folderToSelect == null) {
-                        folderToSelect = folderState.folders.first()
-                        Log.d(
-                            TAG_DEBUG_DEFAULT_SELECT,
-                            "Inbox not found in account ${accountToConsider.username}, defaulting to first folder '${folderToSelect.displayName}'."
-                        )
-                    } else {
-                        Log.d(
-                            TAG_DEBUG_DEFAULT_SELECT,
-                            "Found Inbox in account ${accountToConsider.username}."
-                        )
-                    }
-                    accountForFolder = accountToConsider
-                } else {
-                    Log.d(
-                        TAG_DEBUG_DEFAULT_SELECT,
-                        "No folders or not in Success state for account ${accountToConsider.username}. State: $folderState"
+        if (currentState.selectedFolder == null && currentState.accounts.isNotEmpty() && !currentState.isAnyFolderLoading) {
+            Timber.tag(TAG_DEBUG_DEFAULT_SELECT)
+                .d("Attempting default folder selection for user: ${currentState.accounts.firstOrNull()?.username}")
+
+            val accountToUseForDefault = currentState.accounts.firstOrNull { acc ->
+                val folderState = currentState.foldersByAccountId[acc.id]
+                folderState is FolderFetchState.Success && folderState.folders.isNotEmpty()
+            }
+
+            if (accountToUseForDefault != null) {
+                val folderState =
+                    currentState.foldersByAccountId[accountToUseForDefault.id] as FolderFetchState.Success // Safe cast
+                val inboxFolder = folderState.folders.firstOrNull {
+                    it.type == WellKnownFolderType.INBOX || it.displayName.equals(
+                        "Inbox",
+                        ignoreCase = true
                     )
                 }
-            }
-
-            if (folderToSelect != null && accountForFolder != null) {
-                Log.i(
-                    TAG_DEBUG_DEFAULT_SELECT,
-                    "Selecting default folder '${folderToSelect.displayName}' from account ${accountForFolder.username}"
-                )
-                selectFolder(folderToSelect, accountForFolder)
+                if (inboxFolder != null) {
+                    Timber.tag(TAG_DEBUG_DEFAULT_SELECT)
+                        .i("Found Inbox in account ${accountToUseForDefault.username}. Selecting it.")
+                    selectFolder(
+                        inboxFolder,
+                        accountToUseForDefault
+                    ) // This will call the main selectFolder
+                } else {
+                    Timber.tag(TAG_DEBUG_DEFAULT_SELECT)
+                        .w("No Inbox folder found in account ${accountToUseForDefault.username}. Folders: ${folderState.folders.joinToString { it.displayName }}. Will not select a default automatically here.")
+                    // Optionally, select the first folder if no Inbox:
+                    // val firstFolder = folderState.folders.firstOrNull()
+                    // if (firstFolder != null) {
+                    //     Timber.tag(TAG_DEBUG_DEFAULT_SELECT).i("No Inbox, selecting first folder by default: '${firstFolder.displayName}' for ${accountToUseForDefault.username}")
+                    //     selectFolder(firstFolder, accountToUseForDefault)
+                    // }
+                }
             } else {
-                Log.w(
-                    TAG_DEBUG_DEFAULT_SELECT,
-                    "No suitable default folder found after checking states."
-                )
+                Timber.tag(TAG_DEBUG_DEFAULT_SELECT)
+                    .d("No account found with successfully loaded non-empty folders to select a default from at this moment.")
             }
         } else {
-            Log.d(
-                TAG_DEBUG_DEFAULT_SELECT,
-                "Default folder selection skipped. AuthState: ${currentState.overallApplicationAuthState}, Accounts: ${currentState.accounts.size}, SelectedFolder: ${currentState.selectedFolder}, AnyFolderLoading: ${currentState.isAnyFolderLoading}"
-            )
+            Timber.tag(TAG_DEBUG_DEFAULT_SELECT)
+                .d("Default folder selection not needed or conditions not met. Selected: ${currentState.selectedFolder?.displayName}, Accounts: ${currentState.accounts.size}, IsAnyFolderLoading: ${currentState.isAnyFolderLoading}")
         }
     }
 
     fun selectFolder(folder: MailFolder, account: Account) {
-        val accountId = account.id
-        Log.i(
-            TAG,
-            "Folder selected: '${folder.displayName}' from account ${account.username} (ID: $accountId), Current ViewMode: ${_uiState.value.currentViewMode}"
-        )
+        val newAccountId = account.id
+        val newFolderId = folder.id
+        Timber.tag(TAG)
+            .i("selectFolder CALLED for: Folder '${folder.displayName}' (ID: $newFolderId), Account '${account.username}' (ID: $newAccountId). Current ViewMode: ${_uiState.value.currentViewMode}")
 
-        val isSameFolderAndAccount =
-            folder.id == _uiState.value.selectedFolder?.id && accountId == _uiState.value.selectedFolderAccountId
+        val previousAccountId = _uiState.value.selectedFolderAccountId
+        val previousFolderId = _uiState.value.selectedFolder?.id
 
-        if (isSameFolderAndAccount) {
-            if (_uiState.value.currentViewMode == ViewMode.THREADS && _uiState.value.threadDataState !is ThreadDataState.Initial) {
-                Log.d(
-                    TAG,
-                    "Folder ${folder.displayName} already selected for THREADS view and data exists/loading. Skipping full re-fetch."
-                )
-                _uiState.update {
-                    it.copy(
-                        selectedFolder = folder,
-                        selectedFolderAccountId = accountId
-                    )
-                }
-                return
-            }
-            if (_uiState.value.currentViewMode == ViewMode.MESSAGES && _uiState.value.messageSyncState !is MessageSyncState.Idle) {
-                Log.d(
-                    TAG,
-                    "Folder ${folder.displayName} already selected for MESSAGES view and data exists/loading. Skipping full re-fetch."
-                )
-                _uiState.update {
-                    it.copy(
-                        selectedFolder = folder,
-                        selectedFolderAccountId = accountId
-                    )
-                }
-                return
-            }
+        // Update UI state for selected folder immediately, regardless of whether it's "new"
+        _uiState.update {
+            it.copy(
+                selectedFolder = folder,
+                selectedFolderAccountId = newAccountId
+                // Consider resetting specific sync states if the folder *actually* changes
+                // messageSyncState = if (newFolderId != previousFolderId || newAccountId != previousAccountId) MessageSyncState.Idle else it.messageSyncState,
+                // threadDataState = if (newFolderId != previousFolderId || newAccountId != previousAccountId) ThreadDataState.Initial else it.threadDataState
+            )
         }
+        Timber.tag(TAG)
+            .d("selectFolder: UI state updated with folder '${folder.displayName}', accId '$newAccountId'.")
 
-        _uiState.update { it.copy(selectedFolder = folder, selectedFolderAccountId = accountId) }
 
-        viewModelScope.launch {
-            if (_uiState.value.currentViewMode == ViewMode.THREADS) {
-                Log.d(
-                    TAG,
-                    "selectFolder: Current view mode is THREADS. Clearing message state, setting target for threads."
+        if (newFolderId != previousFolderId || newAccountId != previousAccountId) {
+            Timber.tag(TAG)
+                .d("selectFolder: Change DETECTED. Previous: $previousAccountId/$previousFolderId -> New: $newAccountId/$newFolderId.")
+            Timber.tag(TAG).d("selectFolder: Initiating Pager update for MESSAGES view.")
+            val newMessagesPagerFlow = messageRepository.getMessagesPager(
+                accountId = newAccountId,
+                folderId = newFolderId,
+                pagingConfig = PagingConfig(
+                    pageSize = 30,           // How many items to load at once from the PagingSource
+                    prefetchDistance = 10,     // How far from the edge of loaded data to start loading more
+                    enablePlaceholders = false,// Typically false for network/db sources
+                    initialLoadSize = 60       // Larger initial load for better user experience
                 )
-                if (_uiState.value.messageSyncState !is MessageSyncState.Idle) {
-                    messageRepository.setTargetFolder(null, null)
+            ).cachedIn(viewModelScope)
+            _messagesPagerFlow.value = newMessagesPagerFlow // This triggers collection in the UI
+            Timber.tag(TAG)
+                .d("selectFolder: New _messagesPagerFlow created and assigned for $newAccountId/$newFolderId. UI will collect this and Paging will trigger RemoteMediator.load(REFRESH).")
+
+            // The call to messageRepository.setTargetFolder is part of the refactoring for Alternative 1 (Paging-first).
+            // Its responsibility for *triggering* a sync will be removed or made conditional.
+            // It might still be used to inform the repository of the current context for other operations (e.g., manual refresh outside Paging).
+            viewModelScope.launch {
+                Timber.tag(TAG)
+                    .d("selectFolder: Calling messageRepository.setTargetFolder (for context) for $newAccountId/$newFolderId.")
+                messageRepository.setTargetFolder(
+                    account,
+                    folder
+                ) // For Alt1, this won't auto-sync.
+                Timber.tag(TAG).d("selectFolder: messageRepository.setTargetFolder call completed.")
+
+                // Handle thread view target setting
+                if (_uiState.value.currentViewMode == ViewMode.THREADS) {
+                    Timber.tag(TAG)
+                        .d("selectFolder: Current view mode is THREADS. Setting target for threads repository.")
+                    threadRepository.setTargetFolderForThreads(account, folder, null)
+                } else { // MESSAGES view or others
+                    Timber.tag(TAG)
+                        .d("selectFolder: Current view mode is MESSAGES. Ensuring thread target is cleared if not already initial.")
+                    if (_uiState.value.threadDataState !is ThreadDataState.Initial) {
+                        threadRepository.setTargetFolderForThreads(null, null, null)
+                    }
                 }
-                threadRepository.setTargetFolderForThreads(account, folder, null)
-            } else {
-                Log.d(
-                    TAG,
-                    "selectFolder: Current view mode is MESSAGES. Clearing thread state, setting target for messages."
-                )
-                if (_uiState.value.threadDataState !is ThreadDataState.Initial) {
-                    threadRepository.setTargetFolderForThreads(
-                        null,
-                        null,
-                        null
-                    )
-                }
-                messageRepository.setTargetFolder(account, folder)
             }
+        } else {
+            Timber.tag(TAG)
+                .d("selectFolder: SAME folder and account selected ($newAccountId/$newFolderId). No change to Pager. Any explicit refresh should be handled by UI (e.g. pull-to-refresh).")
+            // If the same folder is selected, the Pager instance is the same.
+            // If a refresh is needed (e.g., user pulled to refresh), the UI would call lazyMessageItems.refresh(),
+            // which would trigger the existing Pager's RemoteMediator.
         }
     }
 
@@ -734,7 +757,7 @@ class MainViewModel @Inject constructor(
 
     fun initiateSignIn(providerType: String, activity: Activity) {
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoadingAccountAction = true) }
+            _uiState.update { it.copy(isLoadingAccountAction = true) } // Set true at start of action
             defaultAccountRepository.getAuthenticationIntentRequest(
                 providerType = providerType,
                 activity = activity,
@@ -744,14 +767,16 @@ class MainViewModel @Inject constructor(
                     when (result) {
                         is GenericAuthResult.Loading -> {
                             Timber.tag(TAG).d("Get auth intent loading...")
-                            currentState.copy(isLoadingAccountAction = true)
+                            currentState.copy(isLoadingAccountAction = true) // Remain true
                         }
 
                         is GenericAuthResult.Success -> {
                             Timber.tag(TAG)
                                 .i("Get auth intent success for $providerType - unexpected by default for this call.")
+                            // This path is not typical for getAuthenticationIntentRequest if it always leads to UiActionRequired or Error.
+                            // If it can be a terminal success, set isLoadingAccountAction = false.
                             currentState.copy(
-                                isLoadingAccountAction = false,
+                                isLoadingAccountAction = false, // Set false on terminal success (if applicable)
                                 toastMessage = "Sign-in flow for ${providerType} initiated."
                             )
                         }
@@ -762,7 +787,7 @@ class MainViewModel @Inject constructor(
                                 "Get auth intent error: ${result.details.message} (Code: ${result.details.code})"
                             )
                             currentState.copy(
-                                isLoadingAccountAction = false,
+                                isLoadingAccountAction = false, // Set false on terminal error
                                 toastMessage = "Sign-in error: ${result.details.message}${if (result.details.code != null) " (${result.details.code})" else ""}"
                             )
                         }
@@ -771,7 +796,7 @@ class MainViewModel @Inject constructor(
                             Timber.tag(TAG)
                                 .d("Get auth intent UI Action Required. Emitting intent.")
                             _pendingAuthIntent.value = result.intent
-                            currentState.copy(isLoadingAccountAction = true)
+                            currentState.copy(isLoadingAccountAction = true) // Remain true, awaiting UI action
                         }
                     }
                 }
@@ -886,6 +911,10 @@ class MainViewModel @Inject constructor(
                 Timber.i("Refresh for Paging 3 should be triggered by UI action on LazyPagingItems.")
             }
         }
+    }
+
+    fun refreshCurrentFolderView(activity: Activity?) {
+        // Implementation of refreshCurrentFolderView method
     }
 }
 

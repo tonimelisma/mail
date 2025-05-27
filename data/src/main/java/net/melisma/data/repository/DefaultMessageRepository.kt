@@ -6,6 +6,7 @@ import androidx.paging.ExperimentalPagingApi
 import androidx.paging.Pager
 import androidx.paging.PagingConfig
 import androidx.paging.PagingData
+import androidx.room.withTransaction
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -19,6 +20,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import net.melisma.core_data.datasource.MailApiService
 import net.melisma.core_data.di.ApplicationScope
 import net.melisma.core_data.di.Dispatcher
@@ -82,9 +84,23 @@ class DefaultMessageRepository @Inject constructor(
         folderId: String,
         pagingConfig: PagingConfig
     ): Flow<PagingData<Message>> {
-        Log.d(TAG, "getMessagesPager for accountId=$accountId, folderId=$folderId")
-        val apiServiceForMediator = mailApiServices.values.firstOrNull()
-            ?: throw IllegalStateException("No MailApiService available for MessageRemoteMediator")
+        Log.d(
+            TAG,
+            "getMessagesPager for accountId=$accountId, folderId=$folderId. PagingConfig: pageSize=${pagingConfig.pageSize}, prefetchDistance=${pagingConfig.prefetchDistance}, initialLoadSize=${pagingConfig.initialLoadSize}"
+        )
+        // Find the first available MailApiService. This is a simplification.
+        // In a multi-provider setup for the mediator, you might need to select based on account type.
+        val account = runBlocking(ioDispatcher) { // Using runBlocking with the IO dispatcher
+            accountRepository.getAccountById(accountId).firstOrNull()
+        }
+        val providerType = account?.providerType?.uppercase()
+        val apiServiceForMediator = mailApiServices[providerType]
+            ?: mailApiServices.values.firstOrNull()
+            ?: throw IllegalStateException("No MailApiService available for MessageRemoteMediator. Account: $accountId, Provider: $providerType")
+        Log.d(
+            TAG,
+            "getMessagesPager: Using API service for provider: $providerType for RemoteMediator."
+        )
 
         return Pager(
             config = pagingConfig,
@@ -97,44 +113,61 @@ class DefaultMessageRepository @Inject constructor(
                 onSyncStateChanged = { syncState -> _messageSyncState.value = syncState }
             ),
             pagingSourceFactory = { messageDao.getMessagesPagingSource(accountId, folderId) }
-        ).flow.map { pagingDataEntity: PagingData<net.melisma.core_db.entity.MessageEntity> ->
-            pagingDataEntity.map { messageEntity ->
-                messageEntity.toDomainModel()
+        ).flow
+            .map { pagingDataEntity: PagingData<net.melisma.core_db.entity.MessageEntity> ->
+                pagingDataEntity.map { messageEntity: net.melisma.core_db.entity.MessageEntity ->
+                    messageEntity.toDomainModel()
+                }
             }
-        }
     }
 
     override suspend fun setTargetFolder(
         account: Account?,
         folder: MailFolder?
     ) {
-        Log.d(
-            TAG,
-            "setTargetFolder: Account=${account?.username}, Folder=${folder?.displayName}, SyncJob Active: ${syncJob?.isActive}"
-        )
-
         val newAccountId = account?.id
         val newFolderId = folder?.id
+        Log.d(
+            TAG,
+            "setTargetFolder: Account=${account?.username}($newAccountId), Folder=${folder?.displayName}($newFolderId). CurrentTarget: $currentTargetAccount?.id/$currentTargetFolderId. SyncJob Active: ${syncJob?.isActive}"
+        )
 
-        if (newAccountId == currentTargetAccount?.id && newFolderId == currentTargetFolderId && _messageSyncState.value !is MessageSyncState.Idle && _messageSyncState.value !is MessageSyncState.SyncError) {
+        // Alternative 1: This method should NOT trigger its own sync. Pager will handle it.
+        // It only updates internal state if needed by other (non-paging) functions or for clarity.
+        // If newAccountId == currentTargetAccount?.id && newFolderId == currentTargetFolderId, no state change needed for this repo.
+
+        if (newAccountId == currentTargetAccount?.id && newFolderId == currentTargetFolderId) {
             Log.d(
                 TAG,
-                "setTargetFolder: Same target and not in idle/error state. Current sync state: ${_messageSyncState.value}"
+                "setTargetFolder: Same target account/folder. No change to repository's internal target."
             )
+            // If a sync was ongoing for this exact target, and it was cancelled externally (e.g. ViewModel scope ending),
+            // this method call shouldn't restart it automatically. The Pager flow is the master for loading.
             return
         }
 
-        cancelAndClearSyncJob("New target folder set: Account=${newAccountId}, Folder=${newFolderId}")
+        Timber.tag(TAG)
+            .i("setTargetFolder: Target changed. Previous: ${currentTargetAccount?.id}/${currentTargetFolderId}, New: $newAccountId/$newFolderId. Clearing old sync job if any.")
+        cancelAndClearSyncJob("Target folder changed in setTargetFolder. New: $newAccountId/$newFolderId")
         currentTargetAccount = account
         currentTargetFolderId = newFolderId
 
-        if (account == null || newFolderId == null) {
-            _messageSyncState.value = MessageSyncState.Idle
-            Log.d(TAG, "setTargetFolder: Cleared target, sync state set to Idle.")
-            return
+        if (newAccountId == null || newFolderId == null) {
+            _messageSyncState.value = MessageSyncState.Idle // Reset sync state if target is cleared
+            Log.d(
+                TAG,
+                "setTargetFolder: Target cleared (account or folder is null). Sync state set to Idle."
+            )
+        } else {
+            // For Alternative 1, we DO NOT call syncMessagesForFolderInternal here.
+            // The MainViewModel will create a new Pager, and MessageRemoteMediator will handle the REFRESH.
+            Log.d(
+                TAG,
+                "setTargetFolder: Updated currentTargetAccount and currentTargetFolderId. Paging system will handle data loading for $newAccountId/$newFolderId via getMessagesPager."
+            )
+            // Optionally, if _messageSyncState is used by UI for non-Paging feedback, initialize it for the new target:
+            // _messageSyncState.value = MessageSyncState.Idle // Or a specific state like NeedsLoadTriggeredByUI
         }
-
-        syncMessagesForFolderInternal(account, newFolderId, isRefresh = false)
     }
 
     override suspend fun syncMessagesForFolder(
@@ -158,19 +191,27 @@ class DefaultMessageRepository @Inject constructor(
         isRefresh: Boolean,
         explicitRequest: Boolean = false
     ) {
-        if (syncJob?.isActive == true && !isRefresh) {
+        // This whole method might be deprecated or heavily simplified if Paging3 RemoteMediator handles all refreshes.
+        // For now, let's assume it can still be called for an *explicit* refresh that is *not* from Paging library's refresh().
+        val logPagingBehavior = "Paging Sync (RemoteMediator)"
+        Log.d(
+            TAG,
+            "[${account.id}/$folderId] syncMessagesForFolderInternal called. isRefresh: $isRefresh, explicitRequest: $explicitRequest, currentSyncJob active: ${syncJob?.isActive}. ViewModel should rely on $logPagingBehavior for list loading."
+        )
+
+        if (syncJob?.isActive == true && !isRefresh && !explicitRequest) {
             Log.d(
                 TAG,
-                "syncMessagesForFolderInternal: Sync job already active for $folderId. Ignoring."
+                "syncMessagesForFolderInternal: Sync job already active for $folderId and not an explicit forced refresh. Ignoring call."
             )
             return
         }
-        cancelAndClearSyncJob("Launching new message sync for ${account.id} / $folderId. Refresh: $isRefresh")
 
-        Log.d(
-            TAG,
-            "[${account.id}/$folderId] syncMessagesForFolderInternal for account type: ${account.providerType}"
-        )
+        val logPrefix = "[${account.id}/$folderId]"
+        Timber.tag(TAG)
+            .d("$logPrefix syncMessagesForFolderInternal for account type: ${account.providerType}")
+
+        cancelAndClearSyncJob("$logPrefix Launching new message sync. Refresh: $isRefresh, Explicit: $explicitRequest")
 
         val providerType = account.providerType.uppercase()
         val apiService = mailApiServices[providerType]
@@ -187,60 +228,79 @@ class DefaultMessageRepository @Inject constructor(
         _messageSyncState.value = MessageSyncState.Syncing(account.id, folderId)
 
         syncJob = externalScope.launch(ioDispatcher) {
-            Log.i(TAG, "[${account.id}/$folderId] Message sync job started. Refresh: $isRefresh")
+            Log.i(TAG, "$logPrefix Message sync job started. Refresh: $isRefresh")
             try {
+                val currentMaxResults = 100 // Defined for use in API call and log
                 val messagesResult = apiService.getMessagesForFolder(
                     folderId = folderId,
-                    maxResults = 100
+                    maxResults = currentMaxResults
                 )
                 ensureActive()
 
                 if (messagesResult.isSuccess) {
                     val apiMessages = messagesResult.getOrThrow()
-                    Log.i(
-                        TAG,
-                        "[${account.id}/$folderId] Successfully fetched ${apiMessages.size} messages from API."
+                    Timber.tag(TAG).i(
+                        "$logPrefix Successfully fetched ${apiMessages.size} messages from API (maxResults was $currentMaxResults)."
                     )
 
                     val messageEntities = apiMessages.map { it.toEntity(account.id, folderId) }
-                    messageDao.clearAndInsertMessagesForFolder(
-                        account.id,
-                        folderId,
-                        messageEntities
-                    )
-                    Log.i(
-                        TAG,
-                        "[${account.id}/$folderId] Saved ${messageEntities.size} messages to DB."
-                    )
+                    Timber.tag(TAG)
+                        .d("$logPrefix Mapped ${apiMessages.size} API messages to ${messageEntities.size} entities.")
+
+                    // Using withTransaction for atomicity is good practice with DAOs
+                    appDatabase.withTransaction {
+                        Timber.tag(TAG)
+                            .d("$logPrefix Starting DB transaction: clearAndInsertMessagesForFolder.")
+                        messageDao.clearAndInsertMessagesForFolder(
+                            account.id,
+                            folderId,
+                            messageEntities
+                        )
+                        Timber.tag(TAG)
+                            .d("$logPrefix DB transaction complete. Saved ${messageEntities.size} messages to DB.")
+                    }
 
                     _messageSyncState.value = MessageSyncState.SyncSuccess(account.id, folderId)
+                    Timber.tag(TAG).i("$logPrefix Message sync successful, state updated.")
                 } else {
                     val exception = messagesResult.exceptionOrNull()
                     val errorDetails = errorMapper.mapExceptionToErrorDetails(exception)
-                    Log.e(
-                        TAG,
-                        "[${account.id}/$folderId] Error syncing messages: ${errorDetails.message}",
-                        exception
-                    )
+                    Timber.tag(TAG)
+                        .e(exception, "$logPrefix Error syncing messages: ${errorDetails.message}")
                     _messageSyncState.value =
                         MessageSyncState.SyncError(account.id, folderId, errorDetails.message)
                 }
             } catch (e: CancellationException) {
-                Log.w(TAG, "[${account.id}/$folderId] Message sync job cancelled.", e)
+                Timber.tag(TAG).w(e, "$logPrefix Message sync job cancelled.")
+                // Only set to Idle if this job was indeed for the current target and was a sync in progress.
+                // Avoid overriding a state set by a newer operation.
                 if (isActive && currentTargetAccount?.id == account.id && currentTargetFolderId == folderId && _messageSyncState.value is MessageSyncState.Syncing) {
                     _messageSyncState.value = MessageSyncState.Idle
+                    Timber.tag(TAG)
+                        .d("$logPrefix Sync cancelled, state set to Idle as it was the active sync for current target.")
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "[${account.id}/$folderId] Exception during message sync process", e)
+                Timber.tag(TAG).e(e, "$logPrefix Exception during message sync process")
                 if (isActive && currentTargetAccount?.id == account.id && currentTargetFolderId == folderId) {
                     val details = errorMapper.mapExceptionToErrorDetails(e)
                     _messageSyncState.value =
                         MessageSyncState.SyncError(account.id, folderId, details.message)
+                    Timber.tag(TAG)
+                        .d("$logPrefix Sync failed with general exception, state set to SyncError.")
                 }
             } finally {
+                // Important: only nullify syncJob if this coroutine context is the one stored in syncJob.
+                // This prevents a new job from being cleared by an old, finishing one.
                 if (syncJob == coroutineContext[Job]) {
                     syncJob = null
+                    Timber.tag(TAG)
+                        .d("$logPrefix syncJob reference cleared. ExplicitRequest: $explicitRequest")
+                } else {
+                    Timber.tag(TAG)
+                        .d("$logPrefix This coroutine is not the current syncJob. Won't nullify. ExplicitRequest: $explicitRequest")
                 }
+                Timber.tag(TAG)
+                    .i("$logPrefix Message sync job processing finished. isRefresh: $isRefresh, explicitRequest: $explicitRequest")
             }
         }
     }
@@ -261,17 +321,17 @@ class DefaultMessageRepository @Inject constructor(
     }
 
     private fun cancelAndClearSyncJob(reason: String) {
-        syncJob?.let {
-            if (it.isActive) {
-                Log.d(
-                    TAG,
-                    "Cancelling previous message sync job. Reason: $reason. Hash: ${it.hashCode()}"
-                )
-                it.cancel(CancellationException("Sync job cancelled: $reason"))
-            }
+        if (syncJob?.isActive == true) {
+            Timber.tag(TAG)
+                .d("cancelAndClearSyncJob: Attempting to cancel active syncJob. Reason: $reason")
+            syncJob?.cancel(CancellationException("Sync job cancelled: $reason"))
+            syncJob = null
+            Timber.tag(TAG)
+                .i("cancelAndClearSyncJob: Active syncJob cancelled and cleared. Reason: $reason")
+        } else {
+            // Timber.tag(TAG).d("cancelAndClearSyncJob: No active syncJob to cancel. Reason: $reason")
+            syncJob = null // Ensure it's null if called when no job active
         }
-        syncJob = null
-        Log.d(TAG, "cancelAndClearSyncJob: Cleared syncJob. Reason: $reason")
     }
 
     override suspend fun getMessageDetails(messageId: String, accountId: String): Flow<Message?> {

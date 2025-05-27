@@ -3,6 +3,7 @@
 
 package net.melisma.mail.ui
 
+import android.util.Log
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -52,6 +53,7 @@ fun MessageListContent(
     onRetry: () -> Unit, // For retry button on error
     onRefresh: () -> Unit // For pull to refresh
 ) {
+    val TAG_MESSAGE_LIST_CONTENT = "MessageListContent"
     Column(modifier = Modifier.fillMaxSize()) {
         if (accountContext != null) {
             AccountContextHeader(account = accountContext)
@@ -70,12 +72,22 @@ fun MessageListContent(
             val initialLoadError = loadState.refresh as? LoadState.Error
             val appendError = loadState.append as? LoadState.Error
 
+            Log.d(
+                TAG_MESSAGE_LIST_CONTENT,
+                "Messages: itemCount=${messages.itemCount}, RefreshState: ${loadState.refresh}, AppendState: ${loadState.append}"
+            )
+
             when {
                 isInitialLoading && messages.itemCount == 0 -> {
+                    Log.d(TAG_MESSAGE_LIST_CONTENT, "Displaying: LoadingIndicator (initial load)")
                     LoadingIndicator(statusText = stringResource(R.string.title_loading_messages))
                 }
 
                 initialLoadError != null && messages.itemCount == 0 -> {
+                    Log.d(
+                        TAG_MESSAGE_LIST_CONTENT,
+                        "Displaying: FullScreenMessage (initial load error: ${initialLoadError.error.localizedMessage})"
+                    )
                     FullScreenMessage(
                         icon = Icons.Filled.CloudOff,
                         iconContentDescription = stringResource(R.string.cd_error_loading_messages),
@@ -93,6 +105,11 @@ fun MessageListContent(
                 }
                 // No error, but list is empty after initial load/refresh finished
                 !isInitialLoading && messages.itemCount == 0 -> {
+                    // This condition means loadState.refresh is NotLoading and itemCount is 0
+                    Log.d(
+                        TAG_MESSAGE_LIST_CONTENT,
+                        "Displaying: FullScreenMessage (no messages, initial load finished)"
+                    )
                     FullScreenMessage(
                         icon = Icons.Filled.Email,
                         iconContentDescription = stringResource(R.string.cd_no_messages),
@@ -102,6 +119,10 @@ fun MessageListContent(
                 }
                 // List has items, or is loading more items
                 else -> {
+                    Log.d(
+                        TAG_MESSAGE_LIST_CONTENT,
+                        "Displaying: MessageListSuccessContentPaging. ItemCount: ${messages.itemCount}, isAppending: $isAppending, AppendError: $appendError"
+                    )
                     MessageListSuccessContentPaging(
                         messages = messages,
                         onMessageClick = onMessageClick,
@@ -122,12 +143,14 @@ private fun MessageListSuccessContentPaging(
     isAppending: Boolean,
     appendError: String?
 ) {
+    val TAG_SUCCESS_PAGING = "MsgListSuccessPaging"
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         items(
             count = messages.itemCount,
             key = messages.itemKey { it.id } // Use itemKey for stable keys
         ) { index ->
             val message = messages[index]
+            // Log.v(TAG_SUCCESS_PAGING, "Displaying item at index $index, messageId: ${message?.id}") // Too verbose
             if (message != null) {
                 MessageListItem(message = message, onClick = { onMessageClick(message.id) })
                 HorizontalDivider(thickness = 0.5.dp)
@@ -137,6 +160,7 @@ private fun MessageListSuccessContentPaging(
         // Append loading state
         if (isAppending) {
             item {
+                Log.d(TAG_SUCCESS_PAGING, "Displaying: Appending LoadingIndicator")
                 LoadingIndicator(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -149,6 +173,7 @@ private fun MessageListSuccessContentPaging(
         // Append error state
         if (appendError != null) {
             item {
+                Log.d(TAG_SUCCESS_PAGING, "Displaying: Appending error - $appendError")
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()

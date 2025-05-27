@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
@@ -88,8 +89,10 @@ class DefaultAccountRepository @Inject constructor(
 
         accountDao.getAllAccounts() // Observe DAO directly
             .map { entities -> entities.map { it.toDomainAccount() } } // Map to domain models
+            .distinctUntilChanged() // Only proceed if the list of accounts has actually changed
             .onEach { accounts ->
-                Timber.tag(TAG).d("DAO emitted ${accounts.size} accounts. Updating auth state.")
+                Timber.tag(TAG)
+                    .d("DAO emitted DISTINCT accounts list (count: ${accounts.size}). Usernames: ${accounts.joinToString { it.username }}. Current _overallApplicationAuthState: ${_overallApplicationAuthState.value}. About to update auth state.")
                 val newAuthState = if (accounts.isEmpty()) {
                     OverallApplicationAuthState.NO_ACCOUNTS_CONFIGURED
                 } else {
@@ -170,7 +173,7 @@ class DefaultAccountRepository @Inject constructor(
         Timber.tag(TAG).d("getAccounts() called, fetching from AccountDao.")
         return accountDao.getAllAccounts().map { entities ->
             entities.map { it.toDomainAccount() }
-        }
+        }.distinctUntilChanged()
     }
 
     override fun getAccountById(accountId: String): Flow<Account?> {
