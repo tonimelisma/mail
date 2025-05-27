@@ -12,9 +12,15 @@ fun IAccount.toDomainAccount(): Account {
     val displayNameFromClaims = this.claims?.get("name") as? String
     val preferredUsername = this.claims?.get("preferred_username") as? String // Often the email
 
-    // TEMPORARY WORKAROUND: Using only this.id due to unresolved getHomeAccountId()
-    // TODO: Revisit stable account ID generation. getHomeAccountId()?.getIdentifier() is preferred.
-    val accountId = this.id ?: ""
+    // Attempt to use 'oid' (Object ID) from claims for a more stable ID.
+    // Fall back to IAccount.id if 'oid' is not available.
+    // For multi-tenant apps, oid + tid is the most unique, but oid usually suffices for accountId.
+    val oidClaim = this.claims?.get("oid") as? String
+    val accountId = oidClaim ?: this.id ?: ""
+
+    // TODO: If app supports multiple tenants for the same user, consider combining oid + tid for true uniqueness if needed.
+    // val tidClaim = this.claims?.get("tid") as? String
+    // val trulyUniqueIdentifier = if (oidClaim != null && tidClaim != null) "$oidClaim.$tidClaim" else this.id ?: ""
 
     return Account(
         id = accountId,

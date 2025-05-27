@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.transform
 import net.melisma.backend_google.auth.ActiveGoogleAccountHolder
 import net.melisma.backend_google.auth.GoogleAuthManager
 import net.melisma.backend_google.auth.GoogleGetTokenResult
@@ -30,6 +31,7 @@ import net.melisma.backend_google.auth.GoogleSignInResult
 import net.melisma.backend_google.auth.GoogleSignOutResult
 import net.melisma.backend_google.common.GooglePersistenceErrorType
 import net.melisma.backend_google.model.ManagedGoogleAccount
+import net.melisma.backend_microsoft.auth.ActiveMicrosoftAccountHolder
 import net.melisma.core_data.common.PersistenceResult
 import net.melisma.core_data.di.Dispatcher
 import net.melisma.core_data.di.MailDispatchers
@@ -67,6 +69,7 @@ class DefaultAccountRepository @Inject constructor(
     private val externalScope: CoroutineScope,
     private val errorMappers: Map<String, @JvmSuppressWildcards ErrorMapperService>,
     private val activeGoogleAccountHolder: ActiveGoogleAccountHolder,
+    private val activeMicrosoftAccountHolder: ActiveMicrosoftAccountHolder,
     private val accountDao: AccountDao
 ) : AccountRepository {
 
@@ -110,6 +113,7 @@ class DefaultAccountRepository @Inject constructor(
                     _overallApplicationAuthState.value = newAuthState
                 }
 
+                // Sync ActiveGoogleAccountHolder
                 if (activeGoogleAccountHolder.getActiveAccountIdValue() == null) {
                     accounts.firstOrNull { it.providerType == Account.PROVIDER_TYPE_GOOGLE && !it.needsReauthentication }
                         ?.let { googleAccount ->
@@ -117,6 +121,50 @@ class DefaultAccountRepository @Inject constructor(
                                 .i("Init: Setting active Google account from DAO: ${googleAccount.username} (ID: ${googleAccount.id})")
                             activeGoogleAccountHolder.setActiveAccountId(googleAccount.id)
                         }
+                } else {
+                    // Verify existing active Google account
+                    val currentActiveGoogleId = activeGoogleAccountHolder.getActiveAccountIdValue()
+                    val isActiveGoogleAccountStillValid = accounts.any {
+                        it.id == currentActiveGoogleId && it.providerType == Account.PROVIDER_TYPE_GOOGLE && !it.needsReauthentication
+                    }
+                    if (!isActiveGoogleAccountStillValid) {
+                        Timber.tag(TAG)
+                            .w("Init: Active Google account $currentActiveGoogleId is no longer valid or needs re-auth. Clearing and attempting to set a new one.")
+                        activeGoogleAccountHolder.setActiveAccountId(null)
+                        accounts.firstOrNull { it.providerType == Account.PROVIDER_TYPE_GOOGLE && !it.needsReauthentication }
+                            ?.let {
+                                Timber.tag(TAG)
+                                    .i("Init: Setting new active Google account from DAO: ${it.username} (ID: ${it.id})")
+                                activeGoogleAccountHolder.setActiveAccountId(it.id)
+                            }
+                    }
+                }
+
+                // Sync ActiveMicrosoftAccountHolder (New Logic)
+                val currentActiveMicrosoftId =
+                    activeMicrosoftAccountHolder.getActiveMicrosoftAccountIdValue()
+                if (currentActiveMicrosoftId == null) {
+                    accounts.firstOrNull { it.providerType == Account.PROVIDER_TYPE_MS && !it.needsReauthentication }
+                        ?.let { msAccount ->
+                            Timber.tag(TAG)
+                                .i("Init: Setting active Microsoft account from DAO: ${msAccount.username} (ID: ${msAccount.id})")
+                            activeMicrosoftAccountHolder.setActiveMicrosoftAccountId(msAccount.id)
+                        }
+                } else {
+                    val isActiveMicrosoftAccountStillValid = accounts.any {
+                        it.id == currentActiveMicrosoftId && it.providerType == Account.PROVIDER_TYPE_MS && !it.needsReauthentication
+                    }
+                    if (!isActiveMicrosoftAccountStillValid) {
+                        Timber.tag(TAG)
+                            .w("Init: Active Microsoft account $currentActiveMicrosoftId is no longer valid or needs re-auth. Clearing and attempting to set a new one.")
+                        activeMicrosoftAccountHolder.setActiveMicrosoftAccountId(null)
+                        accounts.firstOrNull { it.providerType == Account.PROVIDER_TYPE_MS && !it.needsReauthentication }
+                            ?.let {
+                                Timber.tag(TAG)
+                                    .i("Init: Setting new active Microsoft account from DAO: ${it.username} (ID: ${it.id})")
+                                activeMicrosoftAccountHolder.setActiveMicrosoftAccountId(it.id)
+                            }
+                    }
                 }
             }
             .catch { e ->
@@ -227,6 +275,26 @@ class DefaultAccountRepository @Inject constructor(
         return when (providerType.uppercase()) {
             Account.PROVIDER_TYPE_MS -> {
                 microsoftAccountRepository.signIn(activity, loginHint, providerType)
+                    .transform { result -> // Changed from direct return to transform
+                        if (result is GenericAuthResult.Success) {
+                            Timber.tag(TAG)
+                                .i("Microsoft sign-in successful for: ${result.account.username}, saving to DB.")
+                            val saveOpResult = saveAndSetAccountActive(
+                                result.account, // The account from Microsoft
+                                Account.PROVIDER_TYPE_MS
+                            )
+                            if (saveOpResult is GenericAuthResult.Success) {
+                                _accountActionMessage.tryEmit("Signed in as ${saveOpResult.account.username}")
+                                emit(saveOpResult) // Emit the success with potentially updated account from DB
+                            } else if (saveOpResult is GenericAuthResult.Error) {
+                                _accountActionMessage.tryEmit("Microsoft sign-in error during DB save: ${saveOpResult.details.message}")
+                                emit(saveOpResult) // Emit the DB save error
+                            }
+                        } else {
+                            // Emit other results (Loading, Error, UiActionRequired) directly
+                            emit(result)
+                        }
+                    }
             }
 
             Account.PROVIDER_TYPE_GOOGLE -> flow {
@@ -277,6 +345,43 @@ class DefaultAccountRepository @Inject constructor(
         return when (account.providerType.uppercase()) {
             Account.PROVIDER_TYPE_MS -> {
                 microsoftAccountRepository.signOut(account)
+                    .transform { result ->
+                        if (result is GenericSignOutResult.Success) {
+                            Timber.tag(TAG)
+                                .i("Microsoft sign-out successful for account: ${account.username}. Removing from DB.")
+                            try {
+                                accountDao.deleteAccount(account.id)
+                                if (activeMicrosoftAccountHolder.getActiveMicrosoftAccountIdValue() == account.id) {
+                                    activeMicrosoftAccountHolder.setActiveMicrosoftAccountId(null)
+                                    Timber.tag(TAG)
+                                        .d("Cleared active Microsoft account ID after sign-out and DB delete.")
+                                }
+                                _accountActionMessage.tryEmit("Signed out ${account.username}")
+                                emit(GenericSignOutResult.Success)
+                            } catch (e: Exception) {
+                                Timber.tag(TAG)
+                                    .e(
+                                        e,
+                                        "DAO error deleting Microsoft account ${account.username} after sign-out."
+                                    )
+                                val errorDetails = ErrorDetails(
+                                    message = "Failed to remove account from local database: ${e.message}",
+                                    code = "DAO_DELETE_ERROR",
+                                    cause = e
+                                )
+                                // Still emit success for the MSAL part, but signal local error maybe?
+                                // For now, if MSAL succeeded, we try local, if local fails, it's a bit of a mixed state.
+                                // Let's emit the original success from MSAL, but log the DAO error.
+                                // Or, we could emit an error that wraps this.
+                                // Deciding to emit an error if DAO operation fails to make it visible.
+                                _accountActionMessage.tryEmit("Signed out ${account.username}, but failed to clear all local data.")
+                                emit(GenericSignOutResult.Error(errorDetails)) // Emit error if DAO fails
+                            }
+                        } else {
+                            // Emit other results (Loading, Error) directly
+                            emit(result)
+                        }
+                    }
             }
 
             Account.PROVIDER_TYPE_GOOGLE -> flow {

@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
@@ -33,6 +34,7 @@ import net.melisma.core_data.model.GenericAuthResult
 import net.melisma.core_data.model.GenericSignOutResult
 import net.melisma.core_data.repository.AccountRepository
 import net.melisma.core_data.repository.OverallApplicationAuthState
+import net.melisma.core_db.dao.AccountDao
 import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -42,7 +44,8 @@ class MicrosoftAccountRepository @Inject constructor(
     private val microsoftAuthManager: MicrosoftAuthManager,
     @ApplicationScope private val externalScope: CoroutineScope,
     @Dispatcher(MailDispatchers.IO) private val ioDispatcher: CoroutineDispatcher,
-    private val activeMicrosoftAccountHolder: net.melisma.backend_microsoft.auth.ActiveMicrosoftAccountHolder
+    private val activeMicrosoftAccountHolder: net.melisma.backend_microsoft.auth.ActiveMicrosoftAccountHolder,
+    private val accountDao: AccountDao
 ) : AccountRepository {
 
     private val TAG = "MsAccountRepo"
@@ -217,8 +220,30 @@ class MicrosoftAccountRepository @Inject constructor(
             Timber.tag(TAG).w("markAccountForReauthentication: Unsupported provider: $providerType")
             return
         }
-        Timber.tag(TAG)
-            .w("markAccountForReauthentication: MicrosoftAuthManager does not have a public method to mark account for re-auth. This is a TODO.")
+
+        val accountEntity = accountDao.getAccountById(accountId).flowOn(ioDispatcher).firstOrNull()
+        if (accountEntity != null) {
+            if (!accountEntity.needsReauthentication) {
+                val updatedEntity = accountEntity.copy(needsReauthentication = true)
+                try {
+                    accountDao.insertOrUpdateAccount(updatedEntity)
+                    Timber.tag(TAG)
+                        .i("Account $accountId successfully marked for re-authentication in DB by MicrosoftAccountRepository.")
+                } catch (e: Exception) {
+                    Timber.tag(TAG)
+                        .e(
+                            e,
+                            "DAO error in MicrosoftAccountRepository marking account $accountId for re-authentication."
+                        )
+                }
+            } else {
+                Timber.tag(TAG)
+                    .i("Account $accountId was already marked for re-authentication.")
+            }
+        } else {
+            Timber.tag(TAG)
+                .w("Account $accountId not found in DB. Cannot mark for re-authentication by MicrosoftAccountRepository.")
+        }
     }
 
     override suspend fun syncAccount(accountId: String): Result<Unit> {
@@ -234,7 +259,25 @@ class MicrosoftAccountRepository @Inject constructor(
             val scopes = MicrosoftAuthManager.MICROSOFT_SCOPES
             val tokenResult = microsoftAuthManager.acquireTokenSilent(iAccount, scopes)
             when (tokenResult) {
-                is AcquireTokenResult.Success -> Result.success(Unit)
+                is AcquireTokenResult.Success -> {
+                    Timber.tag(TAG).i("syncAccount for $accountId successful (token acquired).")
+                    val accountEntity =
+                        accountDao.getAccountById(accountId).flowOn(ioDispatcher).firstOrNull()
+                    if (accountEntity?.needsReauthentication == true) {
+                        Timber.tag(TAG)
+                            .i("Account $accountId was needing re-auth, now successful. Updating DB.")
+                        val updatedEntity = accountEntity.copy(needsReauthentication = false)
+                        try {
+                            accountDao.insertOrUpdateAccount(updatedEntity)
+                        } catch (e: Exception) {
+                            Timber.tag(TAG).e(
+                                e,
+                                "DAO error clearing needsReauthentication flag for $accountId."
+                            )
+                        }
+                    }
+                    Result.success(Unit)
+                }
                 is AcquireTokenResult.UiRequired -> {
                     Timber.tag(TAG).w("syncAccount for $accountId requires UI interaction.")
                     markAccountForReauthentication(accountId, Account.PROVIDER_TYPE_MS)

@@ -48,6 +48,7 @@ android {
 dependencies {
     // --- Project Modules ---
     implementation(project(":core-data"))
+    implementation(project(":core-db"))
 
     // --- MSAL ---
     // CHANGED 'implementation' to 'api' to expose MSAL to dependent modules like :data
