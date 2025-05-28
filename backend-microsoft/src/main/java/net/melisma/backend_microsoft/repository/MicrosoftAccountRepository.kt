@@ -6,6 +6,7 @@ import android.app.Activity
 import android.content.Intent
 import com.microsoft.identity.client.exception.MsalClientException
 import com.microsoft.identity.client.exception.MsalDeclinedScopeException
+import com.microsoft.identity.client.exception.MsalException
 import com.microsoft.identity.client.exception.MsalUiRequiredException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -120,12 +121,42 @@ class MicrosoftAccountRepository @Inject constructor(
                         is AuthenticationResultWrapper.Success -> {
                             val domainAccount =
                                 resultWrapper.managedAccount.iAccount.toDomainAccount()
+                            // Ensure needsReauthentication is false on successful sign-in for this account
+                            try {
+                                accountDao.getAccountById(domainAccount.id).firstOrNull()
+                                    ?.let { entity ->
+                                        if (entity.needsReauthentication) {
+                                            accountDao.insertOrUpdateAccount(
+                                                entity.copy(
+                                                    needsReauthentication = false
+                                                )
+                                            )
+                                            Timber.tag(TAG)
+                                                .d("signIn: Cleared needsReauthentication for account ${domainAccount.id}")
+                                        }
+                                    }
+                            } catch (e: Exception) {
+                                Timber.tag(TAG).e(
+                                    e,
+                                    "signIn: DAO error clearing needsReauthentication for ${domainAccount.id}"
+                                )
+                            }
                             GenericAuthResult.Success(domainAccount)
                         }
 
                         is AuthenticationResultWrapper.Error -> {
                             val errorDetails =
                                 mapMsalExceptionToErrorDetails(resultWrapper.exception)
+                            // If UI is required, try to extract account ID and mark for re-authentication
+                            if (resultWrapper.exception is MsalUiRequiredException) {
+                                // Attempt to find the account involved, if possible.
+                                // This is tricky as MsalUiRequiredException might not directly give account ID
+                                // We might need to infer it if a loginHint was used or if there's a single MS account
+                                // For now, we can't reliably get the account ID here.
+                                // The markAccountForReauthentication will be more reliably called during syncAccount or silent refresh failures.
+                                Timber.tag(TAG)
+                                    .w("signIn: MsalUiRequiredException occurred. User needs to re-authenticate. Error: ${resultWrapper.exception.message}")
+                            }
                             GenericAuthResult.Error(errorDetails)
                         }
 
@@ -248,93 +279,199 @@ class MicrosoftAccountRepository @Inject constructor(
 
     override suspend fun syncAccount(accountId: String): Result<Unit> {
         Timber.tag(TAG).d("syncAccount called for $accountId (MSAL)")
+        val accountEntity = accountDao.getAccountById(accountId).flowOn(ioDispatcher).firstOrNull()
+        if (accountEntity == null) {
+            Timber.tag(TAG).w("syncAccount: Account $accountId not found in DB.")
+            return Result.failure(Exception("Account $accountId not found"))
+        }
+
+        if (accountEntity.providerType != Account.PROVIDER_TYPE_MS) {
+            Timber.tag(TAG).w("syncAccount: Account $accountId is not a Microsoft account.")
+            return Result.failure(Exception("Account $accountId is not a Microsoft account"))
+        }
+
+        val iAccount = try {
+            microsoftAuthManager.msalAccounts.value.find { it.id == accountId }
+        } catch (e: Exception) {
+            Timber.tag(TAG).e(e, "Error fetching IAccount $accountId from MicrosoftAuthManager")
+            null
+        }
+
+        if (iAccount == null) {
+            Timber.tag(TAG)
+                .w("syncAccount: IAccount $accountId not found via MicrosoftAuthManager. Marking for re-authentication.")
+            markAccountForReauthentication(accountId, Account.PROVIDER_TYPE_MS)
+            return Result.failure(
+                MsalUiRequiredException(
+                    MsalUiRequiredException.NO_ACCOUNT_FOUND,
+                    "MSAL account $accountId not found in MSAL cache"
+                )
+            )
+        }
+
         return try {
-            val iAccount = microsoftAuthManager.getMsalAccount(accountId)
-            if (iAccount == null) {
-                Timber.tag(TAG)
-                    .w("syncAccount: MSAL account $accountId not found for token refresh.")
-                markAccountForReauthentication(accountId, Account.PROVIDER_TYPE_MS)
-                return Result.failure(Exception("MSAL account $accountId not found for sync."))
-            }
-            val scopes = MicrosoftAuthManager.MICROSOFT_SCOPES
-            val tokenResult = microsoftAuthManager.acquireTokenSilent(iAccount, scopes)
-            when (tokenResult) {
+            Timber.tag(TAG).d("syncAccount: Attempting silent token acquisition for $accountId")
+            val acquireTokenResult = microsoftAuthManager.acquireTokenSilent(
+                scopes = MicrosoftAuthManager.MICROSOFT_SCOPES,
+                account = iAccount
+            )
+
+            when (acquireTokenResult) {
                 is AcquireTokenResult.Success -> {
-                    Timber.tag(TAG).i("syncAccount for $accountId successful (token acquired).")
-                    val accountEntity =
-                        accountDao.getAccountById(accountId).flowOn(ioDispatcher).firstOrNull()
-                    if (accountEntity?.needsReauthentication == true) {
-                        Timber.tag(TAG)
-                            .i("Account $accountId was needing re-auth, now successful. Updating DB.")
-                        val updatedEntity = accountEntity.copy(needsReauthentication = false)
+                    Timber.tag(TAG)
+                        .i("syncAccount: Silent token acquisition successful for $accountId.")
+                    if (accountEntity.needsReauthentication) {
                         try {
-                            accountDao.insertOrUpdateAccount(updatedEntity)
+                            accountDao.insertOrUpdateAccount(
+                                accountEntity.copy(
+                                    needsReauthentication = false
+                                )
+                            )
+                            Timber.tag(TAG)
+                                .i("syncAccount: Cleared needsReauthentication flag for $accountId in DB.")
                         } catch (e: Exception) {
                             Timber.tag(TAG).e(
                                 e,
-                                "DAO error clearing needsReauthentication flag for $accountId."
+                                "syncAccount: DAO error clearing needsReauthentication flag for $accountId."
                             )
                         }
                     }
                     Result.success(Unit)
                 }
                 is AcquireTokenResult.UiRequired -> {
-                    Timber.tag(TAG).w("syncAccount for $accountId requires UI interaction.")
+                    Timber.tag(TAG)
+                        .w("syncAccount: UI required for token acquisition for $accountId. Marking for re-authentication.")
                     markAccountForReauthentication(accountId, Account.PROVIDER_TYPE_MS)
                     Result.failure(
                         MsalUiRequiredException(
-                            "UI_REQUIRED_FOR_SYNC",
-                            "UI required for sync/token refresh for $accountId"
+                            MsalUiRequiredException.NO_TOKENS_FOUND,
+                            "UI Required for silent token refresh for $accountId"
+                        )
+                    )
+                }
+                is AcquireTokenResult.Error -> {
+                    Timber.tag(TAG).e(
+                        acquireTokenResult.exception,
+                        "syncAccount: Error acquiring token silently for $accountId. Code: ${acquireTokenResult.exception.errorCode}"
+                    )
+                    if (acquireTokenResult.exception is MsalUiRequiredException) {
+                        markAccountForReauthentication(accountId, Account.PROVIDER_TYPE_MS)
+                    } else {
+                        markAccountForReauthentication(accountId, Account.PROVIDER_TYPE_MS)
+                        Timber.tag(TAG)
+                            .w("syncAccount: MsalException (${acquireTokenResult.exception.errorCode}) occurred for $accountId. Marking for re-authentication.")
+                    }
+                    Result.failure(acquireTokenResult.exception)
+                }
+
+                is AcquireTokenResult.Cancelled -> {
+                    Timber.tag(TAG)
+                        .w("syncAccount: Silent token acquisition cancelled for $accountId. This is unexpected.")
+                    Result.failure(
+                        MsalClientException(
+                            MsalClientException.UNKNOWN_ERROR,
+                            "Silent token acquisition cancelled for $accountId"
                         )
                     )
                 }
 
-                is AcquireTokenResult.Error -> {
-                    Timber.tag(TAG).e(
-                        tokenResult.exception,
-                        "syncAccount for $accountId failed with MSAL error."
+                is AcquireTokenResult.NotInitialized -> {
+                    Timber.tag(TAG)
+                        .w("syncAccount: MSAL not initialized when trying to sync $accountId.")
+                    Result.failure(
+                        MsalClientException(
+                            "sdk_not_initialized",
+                            "MSAL not initialized for $accountId"
+                        )
                     )
-                    Result.failure(tokenResult.exception)
                 }
 
-                else -> {
+                is AcquireTokenResult.NoAccountProvided -> {
                     Timber.tag(TAG)
-                        .w("syncAccount for $accountId returned unexpected token result: $tokenResult")
-                    Result.failure(Exception("Unexpected token result during sync for $accountId"))
+                        .w("syncAccount: No account provided for silent token acquisition for $accountId. This is unexpected.")
+                    Result.failure(
+                        MsalUiRequiredException(
+                            MsalUiRequiredException.NO_ACCOUNT_FOUND,
+                            "No account object provided for silent token for $accountId"
+                        )
+                    )
                 }
             }
         } catch (e: MsalUiRequiredException) {
-            Timber.tag(TAG)
-                .w(e, "syncAccount for $accountId requires UI interaction (caught exception).")
+            Timber.tag(TAG).w(
+                e,
+                "syncAccount: MsalUiRequiredException caught directly for $accountId. Marking for re-authentication."
+            )
+            markAccountForReauthentication(accountId, Account.PROVIDER_TYPE_MS)
+            Result.failure(e)
+        } catch (e: MsalException) {
+            Timber.tag(TAG).e(
+                e,
+                "syncAccount: MsalException during silent token acquisition for $accountId. Error code: ${e.errorCode}"
+            )
             markAccountForReauthentication(accountId, Account.PROVIDER_TYPE_MS)
             Result.failure(e)
         } catch (e: Exception) {
-            Timber.tag(TAG).e(e, "syncAccount for $accountId failed with generic exception.")
+            Timber.tag(TAG).e(
+                e,
+                "syncAccount: Generic exception during silent token acquisition for $accountId."
+            )
             Result.failure(e)
         }
     }
 
     override val overallApplicationAuthState: Flow<OverallApplicationAuthState> =
-        microsoftAuthManager.msalAccounts
-            .map { iAccounts ->
-                if (iAccounts.isEmpty()) {
+        combine(
+            microsoftAuthManager.msalAccounts,
+            accountDao.getAllAccounts()
+        ) { msalAccounts, dbEntities ->
+            if (msalAccounts.isEmpty()) {
+                // If MSAL knows of no accounts, but DB might (e.g. after app restart, before MSAL fully loads),
+                // check if any of those DB accounts are MS type.
+                val dbMicrosoftAccounts =
+                    dbEntities.filter { it.providerType == Account.PROVIDER_TYPE_MS }
+                if (dbMicrosoftAccounts.isEmpty()) {
+                    OverallApplicationAuthState.NO_ACCOUNTS_CONFIGURED // Or specific like NO_MS_ACCOUNTS_CONFIGURED
+                } else {
+                    // We have MS accounts in DB, check their reauth state
+                    if (dbMicrosoftAccounts.all { it.needsReauthentication }) {
+                        OverallApplicationAuthState.ALL_ACCOUNTS_NEED_REAUTHENTICATION
+                    } else if (dbMicrosoftAccounts.any { it.needsReauthentication }) {
+                        OverallApplicationAuthState.PARTIAL_ACCOUNTS_NEED_REAUTHENTICATION
+                    } else {
+                        OverallApplicationAuthState.AT_LEAST_ONE_ACCOUNT_AUTHENTICATED
+                    }
+                }
+            } else {
+                // MSAL has accounts, so we primarily care about their state as reflected in the DB
+                val msalAccountIds = msalAccounts.map { it.id }.toSet()
+                val relevantDbEntities =
+                    dbEntities.filter { it.id in msalAccountIds && it.providerType == Account.PROVIDER_TYPE_MS }
+
+                if (relevantDbEntities.isEmpty() && msalAccountIds.isNotEmpty()) {
+                    // MSAL has accounts but none are in our DB yet, or not marked as MS type.
+                    // This state is a bit ambiguous. Could be new accounts not yet fully processed.
+                    // Or, if we consider only DB as SSoT for reauth flag, and they are not there, 
+                    // it might be that they are fresh and don't need reauth. 
+                    // For simplicity, if MSAL has them but DB doesn't reflect reauth state, assume auth okay for now.
+                    // This path should ideally not be hit if DB is SSoT and kept in sync.
+                    Timber.tag(TAG)
+                        .w("overallApplicationAuthState: MSAL accounts present but not found or not MS type in DB for re-auth check.")
+                    OverallApplicationAuthState.AT_LEAST_ONE_ACCOUNT_AUTHENTICATED
+                } else if (relevantDbEntities.isEmpty() && msalAccountIds.isEmpty()) {
+                    // This case is covered by the outer if (msalAccounts.isEmpty())
                     OverallApplicationAuthState.NO_ACCOUNTS_CONFIGURED
                 } else {
-                    val anyNeedsReauth = iAccounts.any { account ->
-                        false
-                    }
-
-                    if (anyNeedsReauth) {
-                        if (iAccounts.all { false }) {
-                            OverallApplicationAuthState.ALL_ACCOUNTS_NEED_REAUTHENTICATION
-                        } else {
-                            OverallApplicationAuthState.PARTIAL_ACCOUNTS_NEED_REAUTHENTICATION
-                        }
+                    if (relevantDbEntities.all { it.needsReauthentication }) {
+                        OverallApplicationAuthState.ALL_ACCOUNTS_NEED_REAUTHENTICATION
+                    } else if (relevantDbEntities.any { it.needsReauthentication }) {
+                        OverallApplicationAuthState.PARTIAL_ACCOUNTS_NEED_REAUTHENTICATION
                     } else {
                         OverallApplicationAuthState.AT_LEAST_ONE_ACCOUNT_AUTHENTICATED
                     }
                 }
             }
+        }
             .distinctUntilChanged()
             .catch { e ->
                 Timber.tag(TAG).e(e, "Error in overallApplicationAuthState flow")

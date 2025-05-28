@@ -71,6 +71,7 @@ class GoogleAuthManager @Inject constructor(
     @Dispatcher(MailDispatchers.IO) private val ioDispatcher: CoroutineDispatcher
 ) {
     private val TAG = "GoogleAuthManager"
+    // Forcing recompilation
 
     // Step 2.3: Helper Functions (Private)
     private fun mapPersistenceErrorToSignInError(

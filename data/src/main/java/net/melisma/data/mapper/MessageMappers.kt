@@ -1,7 +1,8 @@
 package net.melisma.data.mapper
 
-import net.melisma.core_data.model.Message // API model, also domain model with new fields
+import net.melisma.core_data.model.Message
 import net.melisma.core_db.entity.MessageEntity
+import timber.log.Timber
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
 import java.time.format.DateTimeParseException
@@ -12,15 +13,21 @@ fun Message.toEntity(accountId: String, folderId: String): MessageEntity {
     val receivedTs = try {
         OffsetDateTime.parse(this.receivedDateTime).toInstant().toEpochMilli()
     } catch (e: DateTimeParseException) {
-        // Log error or use a sensible default. Using current time as fallback.
-        // Consider if API guarantees this format or if more robust parsing is needed.
-        System.currentTimeMillis()
+        Timber.w(
+            e,
+            "Failed to parse receivedDateTime: '${this.receivedDateTime}'. Defaulting to 0L for accountId: $accountId, folderId: $folderId, messageId: ${this.id}"
+        )
+        0L // Use 0L as a marker for "unknown/unparseable date"
     }
 
     val sentTs: Long? = this.sentDateTime?.let {
         try {
             OffsetDateTime.parse(it).toInstant().toEpochMilli()
         } catch (e: DateTimeParseException) {
+            Timber.w(
+                e,
+                "Failed to parse sentDateTime: '$it'. Defaulting to null for accountId: $accountId, folderId: $folderId, messageId: ${this.id}"
+            )
             null // If sentDateTime is present but unparseable, store null
         }
     }

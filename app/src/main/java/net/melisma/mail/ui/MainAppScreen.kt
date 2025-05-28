@@ -24,7 +24,10 @@ import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -71,6 +74,8 @@ fun MainAppScreen(
     val state by mainViewModel.uiState.collectAsStateWithLifecycle()
     val messagesPagerFlow by mainViewModel.messagesPagerFlow.collectAsStateWithLifecycle()
     val lazyMessageItems = messagesPagerFlow.collectAsLazyPagingItems()
+
+    var userPulledToRefresh by remember { mutableStateOf(false) }
 
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
@@ -202,12 +207,30 @@ fun MainAppScreen(
                                 ViewMode.THREADS -> state.threadDataState is net.melisma.core_data.model.ThreadDataState.Loading
                             }
 
+                            val showPullToRefreshSpinner =
+                                isViewModelRefreshing && (userPulledToRefresh || (state.currentViewMode == ViewMode.MESSAGES && lazyMessageItems.itemCount == 0) || (state.currentViewMode == ViewMode.THREADS && state.threads?.isEmpty() != false))
+
+                            LaunchedEffect(isViewModelRefreshing) {
+                                if (!isViewModelRefreshing && userPulledToRefresh) {
+                                    userPulledToRefresh = false
+                                }
+                            }
+
                             PullToRefreshBox(
-                                isRefreshing = isViewModelRefreshing,
+                                isRefreshing = showPullToRefreshSpinner,
                                 onRefresh = {
-                                    when (state.currentViewMode) {
-                                        ViewMode.MESSAGES -> lazyMessageItems.refresh()
-                                        ViewMode.THREADS -> mainViewModel.retryFetchThreadsForCurrentFolder()
+                                    if (!isViewModelRefreshing) {
+                                        when (state.currentViewMode) {
+                                            ViewMode.MESSAGES -> {
+                                                userPulledToRefresh = true
+                                                lazyMessageItems.refresh()
+                                            }
+
+                                            ViewMode.THREADS -> {
+                                                userPulledToRefresh = true
+                                                mainViewModel.retryFetchThreadsForCurrentFolder()
+                                            }
+                                        }
                                     }
                                 }
                             ) {
@@ -256,6 +279,7 @@ fun MainAppScreen(
                                                     TAG_COMPOSABLE,
                                                     "MessageListContent onRefresh called. Calling lazyMessageItems.refresh()"
                                                 )
+                                                userPulledToRefresh = true
                                                 lazyMessageItems.refresh()
                                             }
                                         )

@@ -595,47 +595,38 @@ class DefaultAccountRepository @Inject constructor(
 
     override suspend fun markAccountForReauthentication(accountId: String, providerType: String) {
         Timber.tag(TAG)
-            .i("Marking account $accountId (Provider: $providerType) for re-authentication.")
-        _accountActionMessage.tryEmit(null)
+            .d("markAccountForReauthentication called for $accountId, provider $providerType")
         val accountEntity = accountDao.getAccountById(accountId).firstOrNull()
         if (accountEntity != null) {
-            val updatedEntity = accountEntity.copy(needsReauthentication = true)
-            val result: PersistenceResult<Unit> =
-                try {
-                    accountDao.insertOrUpdateAccount(updatedEntity)
-                    PersistenceResult.Success(Unit)
-                } catch (e: Exception) {
+            if (accountEntity.providerType.equals(providerType, ignoreCase = true)) {
+                if (!accountEntity.needsReauthentication) {
+                    val updatedEntity = accountEntity.copy(needsReauthentication = true)
+                    try {
+                        accountDao.insertOrUpdateAccount(updatedEntity)
+                        Timber.tag(TAG)
+                            .i("Account $accountId successfully marked for re-authentication in DB by DefaultAccountRepository.")
+                    } catch (e: Exception) {
+                        Timber.tag(TAG).e(
+                            e,
+                            "DAO error in DefaultAccountRepository marking $accountId for re-authentication."
+                        )
+                    }
+                } else {
                     Timber.tag(TAG)
-                        .e(e, "DAO error marking account $accountId for re-authentication.")
-                    PersistenceResult.Failure(
-                        errorType = GooglePersistenceErrorType.STORAGE_FAILED, // Or a more generic DB error type if available
-                        message = e.message ?: "Failed to update account in DB.",
-                        cause = e
-                    )
+                        .i("Account $accountId was already marked for re-authentication.")
                 }
-
-            if (result is PersistenceResult.Failure<*>) { // Use wildcard for the type if not specific
-                Timber.tag(TAG).e(
-                    result.cause,
-                    "Failed to mark account $accountId for re-authentication in DB: ${result.message}"
-                )
-                _accountActionMessage.tryEmit("Error updating account state for re-authentication.")
             } else {
                 Timber.tag(TAG)
-                    .i("Account $accountId successfully marked for re-authentication in DB.")
-                _accountActionMessage.tryEmit("Account ${accountEntity.toDomainAccount().username} marked for re-authentication.")
+                    .w("Provider type mismatch. Account $accountId is ${accountEntity.providerType}, requested $providerType")
             }
-
         } else {
             Timber.tag(TAG)
                 .w("Account $accountId not found in DB. Cannot mark for re-authentication.")
-            _accountActionMessage.tryEmit("Could not find account to mark for re-authentication.")
         }
     }
 
     override fun clearActionMessage() {
-        Timber.tag(TAG).d("Clearing action message.")
-        _accountActionMessage.tryEmit(null)
+        tryEmitMessage(null)
     }
 
     // Centralized function for handling account saving and active account setting
@@ -666,7 +657,8 @@ class DefaultAccountRepository @Inject constructor(
             GenericAuthResult.Success(account)
         } else {
             // Assuming saveResult must be Failure if not Success
-            val failure = saveResult as PersistenceResult.Failure<*> // Use wildcard
+            val failure =
+                saveResult as PersistenceResult.Failure<*> // Use wildcard. Cast is needed for type inference of properties.
             Timber.tag(TAG).e(
                 failure.cause,
                 "Failed to save $providerType account ${account.username} to DB: ${failure.message}"
@@ -687,100 +679,137 @@ class DefaultAccountRepository @Inject constructor(
         }
     }
 
-    override suspend fun syncAccount(accountId: String): Result<Unit> {
-        Timber.tag(TAG).i("syncAccount called for accountId: $accountId")
-        _accountActionMessage.tryEmit(null)
-        val account = accountDao.getAccountById(accountId).firstOrNull()?.toDomainAccount()
+    // Helper function to sync a Google account
+    private suspend fun syncGoogleAccount(accountId: String): Result<Unit> {
+        Timber.tag(TAG).d("syncGoogleAccount called for $accountId")
+        val accountEntity = accountDao.getAccountById(accountId).firstOrNull()
+        if (accountEntity == null) {
+            Timber.tag(TAG).w("syncGoogleAccount: Account $accountId not found in DB.")
+            return Result.failure(Exception("Account $accountId not found for Google sync"))
+        }
 
-        return if (account == null) {
-            Timber.tag(TAG).w("Account $accountId not found in DB for sync.")
-            _accountActionMessage.tryEmit("Account not found for sync.")
-            Result.failure(Exception("Account $accountId not found for sync."))
-        } else {
-            when (account.providerType.uppercase()) {
-                Account.PROVIDER_TYPE_MS -> microsoftAccountRepository.syncAccount(accountId)
-                Account.PROVIDER_TYPE_GOOGLE -> {
-                    Timber.tag(TAG)
-                        .d("Google account sync for ${account.username}: checking token status.")
-                    try {
-                        when (val tokenResult = googleAuthManager.getFreshAccessToken(account.id)) {
-                            is GoogleGetTokenResult.Success -> {
-                                Timber.tag(TAG)
-                                    .i("Google token refresh successful for ${account.username}.")
-                                if (account.needsReauthentication) {
-                                    Timber.tag(TAG)
-                                        .i("Google account ${account.username} no longer requires re-authentication. Updating DB.")
-                                    val updatedEntity =
-                                        account.toEntity().copy(needsReauthentication = false)
-                                    accountDao.insertOrUpdateAccount(updatedEntity)
-                                    _accountActionMessage.tryEmit("${account.username} is now re-authenticated.")
-                                }
-                                Result.success(Unit)
-                            }
+        if (accountEntity.providerType != Account.PROVIDER_TYPE_GOOGLE) {
+            Timber.tag(TAG).w("syncGoogleAccount: Account $accountId is not a Google account.")
+            return Result.failure(Exception("Account $accountId is not Google for sync"))
+        }
 
-                            is GoogleGetTokenResult.NeedsReauthentication -> {
-                                Timber.tag(TAG)
-                                    .w("Google account ${account.username} requires re-authentication (explicit). Marking in DB.")
-                                if (!account.needsReauthentication) {
-                                    markAccountForReauthentication(
-                                        account.id,
-                                        Account.PROVIDER_TYPE_GOOGLE
-                                    ) // This will also emit a message
-                                } else {
-                                    _accountActionMessage.tryEmit("${account.username} still requires re-authentication.")
-                                }
-                                // For sync, this is still a "successful" sync in that we determined state.
-                                // The re-auth is a state of the account, not necessarily a sync failure.
-                                // However, the calling UI might want to know this. For now, treat as success.
-                                Result.success(Unit) // Or Result.failure if strict "synced" means "token valid"
-                            }
+        Timber.tag(TAG).d("syncGoogleAccount: Attempting to get token for $accountId")
+        return try {
+            // Call the correct suspend function to get the token result directly
+            val tokenResult = googleAuthManager.getFreshAccessToken(accountId)
 
-                            is GoogleGetTokenResult.Error -> {
-                                Timber.tag(TAG).w(
-                                    tokenResult.exception,
-                                    "Google token refresh error for ${account.username}: ${tokenResult.errorMessage}"
+            when (tokenResult) {
+                is GoogleGetTokenResult.Success -> {
+                    Timber.tag(TAG).i("syncGoogleAccount: Token refresh successful for $accountId.")
+                    if (accountEntity.needsReauthentication) {
+                        try {
+                            accountDao.insertOrUpdateAccount(
+                                accountEntity.copy(
+                                    needsReauthentication = false
                                 )
-                                val needsReAuthError =
-                                    tokenResult.errorType == GooglePersistenceErrorType.TOKEN_REFRESH_INVALID_GRANT ||
-                                            tokenResult.errorMessage.contains(
-                                                "invalid_grant",
-                                                ignoreCase = true
-                                            )
+                            )
+                            Timber.tag(TAG)
+                                .i("syncGoogleAccount: Cleared needsReauthentication flag for $accountId in DB.")
+                        } catch (e: Exception) {
+                            Timber.tag(TAG).e(
+                                e,
+                                "syncGoogleAccount: DAO error clearing needsReauthentication for $accountId."
+                            )
+                        }
+                    }
+                    Result.success(Unit)
+                }
 
-                                if (needsReAuthError && !account.needsReauthentication) {
-                                    Timber.tag(TAG)
-                                        .i("Google account ${account.username} needs re-auth due to token error. Marking.")
-                                    markAccountForReauthentication(
-                                        account.id,
-                                        Account.PROVIDER_TYPE_GOOGLE
+                is GoogleGetTokenResult.NeedsReauthentication -> {
+                    Timber.tag(TAG)
+                        .w("syncGoogleAccount: Token refresh for $accountId requires re-authentication (reported by AuthManager).")
+                    if (!accountEntity.needsReauthentication) {
+                        try {
+                            accountDao.insertOrUpdateAccount(
+                                accountEntity.copy(
+                                    needsReauthentication = true
+                                )
+                            )
+                            Timber.tag(TAG)
+                                .i("syncGoogleAccount: Set needsReauthentication flag for $accountId in DB.")
+                        } catch (e: Exception) {
+                            Timber.tag(TAG).e(
+                                e,
+                                "syncGoogleAccount: DAO error setting needsReauthentication for $accountId."
+                            )
+                        }
+                    }
+                    Result.failure(Exception("Google account $accountId needs re-authentication as per AuthManager"))
+                }
+
+                is GoogleGetTokenResult.Error -> {
+                    Timber.tag(TAG).e(
+                        tokenResult.exception,
+                        "syncGoogleAccount: Error refreshing token for $accountId. Message: ${tokenResult.errorMessage}"
+                    )
+                    val authException = tokenResult.exception as? AuthorizationException
+                    val isInvalidGrantError =
+                        authException?.code == AuthorizationException.TokenRequestErrors.INVALID_GRANT.code &&
+                                authException.type == AuthorizationException.TYPE_OAUTH_TOKEN_ERROR
+
+                    // Check for invalid grant specifically, or a specific persistence error type indicating invalid grant
+                    if (isInvalidGrantError || tokenResult.errorType == GooglePersistenceErrorType.TOKEN_REFRESH_INVALID_GRANT) {
+                        Timber.tag(TAG)
+                            .w("syncGoogleAccount: Error for $accountId (${tokenResult.errorMessage}) implies re-authentication (isInvalidGrant: $isInvalidGrantError, errorType: ${tokenResult.errorType}).")
+                        if (!accountEntity.needsReauthentication) {
+                            try {
+                                accountDao.insertOrUpdateAccount(
+                                    accountEntity.copy(
+                                        needsReauthentication = true
                                     )
-                                } else if (needsReAuthError) {
-                                    _accountActionMessage.tryEmit("${account.username} still requires re-authentication.")
-                                } else {
-                                    _accountActionMessage.tryEmit("Error syncing ${account.username}: ${tokenResult.errorMessage}")
-                                }
-                                // Depending on severity, could be success (state determined) or failure
-                                Result.failure(
-                                    tokenResult.exception
-                                        ?: Exception("Token refresh failed: ${tokenResult.errorMessage}")
+                                )
+                                Timber.tag(TAG)
+                                    .i("syncGoogleAccount: Set needsReauthentication flag for $accountId due to error.")
+                            } catch (e: Exception) {
+                                Timber.tag(TAG).e(
+                                    e,
+                                    "syncGoogleAccount: DAO error setting needsReauthentication for $accountId on error."
                                 )
                             }
                         }
-                    } catch (e: Exception) {
-                        Timber.tag(TAG).e(
-                            e,
-                            "Exception during Google account sync check for ${account.username}"
-                        )
-                        _accountActionMessage.tryEmit("Error syncing ${account.username}: ${e.message}")
-                        Result.failure(e)
+                    } else {
+                        Timber.tag(TAG)
+                            .d("syncGoogleAccount: Error for $accountId (${tokenResult.errorMessage}) does not seem to require re-auth immediately (isInvalidGrant: $isInvalidGrantError, errorType: ${tokenResult.errorType}).")
                     }
+                    Result.failure(tokenResult.exception ?: Exception(tokenResult.errorMessage))
                 }
+                // No 'null' case needed here as getFreshAccessToken directly returns GoogleGetTokenResult, not a Flow that could be empty.
+                // The 'when' should be exhaustive for the sealed class GoogleGetTokenResult.
+            }
+        } catch (e: Exception) {
+            Timber.tag(TAG)
+                .e(e, "syncGoogleAccount: Generic exception during token refresh for $accountId.")
+            Result.failure(e)
+        }
+    }
 
-                else -> {
-                    Timber.tag(TAG).w("Unsupported provider type for sync: ${account.providerType}")
-                    _accountActionMessage.tryEmit("Cannot sync account: Unsupported provider.")
-                    Result.failure(Exception("Unsupported provider type for sync: ${account.providerType}"))
-                }
+    override suspend fun syncAccount(accountId: String): Result<Unit> {
+        Timber.tag(TAG)
+            .d("syncAccount called for accountId: $accountId in DefaultAccountRepository")
+        val account = accountDao.getAccountById(accountId).firstOrNull()?.toDomainAccount()
+            ?: return Result.failure(Exception("Account not found: $accountId"))
+
+        return when (account.providerType.uppercase()) {
+            Account.PROVIDER_TYPE_MS -> {
+                Timber.tag(TAG)
+                    .d("syncAccount: Delegating to MicrosoftAccountRepository for $accountId")
+                microsoftAccountRepository.syncAccount(accountId)
+            }
+
+            Account.PROVIDER_TYPE_GOOGLE -> {
+                Timber.tag(TAG).d("syncAccount: Handling Google account $accountId sync directly.")
+                syncGoogleAccount(accountId)
+            }
+
+            else -> {
+                Timber.tag(TAG)
+                    .w("syncAccount: Unsupported provider type ${account.providerType} for account $accountId")
+                Result.failure(Exception("Unsupported provider type: ${account.providerType}"))
             }
         }
     }

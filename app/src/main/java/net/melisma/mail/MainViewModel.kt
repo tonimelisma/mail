@@ -758,45 +758,96 @@ class MainViewModel @Inject constructor(
     fun initiateSignIn(providerType: String, activity: Activity) {
         viewModelScope.launch {
             _uiState.update { it.copy(isLoadingAccountAction = true) } // Set true at start of action
-            defaultAccountRepository.getAuthenticationIntentRequest(
-                providerType = providerType,
-                activity = activity,
-                scopes = null
-            ).collect { result: GenericAuthResult ->
-                _uiState.update { currentState ->
-                    when (result) {
-                        is GenericAuthResult.Loading -> {
-                            Timber.tag(TAG).d("Get auth intent loading...")
-                            currentState.copy(isLoadingAccountAction = true) // Remain true
-                        }
 
-                        is GenericAuthResult.Success -> {
-                            Timber.tag(TAG)
-                                .i("Get auth intent success for $providerType - unexpected by default for this call.")
-                            // This path is not typical for getAuthenticationIntentRequest if it always leads to UiActionRequired or Error.
-                            // If it can be a terminal success, set isLoadingAccountAction = false.
-                            currentState.copy(
-                                isLoadingAccountAction = false, // Set false on terminal success (if applicable)
-                                toastMessage = "Sign-in flow for ${providerType} initiated."
-                            )
-                        }
+            if (providerType.equals(Account.PROVIDER_TYPE_MS, ignoreCase = true)) {
+                Timber.tag(TAG).d("Initiating MSAL direct sign-in flow for provider: $providerType")
+                defaultAccountRepository.signIn(
+                    activity = activity,
+                    providerType = providerType,
+                    loginHint = null // Add loginHint if available/needed for MSAL
+                ).collect { result: GenericAuthResult ->
+                    _uiState.update { currentState ->
+                        when (result) {
+                            is GenericAuthResult.Loading -> {
+                                Timber.tag(TAG).d("MSAL Sign-in loading...")
+                                currentState.copy(isLoadingAccountAction = true)
+                            }
 
-                        is GenericAuthResult.Error -> {
-                            Timber.tag(TAG).w(
-                                result.details.cause,
-                                "Get auth intent error: ${result.details.message} (Code: ${result.details.code})"
-                            )
-                            currentState.copy(
-                                isLoadingAccountAction = false, // Set false on terminal error
-                                toastMessage = "Sign-in error: ${result.details.message}${if (result.details.code != null) " (${result.details.code})" else ""}"
-                            )
-                        }
+                            is GenericAuthResult.Success -> {
+                                Timber.tag(TAG)
+                                    .i("MSAL Sign-in success for ${result.account.username}")
+                                currentState.copy(
+                                    isLoadingAccountAction = false,
+                                    toastMessage = "Signed in as ${result.account.username}"
+                                    // Potentially navigate or refresh accounts list
+                                )
+                            }
 
-                        is GenericAuthResult.UiActionRequired -> {
-                            Timber.tag(TAG)
-                                .d("Get auth intent UI Action Required. Emitting intent.")
-                            _pendingAuthIntent.value = result.intent
-                            currentState.copy(isLoadingAccountAction = true) // Remain true, awaiting UI action
+                            is GenericAuthResult.Error -> {
+                                Timber.tag(TAG).w(
+                                    result.details.cause,
+                                    "MSAL Sign-in error: ${result.details.message} (Code: ${result.details.code})"
+                                )
+                                currentState.copy(
+                                    isLoadingAccountAction = false,
+                                    toastMessage = "Sign-in error: ${result.details.message}${if (result.details.code != null) " (${result.details.code})" else ""}"
+                                )
+                            }
+
+                            is GenericAuthResult.UiActionRequired -> {
+                                // This case should NOT be hit for MSAL if MSAL handles its own UI.
+                                // If it is, it means our understanding of DefaultAccountRepository's MSAL signIn is wrong.
+                                Timber.tag(TAG)
+                                    .e("MSAL Sign-in flow unexpectedly emitted UiActionRequired.")
+                                currentState.copy(
+                                    isLoadingAccountAction = false,
+                                    toastMessage = "Unexpected sign-in state for Microsoft account."
+                                )
+                            }
+                        }
+                    }
+                }
+            } else { // For Google or other providers that use getAuthenticationIntentRequest
+                Timber.tag(TAG)
+                    .d("Initiating sign-in via getAuthenticationIntentRequest for provider: $providerType")
+                defaultAccountRepository.getAuthenticationIntentRequest(
+                    providerType = providerType,
+                    activity = activity,
+                    scopes = null
+                ).collect { result: GenericAuthResult ->
+                    _uiState.update { currentState ->
+                        when (result) {
+                            is GenericAuthResult.Loading -> {
+                                Timber.tag(TAG).d("Get auth intent loading...")
+                                currentState.copy(isLoadingAccountAction = true) // Remain true
+                            }
+
+                            is GenericAuthResult.Success -> {
+                                Timber.tag(TAG)
+                                    .i("Get auth intent success for $providerType - unexpected by default for this call.")
+                                currentState.copy(
+                                    isLoadingAccountAction = false,
+                                    toastMessage = "Sign-in flow for ${providerType} initiated."
+                                )
+                            }
+
+                            is GenericAuthResult.Error -> {
+                                Timber.tag(TAG).w(
+                                    result.details.cause,
+                                    "Get auth intent error: ${result.details.message} (Code: ${result.details.code})"
+                                )
+                                currentState.copy(
+                                    isLoadingAccountAction = false, // Set false on terminal error
+                                    toastMessage = "Sign-in error: ${result.details.message}${if (result.details.code != null) " (${result.details.code})" else ""}"
+                                )
+                            }
+
+                            is GenericAuthResult.UiActionRequired -> {
+                                Timber.tag(TAG)
+                                    .d("Get auth intent UI Action Required. Emitting intent.")
+                                _pendingAuthIntent.value = result.intent
+                                currentState.copy(isLoadingAccountAction = true) // Remain true, awaiting UI action
+                            }
                         }
                     }
                 }

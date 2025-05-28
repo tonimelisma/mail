@@ -12,11 +12,12 @@ fun IAccount.toDomainAccount(): Account {
     val displayNameFromClaims = this.claims?.get("name") as? String
     val preferredUsername = this.claims?.get("preferred_username") as? String // Often the email
 
-    // Attempt to use 'oid' (Object ID) from claims for a more stable ID.
-    // Fall back to IAccount.id if 'oid' is not available.
-    // For multi-tenant apps, oid + tid is the most unique, but oid usually suffices for accountId.
-    val oidClaim = this.claims?.get("oid") as? String
-    val accountId = oidClaim ?: this.id ?: ""
+    // According to MSAL 6.0.0 Javadoc for IAccount.getId():
+    // "Gets the id of the account. For the Microsoft Identity Platform: the OID of the account in its home tenant."
+    // This makes IAccount.id (which calls getId()) a strong candidate for a stable identifier.
+    // Fallback to oid claim if IAccount.id is null, though unlikely.
+    val oidFromClaims = this.claims?.get("oid") as? String
+    val accountId = this.id ?: oidFromClaims ?: ""
 
     // TODO: If app supports multiple tenants for the same user, consider combining oid + tid for true uniqueness if needed.
     // val tidClaim = this.claims?.get("tid") as? String
