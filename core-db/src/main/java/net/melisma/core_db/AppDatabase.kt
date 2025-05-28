@@ -11,14 +11,16 @@ import net.melisma.core_db.converter.StringListConverter
 import net.melisma.core_db.converter.WellKnownFolderTypeConverter
 import net.melisma.core_db.dao.AccountDao
 import net.melisma.core_db.dao.FolderDao
+import net.melisma.core_db.dao.MessageBodyDao
 import net.melisma.core_db.dao.MessageDao
 import net.melisma.core_db.entity.AccountEntity
 import net.melisma.core_db.entity.FolderEntity
+import net.melisma.core_db.entity.MessageBodyEntity
 import net.melisma.core_db.entity.MessageEntity
 
 @Database(
-    entities = [AccountEntity::class, FolderEntity::class, MessageEntity::class],
-    version = 4,
+    entities = [AccountEntity::class, FolderEntity::class, MessageEntity::class, MessageBodyEntity::class],
+    version = 6,
     exportSchema = false // Set to true for production apps for schema migration history
 )
 @TypeConverters(WellKnownFolderTypeConverter::class, StringListConverter::class)
@@ -26,6 +28,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun accountDao(): AccountDao
     abstract fun folderDao(): FolderDao
     abstract fun messageDao(): MessageDao
+    abstract fun messageBodyDao(): MessageBodyDao
 
     companion object {
         @Volatile
@@ -39,7 +42,13 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     DATABASE_NAME
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                    .addMigrations(
+                        MIGRATION_1_2,
+                        MIGRATION_2_3,
+                        MIGRATION_3_4,
+                        MIGRATION_4_5,
+                        MIGRATION_5_6
+                    )
                     .build()
                 INSTANCE = instance
                 instance
@@ -93,6 +102,27 @@ abstract class AppDatabase : RoomDatabase() {
         val MIGRATION_3_4 = object : Migration(3, 4) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE `accounts` ADD COLUMN `needsReauthentication` INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `messages` ADD COLUMN `lastSyncError` TEXT DEFAULT NULL")
+            }
+        }
+
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "CREATE TABLE IF NOT EXISTS `message_bodies` (" +
+                            "`message_id` TEXT NOT NULL, " +
+                            "`content_type` TEXT NOT NULL DEFAULT 'TEXT', " +
+                            "`content` TEXT, " +
+                            "`last_fetched_ts` INTEGER NOT NULL DEFAULT 0, " +
+                            "PRIMARY KEY(`message_id`), " +
+                            "FOREIGN KEY(`message_id`) REFERENCES `messages`(`messageId`) ON UPDATE NO ACTION ON DELETE CASCADE)"
+                )
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_message_bodies_message_id` ON `message_bodies` (`message_id`)")
             }
         }
     }

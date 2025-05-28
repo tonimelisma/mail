@@ -87,6 +87,7 @@ interface MessageRepository {
     // suspend fun loadMoreMessages() // For pagination
     // suspend fun searchMessages(query: String): Flow<List<Message>> // For search functionality
     suspend fun markMessageRead(account: Account, messageId: String, isRead: Boolean): Result<Unit>
+    suspend fun starMessage(account: Account, messageId: String, isStarred: Boolean): Result<Unit>
     suspend fun deleteMessage(account: Account, messageId: String): Result<Unit>
     suspend fun moveMessage(
         account: Account,

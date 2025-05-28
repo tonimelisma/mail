@@ -18,6 +18,9 @@ interface AccountDao {
     @Query("SELECT * FROM accounts WHERE id = :accountId")
     fun getAccountById(accountId: String): Flow<AccountEntity?>
 
+    @Query("SELECT * FROM accounts WHERE id = :accountId")
+    suspend fun getAccountByIdNonFlow(accountId: String): AccountEntity?
+
     @Query("SELECT * FROM accounts")
     fun getAllAccounts(): Flow<List<AccountEntity>>
 

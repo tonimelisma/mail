@@ -1,7 +1,7 @@
 # **Melisma Mail - Caching & Offline-First Implementation Guide**
 
-Version: 1.5 (Based on Code Review - May 26, 2024)
-Date: May 26, 2024
+Version: 1.6 (Based on Code Review - May 27, 2024)
+Date: May 27, 2024
 
 ## **0. Vision & Introduction**
 
@@ -19,18 +19,18 @@ changes.
 ### **A. Core Caching & SSoT Foundation:**
 
 * **`:core-db` Module & Database:**
-    * `AppDatabase.kt` is at `version = 4`.
+    * `AppDatabase.kt` is at `version = 5`.
     * Entities `AccountEntity.kt`, `FolderEntity.kt`, and `MessageEntity.kt` are defined.
     * `AccountEntity` includes `val needsReauthentication: Boolean = false`.
-    * `MessageEntity` includes `val needsSync: Boolean = false` but is **MISSING**
-      `lastSyncError: String?`.
+    * `MessageEntity` includes `val needsSync: Boolean = false` and
+      `val lastSyncError: String? = null`.
     * DAOs (`AccountDao`, `FolderDao`, `MessageDao`) are present.
     * TypeConverters (`WellKnownFolderTypeConverter`, `StringListConverter`) are present.
     * **Migrations Implemented:**
         * `MIGRATION_1_2`: Adds `messages` table.
         * `MIGRATION_2_3`: Adds `needsSync` to `messages` table.
         * `MIGRATION_3_4`: Adds `needsReauthentication` to `accounts` table.
-        * **MISSING MIGRATION** for `messages.lastSyncError`.
+      * `MIGRATION_4_5`: Adds `lastSyncError` to `messages` table.
         * **MISSING MIGRATION** for `MessageBodyEntity` (as entity itself is missing).
 
 * **`:data` Module Repositories as Synchronizers:**
@@ -43,8 +43,10 @@ changes.
         * Delegates to `MicrosoftAccountRepository` for Microsoft account sync.
     * `DefaultMessageRepository.kt`:
         * `markMessageRead` updates `MessageEntity.isRead` and sets `needsSync = true` in the DAO
-          first. It then has a **TODO** for WorkManager and currently proceeds with a direct API
-          call (updating `needsSync` to `false` on API success).
+          first, then enqueues `SyncMessageStateWorker` to handle the API synchronization.
+        * `starMessage` (new method) updates `MessageEntity.isStarred` and sets `needsSync = true`
+          in the DAO
+          first, then enqueues `SyncMessageStateWorker` to handle the API synchronization.
         * Other write operations (`deleteMessage`, `moveMessage`) are stubs.
     * `DefaultFolderRepository.kt`: (Assumed to be largely functional per earlier `CACHE.md`
       versions, focusing on SSoT from DB for folders - not re-validated in this pass).
@@ -75,13 +77,8 @@ changes.
         * Now uses `IAccount.getId()` (Kotlin property `this.id`) as the primary source for
           `Account.id`, falling back to an `oid` claim. The Javadoc for MSAL v6.0.0's
           `IAccount.getId()` states it returns "the OID of the account in its home tenant."
-        * **REVISED UNDERSTANDING:** The previous "CRITICAL" point about
-          `getHomeAccountId().getIdentifier()` not being used is now understood as likely due to
-          this method path not being available/resolvable as expected on `IAccount` or casted
-          `IMultiTenantAccount` within the project's MSAL 6.0.0 version and build environment. The
-          current implementation uses the best available identifier from `IAccount` directly.
-          Further investigation into `IAccount.getId()` stability or an MSAL version upgrade would
-          be needed if `getHomeAccountId().getIdentifier()` is strictly required.
+      * **FIXED (Build Error):** The approach of using `IAccount.getId()` directly resolved previous
+        compilation issues related to `getHomeAccountId().getIdentifier()` and MSAL v6.0.0.
         * Defaults `Account.needsReauthentication` to `false` with a TODO (this is for initial
           mapping; `syncAccount` handles dynamic state).
     * `ActiveMicrosoftAccountHolder.kt`: Loads/saves active ID from SharedPreferences; class itself
@@ -92,23 +89,33 @@ changes.
         * **FIXED:** Its `overallApplicationAuthState` Flow now correctly reads
           `needsReauthentication` status from `AccountDao` for Microsoft accounts, combined with
           `MicrosoftAuthManager.msalAccounts`. It no longer uses hardcoded `false` checks.
+      * **FIXED (Build Error):** An `Unresolved reference 'toDomainAccount'` was fixed by creating
+        `backend-microsoft/src/main/java/net/melisma/backend_microsoft/mapper/DatabaseMappers.kt`
+        with an `AccountEntity.toDomainAccount()` extension function.
 
 ### **C. Unimplemented Core Offline/Caching Features:**
 
 * **WorkManager for "True Offline" Sync:**
-    * `SyncMessageStateWorker.kt` **does not exist**.
-    * `MessageEntity.lastSyncError` field and its DB migration **are missing**.
-    * `DefaultMessageRepository.markMessageRead` has a TODO and falls back to direct API call.
+    * `SyncMessageStateWorker.kt` **exists (structure implemented, DI for MailApiServices,
+      ErrorMappers, Dispatcher, AccountRepository, AppDatabase added; API logic for
+      markRead/starMessage implemented within worker; DAO updates for sync state handled by worker)
+      **.
+    * `DefaultMessageRepository.markMessageRead` (and `starMessage`) now enqueue
+      `SyncMessageStateWorker` with corrected constants (`OP_MARK_READ`, `OP_STAR_MESSAGE`,
+      `KEY_OPERATION_TYPE`) after local DAO update. The worker now fetches account details itself.
 * **On-Demand Message Body Fetching:**
-    * `MessageBodyEntity.kt` **does not exist**.
-    * No related DAO or `AppDatabase` migration for message bodies.
+    * `MessageBodyEntity.kt` **STILL does not exist** (Mistakenly thought this was added, but it was
+      `MessageBodyDao` DI).
+    * `MessageBodyDao.kt` **exists and is now provided via Hilt DI** in `DatabaseModule.kt`.
+    * No related `AppDatabase` migration for `MessageBodyEntity` yet.
 * **Comprehensive Offline Writes:** Deleting, moving, composing/sending messages are not
   offline-first (mostly stubs in `DefaultMessageRepository`).
 * **Attachment Handling:** No evidence of attachment entities, DAO, or download/caching logic.
 * **Local Full-Text Search (FTS):** No evidence of `MessageFtsEntity` or FTS setup.
 
 ## **II. Unified List of Technical Debt and Other Challenges That Still Need To Be Fixed (Verified
-May 26, 2024)**
+
+May 27, 2024 - Updated after recent build fixes)**
 
 1. **MSAL Authentication Instability & Related Issues:**
     * **Token Cache Corruption/Decryption Failures (Runtime Issue):** `CACHE.md` (previous versions)
@@ -121,21 +128,18 @@ May 26, 2024)**
       `signOut` needs rigorous testing to ensure it fully handles MSAL account removal in all
       scenarios, despite the "TEMPORARILY SIMPLIFIED" comment.
     * **Microsoft Account ID Stability (MSAL v6.0.0):** The `MicrosoftAccountMappers.kt` now uses
-      `IAccount.getId()` (Kotlin `this.id`) as the primary identifier, based on MSAL 6.0.0
-      Javadoc ("OID of the account in its home tenant"). This approach fixed compilation issues with
-      `getHomeAccountId().getIdentifier()`. **ACTION:** The stability and sufficiency of
-      `IAccount.getId()` as the canonical ID needs to be validated during testing. If insufficient,
-      investigation into MSAL library upgrade or alternative strategies for a globally unique ID
-      will be necessary.
+      `IAccount.getId()` (Kotlin `this.id`) as the primary identifier. **VALIDATED (Build):** This
+      approach fixed compilation issues. **ACTION:** The stability and sufficiency of
+      `IAccount.getId()` as the canonical ID still needs to be validated during runtime testing.
+   * **FIXED (Build Error):** Callback in `MicrosoftAuthManager.kt` corrected from `onAccountLoaded`
+     to `onTaskCompleted`.
 
 2. **`needsReauthentication` Flag - Implementation Status:**
-    * **FIXED: Flawed `overallApplicationAuthState` in `MicrosoftAccountRepository.kt`:** This Flow
-      now correctly reflects the `needsReauthentication` state from `AccountDao` for Microsoft
-      accounts. UI should continue to rely solely on
-      `DefaultAccountRepository.overallApplicationAuthState` for the global application state.
+    * **FIXED & VERIFIED (Build):** Flawed `overallApplicationAuthState` in
+      `MicrosoftAccountRepository.kt` now correctly reflects the `needsReauthentication` state from
+      `AccountDao`.
     * **`MicrosoftAccountMappers.kt` Default:** Defaults `Account.needsReauthentication` to `false`
-      during initial mapping from `IAccount`. This is acceptable as dynamic re-authentication status
-      is managed by repository sync logic and stored in the DAO.
+      during initial mapping. Acceptable as dynamic status is managed by repository sync.
 
 3. **API and Data Model Limitations (DESIGN/IMPLEMENTATION ISSUES):**
     * **API-Model Discrepancies:** Potential for incomplete cached data if `MailApiService` doesn't
@@ -145,19 +149,33 @@ May 26, 2024)**
       `DefaultMessageRepository.kt` are stubs.
     * **`MailApiService` Pagination Limitation (DESIGN LIMITATION):** `getMessagesForFolder` only
       supports `maxResults`, preventing network-driven APPEND/PREPEND in `MessageRemoteMediator`.
+   * **FIXED (Build Error):** Ktor `contentType` usage in `GraphApiHelper.kt` for `starMessage` was
+     resolved by removing explicit import and call, relying on `ContentNegotiation`.
+   * **FIXED (Build Error):** `Unresolved reference 'contentType'` in `GraphApiHelper.kt` (
+     `mapGraphMessageToMessage`) fixed with explicit cast.
 
 4. **Data Handling and Persistence Concerns (CODE/SCHEMA ISSUES):**
     * **Error Handling in Mappers (Date Parsing):** `MessageMappers.kt` (as per `CACHE.md`) date
-      parsing defaults need careful UI handling. Consider nullable `Long?` for
-      `MessageEntity.receivedTs`.
-    * **Missing `lastSyncError` in `MessageEntity.kt` (SCHEMA/CODE ISSUE):** This field and its DB
-      migration are missing, limiting offline sync error tracking.
+      parsing defaults need careful UI handling.
+    * **RESOLVED (Build & Code):** Missing `lastSyncError` in `MessageEntity.kt` (was already
+      present, schema is fine). `MessageDao` has `updateLastSyncError` and `clearSyncState`.
+    * **`DefaultMessageRepository.kt` snippet issue:** Corrected `fetchedMessage.snippet` to
+      `fetchedMessage.bodyPreview`.
+    * **`DefaultMessageRepository.kt` typo:** `inputDataBilder` instead of `inputDataBuilder` in
+      `enqueueSyncMessageStateWorker` (lingering typo, did not break build).
 
-5. **Offline Functionality Gaps (UNIMPLEMENTED FEATURES):**
-    * **WorkManager for "True Offline" Not Implemented:** `SyncMessageStateWorker.kt` doesn't exist.
-      `DefaultMessageRepository.markMessageRead` relies on a direct API call fallback.
-    * **On-Demand Message Body Fetch Not Implemented:** `MessageBodyEntity.kt`, its DAO, and
-      migration are missing.
+5. **Offline Functionality Gaps (UNIMPLEMENTED FEATURES & RECENT PROGRESS):**
+    * **WorkManager for "True Offline" Partially Implemented & Improved:**
+        * `SyncMessageStateWorker.kt` DI setup is more complete. API call logic for mark read/star
+          is present. Worker handles DAO updates for `needsSync` & `lastSyncError`.
+        * `DefaultMessageRepository.markMessageRead` and `starMessage` method enqueue the worker
+          with corrected constants.
+        * **PENDING:** Robust error handling and retry policies in worker need more thorough
+          implementation and testing.
+    * **On-Demand Message Body Fetch Progress:**
+        * `MessageBodyDao.kt` exists and is provided via Hilt.
+        * **PENDING:** `MessageBodyEntity.kt` creation, `AppDatabase` migration for it, and related
+          ViewModel/UseCase/Repository logic for actual fetching/saving message bodies.
     * **Other Offline Writes Not Implemented:** `deleteMessage`, `moveMessage`, etc., are stubs.
 
 6. **UI and User Experience Issues (RUNTIME/UI ISSUES):**
@@ -170,23 +188,26 @@ May 26, 2024)**
     * **Log Spam:** Extensive diagnostic logging should be reviewed.
     * **Lint Warning in `DefaultAccountRepository.kt`:** Accepted cast warning persists.
 
-## **III. Unified List of Work That Is Still To Be Done to Achieve the Vision (Verified May 26,
-2024)**
+## **III. Unified List of Work That Is Still To Be Done to Achieve the Vision (Verified May 27,
+
+2024 - Updated after recent build fixes)**
 
 This list outlines the necessary steps to realize the full offline-first caching vision.
 
 1. **Stabilize Core Authentication & Account Management (Microsoft Focus - URGENT):**
     * **Resolve MSAL Cache/Token Runtime Issues:** Investigate and fix MSAL runtime errors (e.g.,
       `AdalKey` issues).
-    * **Validate `IAccount.getId()` Stability:** Confirm through testing that `IAccount.getId()` (as
-      used in `MicrosoftAccountMappers.kt`) provides a stable and correct canonical identifier for
-      Microsoft accounts with MSAL v6.0.0. If not, research alternatives or MSAL upgrade paths.
+    * **Validate `IAccount.getId()` Stability (Runtime):** Confirm through runtime testing that
+      `IAccount.getId()` provides a stable and correct canonical identifier for Microsoft accounts
+      with MSAL v6.0.0.
     * **Ensure Timely Active Microsoft Account ID:** Refactor calling logic for
       `ActiveMicrosoftAccountHolder.setActiveMicrosoftAccountId`.
     * **Validate/Refine `MicrosoftAuthManager.signOut()`:** Thoroughly runtime test its robustness.
+    * ~~**FIXED (Build Error):** Callback in `MicrosoftAuthManager.kt` corrected.~~
+    * ~~**FIXED (Build Error):** `MicrosoftAccountRepository.kt` `toDomainAccount` mapping.~~
 
 2. **Fully Implement and Test `needsReauthentication` Flag Logic (High Priority):**
-    * **DONE: Fix `MicrosoftAccountRepository.overallApplicationAuthState`**.
+    * **DONE & VERIFIED (Build):** Fix `MicrosoftAccountRepository.overallApplicationAuthState`.
     * **Verify `MicrosoftAccountRepository.syncAccount` Robustness:** Ensure it correctly calls
       `markAccountForReauthentication` for all relevant MSAL exceptions and clears the flag on
       success. (Largely verified, ongoing testing focus).
@@ -198,24 +219,26 @@ This list outlines the necessary steps to realize the full offline-first caching
 
 4. **Implement "True Offline" Operations with WorkManager (Incremental Rollout):**
     * **Phase 1: Mark Read/Unread & Star/Unstar:**
-        * **Database Schema:** Add `lastSyncError: String? DEFAULT NULL` to `MessageEntity.kt`.
-          Create and add the corresponding Room migration (e.g., `MIGRATION_4_5`) in
-          `AppDatabase.kt`.
-        * **Create `SyncMessageStateWorker.kt`:** Implement worker logic (API call, DAO updates for
-          `needsSync` & `lastSyncError`, retry policies).
-        * **Refactor `DefaultMessageRepository.markMessageRead()` (and new `starMessage()`):**
-          Remove direct API call fallback. Enqueue `SyncMessageStateWorker` after local DAO update.
+        * **DONE:** Database Schema: `lastSyncError: String? DEFAULT NULL` in `MessageEntity.kt` (
+          verified present).
+        * **DONE:** Room migration (e.g., `MIGRATION_4_5`) in `AppDatabase.kt` (verified present).
+        * **DONE (Significant Progress):** `SyncMessageStateWorker.kt`: DI setup, API call logic for
+          mark read/star, DAO updates for sync state. Constants in `DefaultMessageRepository`
+          corrected.
+        * **PENDING/REFINEMENT:** More robust error handling and retry policies within
+          `SyncMessageStateWorker.kt`.
+        * **DONE:** Refactor `DefaultMessageRepository.markMessageRead()` (and new `starMessage()`):
+          Enqueues worker.
     * **Phase 2: Other Write Operations:** Extend WorkManager pattern for delete, move,
       compose/send (with outbox table).
 
 5. **Implement On-Demand Fetching & Caching for Full Content (Incremental Rollout):**
     * **Phase 1: Message Bodies:**
-        * **Create `MessageBodyEntity.kt`**.
-        * **Update `AppDatabase.kt`:** Add entity, DAO method, and new Room migration (e.g.,
-          `MIGRATION_5_6`).
-        * **Implement `MessageBodyDao.kt`**.
-        * **Implement ViewModel, UseCase, Repository logic** for fetching, saving, and observing
-          message bodies.
+        * **PENDING:** **Create `MessageBodyEntity.kt`**.
+        * **PENDING:** **Update `AppDatabase.kt`:** Add entity, DAO method, and new Room migration.
+        * **DONE:** **Implement `MessageBodyDao.kt` and provide via Hilt DI.**
+        * **PENDING:** Implement ViewModel, UseCase, Repository logic for fetching, saving, and
+          observing message bodies.
     * **Phase 2: Attachments (Longer Term):** Design and implement attachment caching.
 
 6. **Enhance API Capabilities and Advanced Synchronization (Longer Term):**
@@ -231,7 +254,8 @@ This list outlines the necessary steps to realize the full offline-first caching
 
 8. **Address Remaining General Technical Debt (Ongoing):**
     * Resolve API-Model Discrepancies.
-    * Implement stubbed API service methods (e.g., `getMessageAttachments`).
+   * Implement stubbed API service methods (e.g., `getMessageAttachments`, `starMessage` in
+     `MailApiService` if needed).
     * Refine error handling in Mappers (e.g., date parsing).
     * Review and reduce log spam.
     * Decide on `ButtonPrimary` styling.
@@ -261,7 +285,10 @@ This list outlines the necessary steps to realize the full offline-first caching
       implications and benefits of upgrading MSAL to a version that reliably provides
       `getHomeAccountId().getIdentifier()`.
     * **Ktor Authentication with MSAL:** Timing of active account ID for token provider.
-    * **WorkManager Best Practices for Sync.**
+  * **WorkManager Best Practices for Sync:** (Currently being applied for basic structure) Input
+    data, Hilt DI for workers, error handling, retry policies, unique work.
+  * **`MailApiService` for Star/Unstar:** Verify/add `starMessage` method to the interface and
+    implementations.
 
 This rewritten `CACHE2.md` should now accurately reflect the project's state based on our detailed
 analysis and direct code examination. 

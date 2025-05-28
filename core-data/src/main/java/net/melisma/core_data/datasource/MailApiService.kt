@@ -80,6 +80,18 @@ interface MailApiService {
     ): Result<Unit>
 
     /**
+     * Stars or unstars a message.
+     *
+     * @param messageId The ID of the message to update
+     * @param isStarred Whether the message should be starred (true) or unstarred (false)
+     * @return Result indicating success or failure
+     */
+    suspend fun starMessage(
+        messageId: String,
+        isStarred: Boolean
+    ): Result<Unit>
+
+    /**
      * Deletes a message (moves it to trash/deleted items folder).
      *
      * @param messageId The ID of the message to delete
@@ -139,8 +151,17 @@ interface MailApiService {
         destinationFolderId: String
     ): Result<Unit>
 
+    /**
+     * Fetches the full content (body) of a specific message.
+     *
+     * @param messageId The ID of the message to fetch content for.
+     * @return Result containing the Message object with its body populated, or an error.
+     *         The Message object might only contain id, body, and contentType, or be more complete
+     *         depending on the API and what was requested/returned.
+     */
+    suspend fun getMessageContent(messageId: String): Result<Message>
+
     // Future methods to consider:
-    // - getMessageContent(messageId) - For fetching full message content
     // - sendMessage(message) - For sending new messages
     // - getAttachments(messageId) - For fetching attachments
     // - createDraft(message) - For creating draft messages

@@ -44,5 +44,6 @@ data class MessageEntity(
     val isRead: Boolean,
     val isStarred: Boolean, // Assuming this will be handled
     val hasAttachments: Boolean, // Assuming this will be handled
-    val needsSync: Boolean = false
+    val needsSync: Boolean = false,
+    val lastSyncError: String? = null
 ) 

@@ -8,6 +8,9 @@ import androidx.paging.PagingConfig
 import androidx.paging.PagingData
 import androidx.paging.map
 import androidx.room.withTransaction
+import androidx.work.Data
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -16,12 +19,14 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import net.melisma.core_data.datasource.MailApiService
 import net.melisma.core_data.di.ApplicationScope
 import net.melisma.core_data.di.Dispatcher
@@ -36,10 +41,13 @@ import net.melisma.core_data.model.MessageSyncState
 import net.melisma.core_data.repository.AccountRepository
 import net.melisma.core_data.repository.MessageRepository
 import net.melisma.core_db.AppDatabase
+import net.melisma.core_db.dao.MessageBodyDao
 import net.melisma.core_db.dao.MessageDao
+import net.melisma.core_db.entity.MessageBodyEntity
 import net.melisma.data.mapper.toDomainModel
 import net.melisma.data.mapper.toEntity
 import net.melisma.data.paging.MessageRemoteMediator
+import net.melisma.data.worker.SyncMessageStateWorker
 import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -53,7 +61,9 @@ class DefaultMessageRepository @Inject constructor(
     private val errorMappers: Map<String, @JvmSuppressWildcards ErrorMapperService>,
     private val accountRepository: AccountRepository,
     private val messageDao: MessageDao,
-    private val appDatabase: AppDatabase
+    private val messageBodyDao: MessageBodyDao,
+    private val appDatabase: AppDatabase,
+    private val workManager: WorkManager
 ) : MessageRepository {
 
     private val TAG = "DefaultMessageRepo"
@@ -65,9 +75,7 @@ class DefaultMessageRepository @Inject constructor(
     private var syncJob: Job? = null
 
     init {
-        Log.d(
-            TAG, "Initializing DefaultMessageRepository with MessageDao."
-        )
+        Log.d(TAG, "Initializing DefaultMessageRepository with MessageDao.")
     }
 
     override fun observeMessagesForFolder(
@@ -89,9 +97,7 @@ class DefaultMessageRepository @Inject constructor(
             TAG,
             "getMessagesPager for accountId=$accountId, folderId=$folderId. PagingConfig: pageSize=${pagingConfig.pageSize}, prefetchDistance=${pagingConfig.prefetchDistance}, initialLoadSize=${pagingConfig.initialLoadSize}"
         )
-        // Find the first available MailApiService. This is a simplification.
-        // In a multi-provider setup for the mediator, you might need to select based on account type.
-        val account = runBlocking(ioDispatcher) { // Using runBlocking with the IO dispatcher
+        val account = runBlocking(ioDispatcher) {
             accountRepository.getAccountById(accountId).firstOrNull()
         }
         val providerType = account?.providerType?.uppercase()
@@ -130,20 +136,14 @@ class DefaultMessageRepository @Inject constructor(
         val newFolderId = folder?.id
         Log.d(
             TAG,
-            "setTargetFolder: Account=${account?.username}($newAccountId), Folder=${folder?.displayName}($newFolderId). CurrentTarget: $currentTargetAccount?.id/$currentTargetFolderId. SyncJob Active: ${syncJob?.isActive}"
+            "setTargetFolder: Account=${account?.username}($newAccountId), Folder=${folder?.displayName}($newFolderId). CurrentTarget: ${currentTargetAccount?.id}/$currentTargetFolderId. SyncJob Active: ${syncJob?.isActive}"
         )
-
-        // Alternative 1: This method should NOT trigger its own sync. Pager will handle it.
-        // It only updates internal state if needed by other (non-paging) functions or for clarity.
-        // If newAccountId == currentTargetAccount?.id && newFolderId == currentTargetFolderId, no state change needed for this repo.
 
         if (newAccountId == currentTargetAccount?.id && newFolderId == currentTargetFolderId) {
             Log.d(
                 TAG,
-                "setTargetFolder: Same target account/folder. No change to repository's internal target."
+                "setTargetFolder: Same target account/folder. No change to repository\'s internal target."
             )
-            // If a sync was ongoing for this exact target, and it was cancelled externally (e.g. ViewModel scope ending),
-            // this method call shouldn't restart it automatically. The Pager flow is the master for loading.
             return
         }
 
@@ -154,20 +154,34 @@ class DefaultMessageRepository @Inject constructor(
         currentTargetFolderId = newFolderId
 
         if (newAccountId == null || newFolderId == null) {
-            _messageSyncState.value = MessageSyncState.Idle // Reset sync state if target is cleared
+            _messageSyncState.value = MessageSyncState.Idle
             Log.d(
                 TAG,
                 "setTargetFolder: Target cleared (account or folder is null). Sync state set to Idle."
             )
         } else {
-            // For Alternative 1, we DO NOT call syncMessagesForFolderInternal here.
-            // The MainViewModel will create a new Pager, and MessageRemoteMediator will handle the REFRESH.
             Log.d(
                 TAG,
                 "setTargetFolder: Updated currentTargetAccount and currentTargetFolderId. Paging system will handle data loading for $newAccountId/$newFolderId via getMessagesPager."
             )
-            // Optionally, if _messageSyncState is used by UI for non-Paging feedback, initialize it for the new target:
-            // _messageSyncState.value = MessageSyncState.Idle // Or a specific state like NeedsLoadTriggeredByUI
+        }
+    }
+
+    override suspend fun refreshMessages(activity: Activity?) {
+        val account = currentTargetAccount
+        val folderId = currentTargetFolderId
+        if (account != null && folderId != null) {
+            Timber.tag(TAG)
+                .d("refreshMessages: Triggering sync for current target: Account ${account.id}, Folder $folderId")
+            syncMessagesForFolderInternal(
+                account,
+                folderId,
+                isRefresh = true,
+                explicitRequest = true
+            )
+        } else {
+            Timber.tag(TAG)
+                .w("refreshMessages: No current target account or folder set. Cannot refresh.")
         }
     }
 
@@ -192,8 +206,6 @@ class DefaultMessageRepository @Inject constructor(
         isRefresh: Boolean,
         explicitRequest: Boolean = false
     ) {
-        // This whole method might be deprecated or heavily simplified if Paging3 RemoteMediator handles all refreshes.
-        // For now, let's assume it can still be called for an *explicit* refresh that is *not* from Paging library's refresh().
         val logPagingBehavior = "Paging Sync (RemoteMediator)"
         Log.d(
             TAG,
@@ -231,7 +243,7 @@ class DefaultMessageRepository @Inject constructor(
         syncJob = externalScope.launch(ioDispatcher) {
             Log.i(TAG, "$logPrefix Message sync job started. Refresh: $isRefresh")
             try {
-                val currentMaxResults = 100 // Defined for use in API call and log
+                val currentMaxResults = 100
                 val messagesResult = apiService.getMessagesForFolder(
                     folderId = folderId,
                     maxResults = currentMaxResults
@@ -243,185 +255,247 @@ class DefaultMessageRepository @Inject constructor(
                     Timber.tag(TAG).i(
                         "$logPrefix Successfully fetched ${apiMessages.size} messages from API (maxResults was $currentMaxResults)."
                     )
+                    val messageEntities =
+                        apiMessages.map { msg -> msg.toEntity(account.id, folderId) }
 
-                    val messageEntities = apiMessages.map { it.toEntity(account.id, folderId) }
-                    Timber.tag(TAG)
-                        .d("$logPrefix Mapped ${apiMessages.size} API messages to ${messageEntities.size} entities.")
-
-                    // Using withTransaction for atomicity is good practice with DAOs
                     appDatabase.withTransaction {
-                        Timber.tag(TAG)
-                            .d("$logPrefix Starting DB transaction: clearAndInsertMessagesForFolder.")
-                        messageDao.clearAndInsertMessagesForFolder(
-                            account.id,
-                            folderId,
-                            messageEntities
-                        )
-                        Timber.tag(TAG)
-                            .d("$logPrefix DB transaction complete. Saved ${messageEntities.size} messages to DB.")
+                        if (isRefresh) {
+                            messageDao.deleteMessagesForFolder(account.id, folderId)
+                        }
+                        messageDao.insertOrUpdateMessages(messageEntities)
                     }
-
                     _messageSyncState.value = MessageSyncState.SyncSuccess(account.id, folderId)
-                    Timber.tag(TAG).i("$logPrefix Message sync successful, state updated.")
                 } else {
-                    val exception = messagesResult.exceptionOrNull()
-                    val errorDetails = errorMapper.mapExceptionToErrorDetails(exception)
-                    Timber.tag(TAG)
-                        .e(exception, "$logPrefix Error syncing messages: ${errorDetails.message}")
+                    val error = messagesResult.exceptionOrNull()
+                    val errorDetails = error?.let { errorMapper.mapExceptionToErrorDetails(it) }
+                    val errorMessage = errorDetails?.message ?: error?.message
+                    ?: "Unknown API error during message sync"
+                    Timber.tag(TAG).w("$logPrefix Message sync API call failed: $errorMessage")
                     _messageSyncState.value =
-                        MessageSyncState.SyncError(account.id, folderId, errorDetails.message)
+                        MessageSyncState.SyncError(account.id, folderId, errorMessage)
                 }
             } catch (e: CancellationException) {
-                Timber.tag(TAG).w(e, "$logPrefix Message sync job cancelled.")
-                // Only set to Idle if this job was indeed for the current target and was a sync in progress.
-                // Avoid overriding a state set by a newer operation.
-                if (isActive && currentTargetAccount?.id == account.id && currentTargetFolderId == folderId && _messageSyncState.value is MessageSyncState.Syncing) {
-                    _messageSyncState.value = MessageSyncState.Idle
-                    Timber.tag(TAG)
-                        .d("$logPrefix Sync cancelled, state set to Idle as it was the active sync for current target.")
-                }
+                Timber.tag(TAG).i("$logPrefix Message sync job was cancelled.")
+                _messageSyncState.value = MessageSyncState.Idle
             } catch (e: Exception) {
-                Timber.tag(TAG).e(e, "$logPrefix Exception during message sync process")
-                if (isActive && currentTargetAccount?.id == account.id && currentTargetFolderId == folderId) {
-                    val details = errorMapper.mapExceptionToErrorDetails(e)
-                    _messageSyncState.value =
-                        MessageSyncState.SyncError(account.id, folderId, details.message)
-                    Timber.tag(TAG)
-                        .d("$logPrefix Sync failed with general exception, state set to SyncError.")
-                }
+                Timber.tag(TAG).e(e, "$logPrefix Exception during message sync")
+                val errorDetails = errorMapper.mapExceptionToErrorDetails(e)
+                _messageSyncState.value = MessageSyncState.SyncError(
+                    account.id,
+                    folderId,
+                    errorDetails.message ?: "Exception during message sync"
+                )
             } finally {
-                // Important: only nullify syncJob if this coroutine context is the one stored in syncJob.
-                // This prevents a new job from being cleared by an old, finishing one.
-                if (syncJob == coroutineContext[Job]) {
-                    syncJob = null
-                    Timber.tag(TAG)
-                        .d("$logPrefix syncJob reference cleared. ExplicitRequest: $explicitRequest")
+                if (isActive) {
+                    Log.d(TAG, "$logPrefix Sync job finished.")
                 } else {
-                    Timber.tag(TAG)
-                        .d("$logPrefix This coroutine is not the current syncJob. Won't nullify. ExplicitRequest: $explicitRequest")
+                    Log.d(TAG, "$logPrefix Sync job finished (was cancelled or completed).")
                 }
-                Timber.tag(TAG)
-                    .i("$logPrefix Message sync job processing finished. isRefresh: $isRefresh, explicitRequest: $explicitRequest")
             }
         }
     }
 
-    override suspend fun refreshMessages(activity: Activity?) {
-        val account = currentTargetAccount
-        val folderId = currentTargetFolderId
-        if (account == null || folderId == null) {
-            Log.w(TAG, "refreshMessages: No target account or folderId set. Skipping.")
-            return
-        }
-        Log.d(TAG, "refreshMessages called for folderId: $folderId, Account: ${account.username}")
-        if (_messageSyncState.value is MessageSyncState.Syncing && (_messageSyncState.value as MessageSyncState.Syncing).folderId == folderId) {
-            Log.d(TAG, "refreshMessages: Already syncing this folder. Skipping duplicate refresh.")
-            return
-        }
-        syncMessagesForFolderInternal(account, folderId, isRefresh = true, explicitRequest = true)
-    }
-
     private fun cancelAndClearSyncJob(reason: String) {
         if (syncJob?.isActive == true) {
-            Timber.tag(TAG)
-                .d("cancelAndClearSyncJob: Attempting to cancel active syncJob. Reason: $reason")
-            syncJob?.cancel(CancellationException("Sync job cancelled: $reason"))
-            syncJob = null
-            Timber.tag(TAG)
-                .i("cancelAndClearSyncJob: Active syncJob cancelled and cleared. Reason: $reason")
-        } else {
-            // Timber.tag(TAG).d("cancelAndClearSyncJob: No active syncJob to cancel. Reason: $reason")
-            syncJob = null // Ensure it's null if called when no job active
+            Timber.tag(TAG).d("Cancelling active sync job: $reason")
+            syncJob?.cancel(CancellationException(reason))
         }
+        syncJob = null
     }
 
-    override suspend fun getMessageDetails(messageId: String, accountId: String): Flow<Message?> {
-        Log.d(TAG, "getMessageDetails (API direct): $messageId, accountId: $accountId")
-        val account = accountRepository.getAccountById(accountId).firstOrNull()
-        if (account == null) {
-            Log.e(TAG, "getMessageDetails: Account not found for id $accountId")
-            return flowOf(null)
-        }
-        val providerType = account.providerType.uppercase()
-        val apiService = mailApiServices[providerType]
-        if (apiService == null) {
-            Log.e(
-                TAG,
-                "getMessageDetails: ApiService not found for provider ${account.providerType}"
+    override suspend fun getMessageDetails(
+        messageId: String,
+        accountId: String
+    ): Flow<Message?> {
+        Timber.tag(TAG).d("getMessageDetails: accountId=$accountId, messageId=$messageId")
+        return getMessageWithBody(accountId, messageId)
+    }
+
+    private fun getMessageWithBody(accountId: String, messageId: String): Flow<Message?> =
+        channelFlow {
+            Log.d(TAG, "getMessageWithBody called for account $accountId, message $messageId")
+
+            var messageEntity = messageDao.getMessageByIdNonFlow(messageId)
+            var bodyEntity = messageBodyDao.getMessageBodyNonFlow(messageId)
+
+            val initialDomainMessage = messageEntity?.toDomainModel()?.copy(
+                body = bodyEntity?.content,
+                bodyContentType = bodyEntity?.contentType
             )
-            return flowOf(null)
-        }
-        return apiService.getMessageDetails(messageId)
+            send(initialDomainMessage)
+
+            if (messageEntity == null) {
+                Log.w(
+                    TAG,
+                    "MessageEntity not found in DB for messageId: $messageId. Cannot proceed to fetch body."
+                )
+                return@channelFlow
+            }
+
+            if (initialDomainMessage?.body.isNullOrEmpty()) {
+                Log.d(
+                    TAG,
+                    "Message body for $messageId is null/empty or initial message was null. Fetching from network."
+                )
+                val account = accountRepository.getAccountByIdNonFlow(accountId)
+                if (account == null) {
+                    Log.e(TAG, "Account not found for ID: $accountId. Cannot fetch message body.")
+                    return@channelFlow
+                }
+
+                val providerType = account.providerType.uppercase()
+                val apiService = mailApiServices[providerType]
+                val errorMapper = errorMappers[providerType]
+
+                if (apiService == null || errorMapper == null) {
+                    Log.e(TAG, "No API service or error mapper for provider: $providerType")
+                    return@channelFlow
+                }
+
+                try {
+                    val result = apiService.getMessageContent(messageId)
+                    if (result.isSuccess) {
+                        val fetchedMessage = result.getOrThrow()
+                        Log.d(
+                            TAG,
+                            "Successfully fetched message content for $messageId. Body: ${fetchedMessage.body != null}, ContentType: ${fetchedMessage.bodyContentType}"
+                        )
+
+                        if (fetchedMessage.body != null && fetchedMessage.bodyContentType != null) {
+                            val newBodyEntity = MessageBodyEntity(
+                                messageId = messageId,
+                                content = fetchedMessage.body!!,
+                                contentType = fetchedMessage.bodyContentType!!,
+                                lastFetchedTimestamp = System.currentTimeMillis()
+                            )
+                            messageBodyDao.insertOrUpdateMessageBody(newBodyEntity)
+                            Log.d(TAG, "Saved new message body to DB for $messageId")
+
+                            val freshMessageEntity = messageDao.getMessageByIdNonFlow(messageId)
+                            if (freshMessageEntity != null) {
+                                val updatedMessageEntity = freshMessageEntity.copy(
+                                    snippet = fetchedMessage.bodyPreview
+                                        ?: freshMessageEntity.snippet
+                                )
+                                messageDao.insertOrUpdateMessages(listOf(updatedMessageEntity))
+                                Log.d(
+                                    TAG,
+                                    "Updated MessageEntity for $messageId with new snippet if available."
+                                )
+
+                                val updatedDomainMessage =
+                                    updatedMessageEntity.toDomainModel().copy(
+                                        body = newBodyEntity.content,
+                                        bodyContentType = newBodyEntity.contentType
+                                    )
+                                send(updatedDomainMessage)
+                            } else {
+                                Log.w(
+                                    TAG,
+                                    "Original MessageEntity for $messageId not found after body fetch. Sending API data directly."
+                                )
+                                send(fetchedMessage)
+                            }
+                        } else {
+                            Log.w(
+                                TAG,
+                                "Fetched message content for $messageId, but body or contentType is null. Will use existing."
+                            )
+                            send(initialDomainMessage)
+                        }
+                    } else {
+                        val exception = result.exceptionOrNull()
+                        val errorMessage = errorMapper.mapExceptionToErrorDetails(
+                            exception ?: Throwable("Unknown error fetching message content")
+                        ).message
+                        Log.e(
+                            TAG,
+                            "Error fetching message content for $messageId: $errorMessage",
+                            exception
+                        )
+                        send(initialDomainMessage)
+                    }
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    Log.e(
+                        TAG,
+                        "Exception during message content fetch for $messageId: ${e.message}",
+                        e
+                    )
+                    errorMapper.mapExceptionToErrorDetails(e).message
+                    send(initialDomainMessage)
+                }
+            } else {
+                Log.d(
+                    TAG,
+                    "Message body already present in DB for $messageId or initial message was null. No network fetch needed."
+                )
+            }
     }
 
     override suspend fun markMessageRead(
         account: Account,
         messageId: String,
         isRead: Boolean
-    ): Result<Unit> {
-        Log.d(
-            TAG,
-            "markMessageRead for id: $messageId, account: ${account.username}, isRead: $isRead. DB first."
-        )
+    ): Result<Unit> = withContext(ioDispatcher) {
+        Timber.tag(TAG)
+            .d("markMessageRead: msgId=$messageId, isRead=$isRead, account=${account.id}")
         try {
-            val messageEntity = messageDao.getMessageById(messageId).firstOrNull()
-            if (messageEntity != null) {
-                // Update DB first
-                messageDao.insertOrUpdateMessages(
-                    listOf(
-                        messageEntity.copy(
-                            isRead = isRead,
-                            needsSync = true
-                        )
-                    )
-                )
-                Log.d(TAG, "Updated read status in DB for $messageId to $isRead, needsSync=true")
-
-                // TODO: Enqueue WorkManager task to sync this change to the backend.
-                // For now, still attempt direct API call after DB update.
-
-                val apiService = mailApiServices[account.providerType.uppercase()]
-                    ?: return Result.failure(NotImplementedError("MailApiService not found for ${account.providerType} to sync markMessageRead"))
-
-                val apiResult = apiService.markMessageRead(messageId, isRead)
-                if (apiResult.isSuccess) {
-                    // If API call is successful, update needsSync to false
-                    messageDao.getMessageById(messageId).firstOrNull()?.let { updatedEntity ->
-                        messageDao.insertOrUpdateMessages(listOf(updatedEntity.copy(needsSync = false)))
-                        Log.d(
-                            TAG,
-                            "markMessageRead: API sync successful for $messageId, needsSync set to false."
-                        )
-                    }
-                    return Result.success(Unit)
-                } else {
-                    Log.w(
-                        TAG,
-                        "markMessageRead: API sync failed for $messageId. DB change will be synced later by worker. Error: ${apiResult.exceptionOrNull()?.message}"
-                    )
-                    // DB already updated with needsSync = true, so worker should pick it up.
-                    return Result.failure(
-                        apiResult.exceptionOrNull()
-                            ?: Exception("API error during markMessageRead sync")
-                    )
-                }
-            } else {
-                Log.w(
-                    TAG,
-                    "markMessageRead: Message $messageId not found in DB to update read status."
-                )
-                return Result.failure(NoSuchElementException("Message $messageId not found in DB"))
+            appDatabase.withTransaction {
+                messageDao.updateReadState(messageId, isRead, needsSync = true)
             }
-        } catch (e: Exception) {
             Timber.tag(TAG)
-                .e(e, "markMessageRead: Failed to update message $messageId read status in DB.")
-            return Result.failure(e)
+                .i("Optimistically marked message $messageId as isRead=$isRead, needsSync=true")
+            enqueueSyncMessageStateWorker(
+                accountId = account.id,
+                messageId = messageId,
+                operationType = SyncMessageStateWorker.OP_MARK_READ,
+                isRead = isRead
+            )
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Timber.tag(TAG).e(e, "Error in markMessageRead for $messageId")
+            val errorDetails =
+                errorMappers[account.providerType.uppercase()]?.mapExceptionToErrorDetails(e)
+            Result.failure(Exception(errorDetails?.message ?: e.message, e))
         }
     }
 
-    override suspend fun deleteMessage(account: Account, messageId: String): Result<Unit> {
-        Log.d(TAG, "deleteMessage for id: $messageId, account: ${account.username}")
-        return Result.failure(NotImplementedError("deleteMessage not yet implemented with DB sync"))
+    override suspend fun starMessage(
+        account: Account,
+        messageId: String,
+        isStarred: Boolean
+    ): Result<Unit> = withContext(ioDispatcher) {
+        Timber.tag(TAG)
+            .d("starMessage: msgId=$messageId, isStarred=$isStarred, account=${account.id}")
+        try {
+            appDatabase.withTransaction {
+                messageDao.updateStarredState(messageId, isStarred, needsSync = true)
+            }
+            Timber.tag(TAG)
+                .i("Optimistically starred message $messageId as isStarred=$isStarred, needsSync=true")
+            enqueueSyncMessageStateWorker(
+                accountId = account.id,
+                messageId = messageId,
+                operationType = SyncMessageStateWorker.OP_STAR_MESSAGE,
+                isStarred = isStarred
+            )
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Timber.tag(TAG).e(e, "Error in starMessage for $messageId")
+            val errorDetails =
+                errorMappers[account.providerType.uppercase()]?.mapExceptionToErrorDetails(e)
+            Result.failure(Exception(errorDetails?.message ?: e.message, e))
+        }
+    }
+
+    override suspend fun deleteMessage(
+        account: Account,
+        messageId: String
+    ): Result<Unit> {
+        Timber.tag(TAG)
+            .w("deleteMessage called for msg $messageId in account ${account.id}. NOT IMPLEMENTED.")
+        return Result.failure(NotImplementedError("deleteMessage not implemented"))
     }
 
     override suspend fun moveMessage(
@@ -429,8 +503,9 @@ class DefaultMessageRepository @Inject constructor(
         messageId: String,
         newFolderId: String
     ): Result<Unit> {
-        Log.d(TAG, "moveMessage for id: $messageId to $newFolderId")
-        return Result.failure(NotImplementedError("moveMessage not yet implemented with DB sync"))
+        Timber.tag(TAG)
+            .w("moveMessage called for msg $messageId to folder $newFolderId in account ${account.id}. NOT IMPLEMENTED.")
+        return Result.failure(NotImplementedError("moveMessage not implemented"))
     }
 
     override suspend fun sendMessage(draft: MessageDraft, account: Account): Result<String> {
@@ -442,27 +517,8 @@ class DefaultMessageRepository @Inject constructor(
         messageId: String
     ): Flow<List<Attachment>> {
         Log.d(TAG, "getMessageAttachments called for accountId: $accountId, messageId: $messageId")
-        val account = accountRepository.getAccountById(accountId).firstOrNull()
-
-        if (account == null) {
-            Log.e(TAG, "getMessageAttachments: Account not found for id $accountId")
-            return flowOf(emptyList())
-        }
-        val apiService = mailApiServices[account.providerType.uppercase()]
-        return if (apiService != null) {
-            // apiService.getMessageAttachments(messageId) // Method doesn't exist in MailApiService yet
-            Log.w(
-                TAG,
-                "getMessageAttachments: MailApiService.getMessageAttachments not yet implemented."
-            )
-            flowOf(emptyList())
-        } else {
-            Log.e(
-                TAG,
-                "getMessageAttachments: ApiService not found for provider ${account.providerType}"
-            )
-            flowOf(emptyList())
-        }
+        Log.w(TAG, "getMessageAttachments: Not fully implemented. Returning empty.")
+        return flowOf(emptyList())
     }
 
     override suspend fun downloadAttachment(
@@ -470,22 +526,8 @@ class DefaultMessageRepository @Inject constructor(
         messageId: String,
         attachmentId: String
     ): Result<ByteArray> {
-        Log.d(
-            TAG,
-            "downloadAttachment called for accountId: $accountId, messageId: $messageId, attachmentId: $attachmentId"
-        )
-        val account = accountRepository.getAccountById(accountId).firstOrNull()
-        if (account == null) {
-            Log.e(TAG, "downloadAttachment: Account $accountId not found.")
-            return Result.failure(NotImplementedError("Account not found for attachment download."))
-        }
-        mailApiServices[account.providerType.uppercase()]
-        // apiService?.downloadAttachment(messageId, attachmentId) // Method doesn't exist in MailApiService yet
-        Log.w(TAG, "downloadAttachment: MailApiService.downloadAttachment not yet implemented.")
-        return Result.failure(NotImplementedError("downloadAttachment not yet implemented in MailApiService"))
+        TODO("Not yet implemented. Fetch attachment binary data.")
     }
-
-    // --- Stubs for methods not yet refactored for full DB interaction in Phase 2a ---
 
     override suspend fun createDraftMessage(
         accountId: String,
@@ -495,7 +537,6 @@ class DefaultMessageRepository @Inject constructor(
             TAG,
             "createDraftMessage called for accountId: $accountId. Not implemented with DB sync."
         )
-        // This would typically involve saving a draft to a local Drafts table or directly to the server.
         return Result.failure(NotImplementedError("createDraftMessage not yet implemented with DB sync"))
     }
 
@@ -518,10 +559,36 @@ class DefaultMessageRepository @Inject constructor(
     ): Flow<List<Message>> {
         Log.d(
             TAG,
-            "searchMessages called for accountId: $accountId, query: '$query'. Not implemented with DB FTS yet."
+            "searchMessages called for account: $accountId, query: '$query', folder: $folderId. Not implemented for full DB search."
         )
-        // Phase 3 plans for MessageFtsEntity. For now, this would be a network-only search or empty.
-        // For local FTS, this would query the MessageFtsEntity in Room.
-        return flowOf(emptyList()) // Placeholder
+        return flowOf(emptyList())
+    }
+
+    private fun enqueueSyncMessageStateWorker(
+        accountId: String,
+        messageId: String,
+        operationType: String,
+        isRead: Boolean? = null,
+        isStarred: Boolean? = null
+    ) {
+        Timber.tag(TAG)
+            .d("Enqueueing SyncMessageStateWorker: Acc=$accountId, Msg=$messageId, Op=$operationType, Read=$isRead, Starred=$isStarred")
+
+        val inputDataBuilder = Data.Builder()
+            .putString(SyncMessageStateWorker.KEY_ACCOUNT_ID, accountId)
+            .putString(SyncMessageStateWorker.KEY_MESSAGE_ID, messageId)
+            .putString(SyncMessageStateWorker.KEY_OPERATION_TYPE, operationType)
+
+        isRead?.let { inputDataBuilder.putBoolean(SyncMessageStateWorker.KEY_IS_READ, it) }
+        isStarred?.let { inputDataBuilder.putBoolean(SyncMessageStateWorker.KEY_IS_STARRED, it) }
+
+        val workRequest = OneTimeWorkRequestBuilder<SyncMessageStateWorker>()
+            .setInputData(inputDataBuilder.build())
+            .addTag("SyncMessageState_${accountId}_${messageId}")
+            .build()
+
+        workManager.enqueue(workRequest)
+        Timber.tag(TAG)
+            .i("SyncMessageStateWorker enqueued for message $messageId, operation $operationType.")
     }
 }

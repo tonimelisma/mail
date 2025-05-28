@@ -243,6 +243,50 @@ class MicrosoftAuthManager @Inject constructor(
 
     fun getInitializationError(): MsalException? = initializationException
 
+    /**
+     * Retrieves a live IAccount object from MSAL using its homeAccountId.
+     * This is a suspend function that wraps the MSAL asynchronous call.
+     *
+     * @param homeAccountId The home account ID of the MSAL account to retrieve.
+     * @return The IAccount if found, or null if not found or an error occurs.
+     */
+    suspend fun getMSALAccountByHomeIdAsync(homeAccountId: String): IAccount? {
+        val currentApp = mMultipleAccountApp ?: run {
+            Timber.tag(TAG).w("getMSALAccountByHomeIdAsync: MSAL client not initialized.")
+            return null
+        }
+        if (!_isMsalInitialized.value) {
+            Timber.tag(TAG)
+                .w("getMSALAccountByHomeIdAsync: MSAL client not ready (isMsalInitialized is false).")
+            return null
+        }
+
+        return try {
+            val deferred = CompletableDeferred<IAccount?>()
+            currentApp.getAccount(
+                homeAccountId,
+                object : IMultipleAccountPublicClientApplication.GetAccountCallback {
+                    override fun onTaskCompleted(account: IAccount?) {
+                        deferred.complete(account)
+                    }
+
+                    override fun onError(exception: MsalException) {
+                        Timber.tag(TAG).e(
+                            exception,
+                            "Error getting account by homeAccountId: $homeAccountId from MSAL SDK"
+                        )
+                        deferred.complete(null) // Complete with null on error
+                    }
+                }
+            )
+            deferred.await()
+        } catch (e: Exception) {
+            Timber.tag(TAG)
+                .e(e, "Exception in getMSALAccountByHomeIdAsync for homeAccountId: $homeAccountId")
+            null
+        }
+    }
+
     // New method to load accounts known from our persistence into MSAL
     private suspend fun loadPersistedAccounts() {
         val currentApp = mMultipleAccountApp

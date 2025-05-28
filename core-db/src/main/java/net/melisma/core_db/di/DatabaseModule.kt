@@ -9,6 +9,7 @@ import dagger.hilt.components.SingletonComponent
 import net.melisma.core_db.AppDatabase
 import net.melisma.core_db.dao.AccountDao
 import net.melisma.core_db.dao.FolderDao
+import net.melisma.core_db.dao.MessageBodyDao
 import net.melisma.core_db.dao.MessageDao
 import javax.inject.Singleton
 
@@ -38,5 +39,11 @@ object DatabaseModule {
     @Singleton
     fun provideMessageDao(appDatabase: AppDatabase): MessageDao {
         return appDatabase.messageDao()
+    }
+
+    @Provides
+    @Singleton
+    fun provideMessageBodyDao(appDatabase: AppDatabase): MessageBodyDao {
+        return appDatabase.messageBodyDao()
     }
 } 

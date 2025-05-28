@@ -310,30 +310,36 @@ class GraphApiHelper @Inject constructor(
         val from = graphMessage.from
         val effectiveSender = from ?: sender
 
-        // Reformatting to ensure consistent ISO 8601 format, primarily for receivedDateTime
-        // sentDateTime can be mapped directly if already in a suitable string format or also reformatted.
         val formattedReceivedDateTime = graphMessage.receivedDateTime?.let { parseOutlookDate(it) }
             ?.let { formatDateToIsoString(it) } ?: graphMessage.receivedDateTime
         val formattedSentDateTime = graphMessage.sentDateTime?.let { parseOutlookDate(it) }
             ?.let { formatDateToIsoString(it) } ?: graphMessage.sentDateTime
 
+        val bodyContent = graphMessage.body?.content
+        // Determine content type, default to text if not specified or if body is null
+        val bodyContentType = (graphMessage.body as? GraphItemBody)?.contentType?.let {
+            if (it.equals("html", ignoreCase = true)) "text/html" else "text/plain"
+        } ?: "text/plain"
+
         Log.d(
             TAG,
-            "Mapping GraphMessage: ID='${graphMessage.id}', Subject='${graphMessage.subject}', Preview='${graphMessage.bodyPreview}', HasFullBodyObject: ${graphMessage.body != null}, FullBodyContentType: ${graphMessage.body?.contentType}, FullBodyContentIsEmpty: ${graphMessage.body?.content.isNullOrEmpty()}"
+            "Mapping GraphMessage: ID='${graphMessage.id}', Subject='${graphMessage.subject}', Preview='${graphMessage.bodyPreview}', HasFullBodyObject: ${graphMessage.body != null}, BodyContentType (from API): ${graphMessage.body?.contentType}, MappedContentType: $bodyContentType, BodyContentIsEmpty: ${bodyContent.isNullOrEmpty()}"
         )
 
         return Message(
             id = graphMessage.id,
             threadId = graphMessage.conversationId,
             receivedDateTime = formattedReceivedDateTime
-                ?: "", // Ensure non-null for Message.receivedDateTime
-            sentDateTime = formattedSentDateTime, // Keep as nullable for Message.sentDateTime
+                ?: "",
+            sentDateTime = formattedSentDateTime, 
             subject = graphMessage.subject,
             senderName = effectiveSender?.emailAddress?.name,
             senderAddress = effectiveSender?.emailAddress?.address,
-            bodyPreview = graphMessage.bodyPreview,
+            // Only use bodyPreview if body.content is null or empty, to avoid redundancy
+            bodyPreview = if (bodyContent.isNullOrEmpty()) graphMessage.bodyPreview else null,
             isRead = graphMessage.isRead,
-            body = graphMessage.body?.content
+            body = bodyContent, // Use the extracted body content
+            bodyContentType = bodyContentType // Use the determined content type
         )
     }
 
@@ -382,11 +388,11 @@ class GraphApiHelper @Inject constructor(
             // Simplest possible Ktor PATCH with setBody
             val response: HttpResponse =
                 httpClient.patch("$MS_GRAPH_ROOT_ENDPOINT/me/messages/$messageId") {
-                setBody(requestBody)
+                    setBody(requestBody)
                     // NO explicit contentType(), headers{}, or accept() here.
                     // Relying entirely on ContentNegotiation plugin for Content-Type
                     // and defaultRequest for Accept if set at client level.
-            }
+                }
 
             if (response.status.isSuccess()) {
                 Log.d(TAG, "Successfully marked message $messageId as isRead=$isRead")
@@ -398,6 +404,42 @@ class GraphApiHelper @Inject constructor(
             }
         } catch (e: Exception) {
             Log.e(TAG, "Exception marking message $messageId", e)
+            Result.failure(errorMapper.mapExceptionToError(e))
+        }
+    }
+
+    override suspend fun starMessage(messageId: String, isStarred: Boolean): Result<Unit> {
+        Log.d(TAG, "starMessage: messageId=$messageId, isStarred=$isStarred")
+        return try {
+            val requestBody = buildJsonObject {
+                put("flag", buildJsonObject {
+                    put("flagStatus", if (isStarred) "flagged" else "notFlagged")
+                })
+            }
+            // The ContentNegotiation plugin (configured with json) should automatically set
+            // the Content-Type to application/json when setBody is called with a JsonObject.
+            val response: HttpResponse =
+                httpClient.patch("$MS_GRAPH_ROOT_ENDPOINT/me/messages/$messageId") {
+                    setBody(requestBody) // Rely on ContentNegotiation
+                    accept(ContentType.Application.Json) // Still want to accept JSON in response
+                }
+
+            if (response.status.isSuccess()) {
+                Log.i(
+                    TAG,
+                    "Successfully starred/unstarred message $messageId as isStarred=$isStarred"
+                )
+                Result.success(Unit)
+            } else {
+                val errorBody = response.bodyAsText()
+                Log.e(
+                    TAG,
+                    "Error starring/unstarring message $messageId: ${response.status} - $errorBody"
+                )
+                Result.failure(errorMapper.mapHttpError(response.status.value, errorBody))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception in starMessage for message $messageId", e)
             Result.failure(errorMapper.mapExceptionToError(e))
         }
     }
@@ -524,8 +566,8 @@ class GraphApiHelper @Inject constructor(
                     url {
                         parameters.append(
                             "\$select",
-                            "id,conversationId,receivedDateTime,sentDateTime,subject,bodyPreview,sender,from,isRead,body"
-                        ) // Ensured 'body' is selected
+                            "id,conversationId,receivedDateTime,sentDateTime,subject,bodyPreview,sender,from,isRead,body" // Ensured 'body' is selected
+                        )
                     }
                     // accept(ContentType.Application.Json) // Assuming defaultRequest or ContentNegotiation handles it
                 }
@@ -535,7 +577,6 @@ class GraphApiHelper @Inject constructor(
                     response.body<GraphMessage>() // GraphMessage now expects the 'body' object
                 val mappedMessage =
                     mapGraphMessageToMessage(graphMessageFromApi) // mapGraphMessageToMessage now uses graphMessage.body.content
-                // TODO: Enhance mapGraphMessageToMessage and core Message model if full body needs to be stored and propagated. <- This TODO can now be considered addressed for this phase.
                 emit(mappedMessage)
             } else {
                 val errorBody = response.bodyAsText()
@@ -543,11 +584,51 @@ class GraphApiHelper @Inject constructor(
                     TAG,
                     "Error fetching message details for $messageId: ${response.status} - $errorBody"
                 )
-                emit(null)
+                emit(null) 
             }
         } catch (e: Exception) {
             Log.e(TAG, "Exception fetching message details for $messageId", e)
             emit(null) 
+        }
+    }
+
+    override suspend fun getMessageContent(messageId: String): Result<Message> {
+        Log.d(TAG, "getMessageContent: Fetching full content for messageId $messageId")
+        return try {
+            val response: HttpResponse =
+                httpClient.get("$MS_GRAPH_ROOT_ENDPOINT/me/messages/$messageId") {
+                    url {
+                        // Select all fields typically needed for a Message, PLUS the body
+                        parameters.append(
+                            "\$select",
+                            "id,conversationId,receivedDateTime,sentDateTime,subject,bodyPreview,sender,from,isRead,body"
+                        )
+                    }
+                    accept(ContentType.Application.Json)
+                }
+
+            if (!response.status.isSuccess()) {
+                val errorBody = response.bodyAsText()
+                Log.e(
+                    TAG,
+                    "Error fetching message content for $messageId: ${response.status} - $errorBody"
+                )
+                return Result.failure(errorMapper.mapHttpError(response.status.value, errorBody))
+            }
+
+            val graphMessage = response.body<GraphMessage>()
+            val message =
+                mapGraphMessageToMessage(graphMessage) // mapGraphMessageToMessage should now populate body and bodyContentType
+
+            Log.i(
+                TAG,
+                "Successfully fetched and mapped content for message $messageId. Content type: ${message.bodyContentType}"
+            )
+            Result.success(message)
+
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception in getMessageContent for $messageId", e)
+            Result.failure(errorMapper.mapExceptionToError(e))
         }
     }
 

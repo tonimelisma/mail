@@ -38,49 +38,53 @@ class MicrosoftTokenPersistenceService @Inject constructor(
         msalAccount: IAccount,
         displayNameFromClaims: String?
     ): PersistenceResult<Unit> = withContext(Dispatchers.IO) {
-        val accountManagerName = msalAccount.id ?: run {
-            Timber.tag(TAG).e("Cannot save account: MSAL Account ID (IAccount.getId()) is null.")
+        // Use IAccount.id as the primary, stable identifier for Android AccountManager name
+        // and for the persisted MSAL-specific ID.
+        val accountManagerName: String = msalAccount.id ?: run {
+            Timber.tag(TAG).e("Cannot save account: MSAL Account ID (msalAccount.id) is null.")
             return@withContext PersistenceResult.Failure<PersistenceErrorType>(
                 PersistenceErrorType.INVALID_ARGUMENT,
-                "MSAL Account ID (IAccount.getId()) is null."
+                "MSAL Account ID (msalAccount.id) is null."
             )
         }
-        val msalAccountId = msalAccount.id!! // Already checked for null
+        val persistedMsalId: String = accountManagerName // Both are now msalAccount.id
+
+        // homeAccountIdString is no longer the primary key for AccountManager.
+        // It can be stored for informational purposes or future migration if available and needed.
+        // Removed for now due to resolution issues with msalAccount.homeAccountId on IAccount
+        // val homeAccountIdString: String? = msalAccount.homeAccountId?.identifier
+
         val username = msalAccount.username
         val tenantId = msalAccount.tenantId
         val displayName = displayNameFromClaims ?: username // Fallback to username
 
         Timber.tag(TAG)
             .d(
-                "Attempting to save account info (identifiers only) for MSAL Account ID: ${
-                    msalAccountId.take(
+                "Attempting to save account info. AccountManager Name (IAccount.id): ${
+                    accountManagerName.take(
                         10
                     )
-                }..., Username: $username"
+                }..., Persisted ID (IAccount.id): ${persistedMsalId.take(10)}..., Username: $username"
             )
 
         try {
+            // No need for oldAccountManagerName logic if we consistently use msalAccount.id
+            // If a migration from a previous scheme (e.g. homeAccountId based) was ever needed,
+            // more complex logic would be required here. For now, assume fresh saves or overwrites
+            // of accounts named by IAccount.id.
+
             val androidAccount = AndroidAccount(accountManagerName, ACCOUNT_TYPE_MICROSOFT)
 
             val userData = bundleOf()
-            userData.putString(KEY_ACCOUNT_ID_MSAL, msalAccountId)
+            userData.putString(KEY_ACCOUNT_ID_MSAL, persistedMsalId) // Store IAccount.id
             userData.putString(KEY_USERNAME, username)
             userData.putString(KEY_TENANT_ID, tenantId)
             userData.putString(KEY_DISPLAY_NAME, displayName)
-
-            // Remove existing account to prevent issues with addAccountExplicitly if account already exists with different signature
-            val removalResult = removeAccountFromManagerInternal(
-                accountManagerName,
-                clearOnlyUserData = false
-            )
-            if (removalResult is PersistenceResult.Failure<*>) {
-                @Suppress("UNCHECKED_CAST")
-                val failure = removalResult as PersistenceResult.Failure<PersistenceErrorType>
-                Timber.tag(TAG)
-                    .w("Failed to remove pre-existing account for $accountManagerName during save: ${failure.errorType}, but proceeding with add.")
-                // Don't return failure here, allow addAccountExplicitly to proceed.
-                // If addAccountExplicitly also fails, that will be the reported error.
-            }
+            // Optionally store homeAccountIdString if it's available and useful for later
+            // Removed for now:
+            // if (homeAccountIdString != null) {
+            //     userData.putString("msHomeAccountId", homeAccountIdString) // Example new key
+            // }
 
             if (accountManager.addAccountExplicitly(androidAccount, null, userData)) {
                 Timber.tag(TAG)

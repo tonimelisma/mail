@@ -40,6 +40,8 @@ timber = "5.0.1" # Added Timber version
 navigationCompose = "2.9.0" # Added Navigation Compose version
 hiltNavigationCompose = "1.2.0" # Added Hilt Navigation Compose version
 paging = "3.3.6"
+workmanager = "2.9.0" # Added WorkManager version
+androidxHilt = "1.2.0"  # Common version for androidx.hilt extensions like hilt-work, hilt-navigation-compose
 
 [libraries]
 kotlin-stdlib = { group = "org.jetbrains.kotlin", name = "kotlin-stdlib", version.ref = "kotlin" }
@@ -119,6 +121,13 @@ androidx-room-paging = { group = "androidx.room", name = "room-paging", version.
 androidx-paging-runtime = { group = "androidx.paging", name = "paging-runtime-ktx", version.ref = "paging" }
 androidx-paging-common = { group = "androidx.paging", name = "paging-common-ktx", version.ref = "paging" } # Added for Room PagingSource support
 androidx-paging-compose = { group = "androidx.paging", name = "paging-compose", version.ref = "paging" }
+
+# WorkManager
+androidx-work-runtime-ktx = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "workmanager" }
+
+# AndroidX Hilt extensions (already have hilt-navigation-compose, adding hilt-work)
+androidx-hilt-work = { group = "androidx.hilt", name = "hilt-work", version.ref = "androidxHilt" }
+# Note: androidx-hilt-compiler is usually not needed separately if com.google.dagger:hilt-compiler is already used with KSP.
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

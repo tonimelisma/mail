@@ -22,6 +22,7 @@ import java.time.OffsetDateTime
  * @property hasAttachments Whether the message has attachments.
  * @property timestamp The received date and time as a Unix timestamp (milliseconds UTC).
  * @property body Full body of the message, typically fetched on demand.
+ * @property bodyContentType The content type of the message body, e.g., "text/plain" or "text/html".
  */
 data class Message(
     val id: String,
@@ -34,6 +35,7 @@ data class Message(
     val bodyPreview: String?,
     val isRead: Boolean,
     val body: String? = null, // Full body, typically loaded on demand
+    val bodyContentType: String? = null, // Added: e.g., "text/plain" or "text/html"
 
     // Added for alignment with MessageEntity and richer domain model
     val recipientNames: List<String>? = null,
@@ -59,6 +61,7 @@ fun Message.Companion.fromApi(
     bodyPreview: String?,
     isRead: Boolean,
     body: String? = null,
+    bodyContentType: String? = null, // Added
     recipientNames: List<String>? = null,
     recipientAddresses: List<String>? = null,
     isStarred: Boolean = false,
@@ -80,6 +83,7 @@ fun Message.Companion.fromApi(
         bodyPreview = bodyPreview,
         isRead = isRead,
         body = body,
+        bodyContentType = bodyContentType, // Added
         recipientNames = recipientNames,
         recipientAddresses = recipientAddresses,
         isStarred = isStarred,

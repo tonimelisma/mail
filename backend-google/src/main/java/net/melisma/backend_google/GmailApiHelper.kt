@@ -370,10 +370,80 @@ class GmailApiHelper @Inject constructor(
         return Pair(if (name.isNotBlank()) name else null, if (email.isNotBlank()) email else null)
     }
 
-    private fun mapGmailMessageToMessage(message: GmailMessage): Message? {
-        Log.v(TAG, "mapGmailMessageToMessage for Gmail Message ID: ${message.id}")
+    private fun decodeBase64(data: String): String? {
+        return try {
+            String(Base64.decode(data, Base64.URL_SAFE))
+        } catch (e: IllegalArgumentException) {
+            Log.e(TAG, "Base64 decoding failed for body part", e)
+            null
+        }
+    }
+
+    // New helper to find best body part (content and type) from a list of MessageParts
+    private fun findBestBodyPart(partsToSearch: List<MessagePart>): Pair<String?, String?> {
+        var htmlBody: String? = null
+        var textBody: String? = null
+        var htmlContentType: String? = null
+        var textContentType: String? = null
+
+        fun searchPartsRecursive(currentParts: List<MessagePart>?) {
+            currentParts?.forEach { part ->
+                if (part.mimeType?.startsWith(
+                        "text/html",
+                        ignoreCase = true
+                    ) == true && part.body?.data != null
+                ) {
+                    if (htmlBody == null) { // Take the first HTML part found
+                        htmlBody = part.body.data?.let { decodeBase64(it) }
+                        htmlContentType = "text/html"
+                    }
+                } else if (part.mimeType?.startsWith(
+                        "text/plain",
+                        ignoreCase = true
+                    ) == true && part.body?.data != null
+                ) {
+                    if (textBody == null) { // Take the first text part found
+                        textBody = part.body.data?.let { decodeBase64(it) }
+                        textContentType = "text/plain"
+                    }
+                }
+
+                // If this part is multipart and we haven't found preferred types yet, recurse
+                if (part.mimeType?.startsWith(
+                        "multipart/",
+                        ignoreCase = true
+                    ) == true && !part.parts.isNullOrEmpty()
+                ) {
+                    if (htmlBody == null || textBody == null) { // Only recurse if we still need one of the types
+                        searchPartsRecursive(part.parts)
+                    }
+                }
+                // Stop early if both found
+                if (htmlBody != null && textBody != null) return@forEach
+            }
+        }
+
+        searchPartsRecursive(partsToSearch)
+
+        return if (htmlBody != null) {
+            Pair(htmlBody, htmlContentType)
+        } else if (textBody != null) {
+            Pair(textBody, textContentType)
+        } else {
+            Pair(null, null) // No suitable text/html or text/plain part found
+        }
+    }
+
+    private fun mapGmailMessageToMessage(
+        gmailMessage: GmailMessage,
+        isForBodyContent: Boolean = false
+    ): Message? {
+        Log.v(
+            TAG,
+            "mapGmailMessageToMessage for Gmail Message ID: ${gmailMessage.id}, isForBodyContent: $isForBodyContent"
+        )
         try {
-            val headers = message.payload?.headers ?: emptyList()
+            val headers = gmailMessage.payload?.headers ?: emptyList()
             val subject = headers.findHeaderValue("Subject")
             val fromHeader = headers.findHeaderValue("From") ?: "Unknown Sender"
             val senderName = extractSenderName(fromHeader)
@@ -382,51 +452,74 @@ class GmailApiHelper @Inject constructor(
             val dateHeader = headers.findHeaderValue("Date")
             val parsedSentDate = dateHeader?.let { parseEmailDate(it) }
 
-            // Use internalDate for receivedDateTime, fallback to parsedSentDate or now
             val parsedReceivedDate =
-                message.internalDate?.toLongOrNull()?.let { Date(it) } ?: parsedSentDate ?: Date()
+                gmailMessage.internalDate?.toLongOrNull()?.let { Date(it) } ?: parsedSentDate
+                ?: Date()
 
             val outputDateFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
             outputDateFormat.timeZone = TimeZone.getTimeZone("UTC")
 
             val sentDateTimeString = parsedSentDate?.let { outputDateFormat.format(it) }
-            val receivedDateTimeString = outputDateFormat.format(parsedReceivedDate) // Non-null
+            val receivedDateTimeString = outputDateFormat.format(parsedReceivedDate)
 
-            val threadId = message.threadId
-            val isRead = message.labelIds?.contains("UNREAD") != true
+            val threadId = gmailMessage.threadId
+            val isRead = gmailMessage.labelIds?.contains("UNREAD") != true
 
             var messageBody: String? = null
-            if (message.payload != null) {
-                // Simplified body extraction for this fix - assumes findBodyContent exists and works
-                // findBodyContent should ideally look for text/plain and then text/html
-                if (message.payload.parts.isNullOrEmpty()) { // Single part message
-                    if ((message.payload.mimeType == "text/html" || message.payload.mimeType == "text/plain") && message.payload.body?.data != null) {
-                        try {
-                            messageBody =
-                                String(Base64.decode(message.payload.body.data, Base64.URL_SAFE))
-                        } catch (e: IllegalArgumentException) {
-                            Log.e(TAG, "Base64 decoding failed for single part message body", e)
-                        }
+            var messageBodyContentType: String? = "text/plain" // Default
+
+            if (isForBodyContent && gmailMessage.payload != null) {
+                val payload = gmailMessage.payload!! // Ensured not null by check
+                var foundBody: String? = null
+                var foundContentType: String? = null
+
+                // Check if the main payload itself is the content (non-multipart)
+                if (payload.parts.isNullOrEmpty() && payload.body?.data != null) {
+                    if (payload.mimeType?.startsWith("text/html", ignoreCase = true) == true) {
+                        foundBody = payload.body.data?.let { decodeBase64(it) }
+                        foundContentType = "text/html"
+                    } else if (payload.mimeType?.startsWith(
+                            "text/plain",
+                            ignoreCase = true
+                        ) == true
+                    ) {
+                        foundBody = payload.body.data?.let { decodeBase64(it) }
+                        foundContentType = "text/plain"
                     }
-                } else { // Multipart message
-                    // Assuming findBodyContent is defined elsewhere in the class and returns String?
-                    messageBody = findBodyContent(message.payload.parts)
                 }
+
+                // If not found in main payload or it was multipart, search parts
+                if (foundBody == null && !payload.parts.isNullOrEmpty()) {
+                    val (bodyStr, contentTypeStr) = findBestBodyPart(payload.parts!!) // Pass the list of MessagePart
+                    foundBody = bodyStr
+                    foundContentType = contentTypeStr
+                }
+
+                messageBody = foundBody
+                messageBodyContentType =
+                    foundContentType ?: "text/plain" // Default if somehow still null
             }
 
             return Message(
-                id = message.id
-                    ?: throw IllegalStateException("Message ID cannot be null from Gmail message: $message"),
+                id = gmailMessage.id
+                    ?: throw IllegalStateException("Message ID cannot be null from Gmail message: $gmailMessage"),
                 threadId = threadId,
-                receivedDateTime = receivedDateTimeString, // Use the distinctly derived received time
-                sentDateTime = sentDateTimeString,       // Populate the new sentDateTime field
+                receivedDateTime = receivedDateTimeString,
+                sentDateTime = sentDateTimeString,
                 subject = subject,
                 senderName = senderName,
                 senderAddress = senderAddress,
-                bodyPreview = message.snippet?.replace("\\u003e", ">")?.replace("\\u003c", "<")
+                bodyPreview = if (isForBodyContent && !messageBody.isNullOrEmpty()) null else gmailMessage.snippet?.replace(
+                    "\\u003e",
+                    ">"
+                )?.replace("\\u003c", "<")
                     ?.replace("&#39;", "'")?.trim(),
                 isRead = isRead,
-                body = messageBody
+                body = messageBody,
+                bodyContentType = messageBodyContentType,
+                isStarred = gmailMessage.labelIds?.contains(GMAIL_LABEL_ID_STARRED) == true,
+                // hasAttachments - This needs more sophisticated logic, check payload for parts with filename/attachmentId
+                hasAttachments = gmailMessage.payload?.parts?.any { !it.filename.isNullOrBlank() && !it.body?.attachmentId.isNullOrBlank() } == true // Basic check
             )
         } catch (e: Exception) {
             Log.e(TAG, "Error mapping GmailMessage to Message: ${e.message}", e)
@@ -487,15 +580,64 @@ class GmailApiHelper @Inject constructor(
     override suspend fun markMessageRead(
         messageId: String,
         isRead: Boolean
-    ): Result<Unit> { // Changed to Result<Unit>
-        Log.d(TAG, "markMessageRead: messageId='$messageId', isRead=$isRead")
+    ): Result<Unit> {
+        val action = if (isRead) "removeLabelIds" else "addLabelIds"
+        val labels = listOf("UNREAD") // Gmail uses UNREAD label for unread status
+        return modifyMessageLabels(messageId, action, labels)
+    }
+
+    override suspend fun starMessage(messageId: String, isStarred: Boolean): Result<Unit> {
+        val action = if (isStarred) "addLabelIds" else "removeLabelIds"
+        val labels = listOf(GMAIL_LABEL_ID_STARRED)
+        return modifyMessageLabels(messageId, action, labels)
+    }
+
+    override suspend fun getMessageContent(messageId: String): Result<Message> {
+        Log.d(TAG, "getMessageContent: Fetching full content for messageId $messageId")
+        return try {
+            val gmailMessage =
+                fetchRawGmailMessage(messageId) // fetchRawGmailMessage gets format=FULL
+                    ?: return Result.failure(Exception("Failed to fetch raw message for $messageId"))
+
+            // Map, specifically requesting full body processing
+            val message = mapGmailMessageToMessage(gmailMessage, isForBodyContent = true)
+                ?: return Result.failure(Exception("Failed to map Gmail message $messageId to domain model for body content"))
+
+            Log.i(
+                TAG,
+                "Successfully fetched and mapped content for message $messageId. Content type: ${message.bodyContentType}"
+            )
+            Result.success(message)
+
+        } catch (e: GoogleNeedsReauthenticationException) {
+            Log.w(
+                TAG,
+                "Google account ${e.accountId} needs re-authentication during getMessageContent (message: $messageId).",
+                e
+            )
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(Exception("Re-authentication required: ${mappedDetails.message}", e))
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception in getMessageContent for $messageId", e)
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(Exception(mappedDetails.message, e))
+        }
+    }
+
+    private suspend fun modifyMessageLabels(
+        messageId: String,
+        action: String,
+        labels: List<String>
+    ): Result<Unit> {
+        Log.d(
+            TAG,
+            "modifyMessageLabels: messageId='$messageId', action='$action', labels=${
+                labels.joinToString(", ")
+            }"
+        )
         return try {
             val requestBody = buildJsonObject {
-                if (isRead) {
-                    putJsonArray("removeLabelIds") { add("UNREAD") }
-                } else {
-                    putJsonArray("addLabelIds") { add("UNREAD") }
-                }
+                putJsonArray(action) { labels.forEach { add(it) } }
             }
             val response: HttpResponse = httpClient.post("$BASE_URL/messages/$messageId/modify") {
                 // Removed explicit Content-Type header. Relying on ContentNegotiation.
@@ -508,7 +650,7 @@ class GmailApiHelper @Inject constructor(
                 val errorBody = response.bodyAsText()
                 Log.e(
                     TAG,
-                    "Error marking message read/unread for $messageId: ${response.status} - $errorBody"
+                    "Error modifying message labels for $messageId: ${response.status} - $errorBody"
                 )
                 val httpEx = io.ktor.client.plugins.ClientRequestException(response, errorBody)
                 val mappedDetails = errorMapper.mapExceptionToErrorDetails(httpEx)
@@ -517,13 +659,13 @@ class GmailApiHelper @Inject constructor(
         } catch (e: GoogleNeedsReauthenticationException) {
             Log.w(
                 TAG,
-                "Google account ${e.accountId} needs re-authentication during markMessageRead (message: $messageId).",
+                "Google account ${e.accountId} needs re-authentication during modifyMessageLabels (message: $messageId).",
                 e
             )
             val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
             Result.failure(Exception("Re-authentication required: ${mappedDetails.message}", e))
         } catch (e: Exception) {
-            Log.e(TAG, "Exception in markMessageRead for $messageId", e)
+            Log.e(TAG, "Exception in modifyMessageLabels for $messageId", e)
             val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
             Result.failure(Exception(mappedDetails.message, e))
         }
@@ -978,35 +1120,5 @@ class GmailApiHelper @Inject constructor(
             val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
             Result.failure(Exception(mappedDetails.message, e))
         }
-    }
-
-    private fun findBodyContent(parts: List<MessagePart>?): String? {
-        if (parts == null) return null
-
-        // Prioritize HTML content
-        for (part in parts) {
-            if (part.mimeType == "text/html" && part.body?.data != null) {
-                try {
-                    return String(Base64.decode(part.body.data, Base64.URL_SAFE))
-                } catch (e: IllegalArgumentException) {
-                    Log.e(TAG, "Base64 decoding failed for HTML part", e)
-                }
-            }
-            // Recurse for multipart
-            val nestedBody = findBodyContent(part.parts)
-            if (nestedBody != null) return nestedBody
-        }
-
-        // Fallback to plain text content
-        for (part in parts) {
-            if (part.mimeType == "text/plain" && part.body?.data != null) {
-                try {
-                    return String(Base64.decode(part.body.data, Base64.URL_SAFE))
-                } catch (e: IllegalArgumentException) {
-                    Log.e(TAG, "Base64 decoding failed for plain text part", e)
-                }
-            }
-        }
-        return null
     }
 }

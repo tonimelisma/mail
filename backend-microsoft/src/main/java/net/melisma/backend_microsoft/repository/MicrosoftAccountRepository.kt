@@ -51,6 +51,11 @@ class MicrosoftAccountRepository @Inject constructor(
 
     private val TAG = "MsAccountRepo"
 
+    override suspend fun getAccountByIdNonFlow(accountId: String): Account? {
+        Timber.tag(TAG).d("getAccountByIdNonFlow called for: ${accountId.take(5)}...")
+        return accountDao.getAccountByIdNonFlow(accountId)?.toDomainAccount()
+    }
+
     override fun getAccounts(): Flow<List<Account>> {
         Timber.tag(TAG).d("getAccounts called")
         return microsoftAuthManager.msalAccounts
@@ -79,7 +84,10 @@ class MicrosoftAccountRepository @Inject constructor(
             return activeMicrosoftAccountHolder.activeMicrosoftAccountId.combine(
                 microsoftAuthManager.msalAccounts
             ) { activeId, msalAccounts ->
-                activeId?.let { msalAccounts.find { it.id == activeId }?.toDomainAccount() }
+                activeId?.let { accId ->
+                    msalAccounts.find { it.id == accId }
+                        ?.let { msalAcc -> msalAcc.toDomainAccount() }
+                }
             }
                 .distinctUntilChanged()
                 .catch { e ->

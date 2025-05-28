@@ -15,6 +15,15 @@ interface AccountRepository {
     val overallApplicationAuthState: Flow<OverallApplicationAuthState>
 
     /**
+     * Retrieves an account by its ID directly, without a Flow.
+     * Useful for one-shot operations where a Flow is not needed (e.g., in a Worker).
+     *
+     * @param accountId The ID of the account to retrieve.
+     * @return The Account object if found, or null otherwise.
+     */
+    suspend fun getAccountByIdNonFlow(accountId: String): Account?
+
+    /**
      * Initiates the sign-in process for the given provider.
      *
      * For MSAL: Returns a Flow that will directly emit Success, Error, or Cancelled.

@@ -813,6 +813,13 @@ class DefaultAccountRepository @Inject constructor(
             }
         }
     }
+
+    override suspend fun getAccountByIdNonFlow(accountId: String): Account? {
+        Timber.tag(TAG).d("getAccountByIdNonFlow called for accountId: $accountId")
+        val entity =
+            accountDao.getAccountByIdNonFlow(accountId) // Assuming DAO has this non-flow method
+        return entity?.toDomainAccount()
+    }
 }
 
 

@@ -80,6 +80,10 @@ dependencies {
     // --- Hilt ---
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
+    implementation(libs.androidx.hilt.work) // Corrected alias
+
+    // --- WorkManager ---
+    implementation(libs.androidx.work.runtime.ktx) // Corrected alias
 
     // --- Coroutines ---
     implementation(libs.kotlinx.coroutines.core)
