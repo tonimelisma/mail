@@ -507,10 +507,39 @@ class DefaultMessageRepository @Inject constructor(
     override suspend fun deleteMessage(
         account: Account,
         messageId: String
-    ): Result<Unit> {
+    ): Result<Unit> = withContext(ioDispatcher) {
         Timber.tag(TAG)
-            .w("deleteMessage called for msg $messageId in account ${account.id}. NOT IMPLEMENTED.")
-        return Result.failure(NotImplementedError("deleteMessage not implemented"))
+            .d("deleteMessage: msgId=$messageId, account=${account.id}")
+        try {
+            appDatabase.withTransaction {
+                // Mark as locally deleted and needing sync. Clear any previous sync errors.
+                messageDao.markAsLocallyDeleted(
+                    messageId = messageId,
+                    isLocallyDeleted = true,
+                    needsSync = true
+                )
+            }
+            Timber.tag(TAG)
+                .i("Optimistically marked message $messageId as locally deleted, needsSync=true")
+
+            enqueueSyncMessageStateWorker(
+                accountId = account.id,
+                messageId = messageId,
+                operationType = SyncMessageStateWorker.OP_DELETE_MESSAGE
+            )
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Timber.tag(TAG).e(e, "Error in deleteMessage for $messageId")
+            // Attempt to fetch the message to update its sync error state if it still exists
+            val currentMessage = messageDao.getMessageByIdSuspend(messageId)
+            if (currentMessage != null && !currentMessage.isLocallyDeleted) { // Only update error if not marked for deletion
+                val errorMessage =
+                    errorMappers[account.providerType.uppercase()]?.mapExceptionToErrorDetails(e)?.message
+                        ?: e.message
+                messageDao.updateLastSyncError(messageId, "Optimistic delete failed: $errorMessage")
+            }
+            Result.failure(Exception("Failed to mark message for deletion: ${e.message}", e))
+        }
     }
 
     override suspend fun moveMessage(

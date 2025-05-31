@@ -44,6 +44,7 @@ data class MessageEntity(
     val isRead: Boolean,
     val isStarred: Boolean, // Assuming this will be handled
     val hasAttachments: Boolean, // Assuming this will be handled
+    val isLocallyDeleted: Boolean = false, // Added for optimistic deletion
     val needsSync: Boolean = false,
     val lastSyncError: String? = null
 ) 

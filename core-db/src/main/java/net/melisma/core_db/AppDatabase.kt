@@ -20,7 +20,7 @@ import net.melisma.core_db.entity.MessageEntity
 
 @Database(
     entities = [AccountEntity::class, FolderEntity::class, MessageEntity::class, MessageBodyEntity::class],
-    version = 6,
+    version = 7,
     exportSchema = false // Set to true for production apps for schema migration history
 )
 @TypeConverters(WellKnownFolderTypeConverter::class, StringListConverter::class)
@@ -47,7 +47,8 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_2_3,
                         MIGRATION_3_4,
                         MIGRATION_4_5,
-                        MIGRATION_5_6
+                        MIGRATION_5_6,
+                        MIGRATION_6_7
                     )
                     .build()
                 INSTANCE = instance
@@ -123,6 +124,12 @@ abstract class AppDatabase : RoomDatabase() {
                             "FOREIGN KEY(`message_id`) REFERENCES `messages`(`messageId`) ON UPDATE NO ACTION ON DELETE CASCADE)"
                 )
                 db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_message_bodies_message_id` ON `message_bodies` (`message_id`)")
+            }
+        }
+
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `messages` ADD COLUMN `isLocallyDeleted` INTEGER NOT NULL DEFAULT 0")
             }
         }
     }

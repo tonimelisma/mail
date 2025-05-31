@@ -43,6 +43,7 @@ class SyncMessageStateWorker @AssistedInject constructor(
         // Operation Types
         const val OP_MARK_READ = "MARK_READ"
         const val OP_STAR_MESSAGE = "STAR_MESSAGE"
+        const val OP_DELETE_MESSAGE = "DELETE_MESSAGE" // Added delete operation type
     }
 
     private val TAG = "SyncMsgStateWorker"
@@ -92,14 +93,22 @@ class SyncMessageStateWorker @AssistedInject constructor(
         if (mailApiService == null) {
             Timber.tag(TAG)
                 .e("Could not find MailApiService for provider: $providerType (account $accountId)")
-            updateSyncError(messageId, "API service not found for provider: $providerType")
+            updateSyncErrorState(
+                messageId,
+                "API service not found for provider: $providerType",
+                false
+            )
             return@withContext ListenableWorker.Result.retry()
         }
 
         if (errorMapper == null) {
             Timber.tag(TAG)
                 .e("Could not find ErrorMapperService for provider: $providerType (account $accountId)")
-            updateSyncError(messageId, "Error mapper service not found for provider: $providerType")
+            updateSyncErrorState(
+                messageId,
+                "Error mapper service not found for provider: $providerType",
+                false
+            )
             return@withContext ListenableWorker.Result.retry() // Or Result.failure() if this is unrecoverable
         }
 
@@ -125,17 +134,27 @@ class SyncMessageStateWorker @AssistedInject constructor(
                     ) // mailApiService is now guaranteed non-null
                 }
 
+                OP_DELETE_MESSAGE -> {
+                    Timber.tag(TAG)
+                        .d("Executing $OP_DELETE_MESSAGE for $messageId using $providerType API")
+                    mailApiService.deleteMessage(messageId) // mailApiService is now guaranteed non-null
+                }
+
                 else -> {
                     Timber.tag(TAG).w("Unknown operation type: $operationType")
                     return@withContext ListenableWorker.Result.failure()
                 }
             }
-            return@withContext processApiResult(apiResult, messageId, errorMapper)
+            return@withContext processApiResult(apiResult, messageId, operationType, errorMapper)
         } catch (e: Exception) { // Catch exceptions from the API calls directly if they aren't Result-wrapped
             Timber.tag(TAG).e(e, "Unhandled exception during API operation for $messageId")
             val errorDetails =
                 errorMapper.mapExceptionToErrorDetails(e) // errorMapper is now guaranteed non-null
-            updateSyncError(messageId, errorDetails.message ?: "Unknown error during sync")
+            updateSyncErrorState(
+                messageId,
+                errorDetails.message ?: "Unknown error during sync",
+                false
+            )
             return@withContext ListenableWorker.Result.retry()
         }
     }
@@ -143,13 +162,22 @@ class SyncMessageStateWorker @AssistedInject constructor(
     private suspend fun processApiResult(
         apiResult: KotlinResult<Unit>,
         messageId: String,
+        operationType: String, // Added operationType
         errorMapper: ErrorMapperService // Pass errorMapper
     ): ListenableWorker.Result {
         if (apiResult.isSuccess) {
             Timber.tag(TAG)
-                .i("API call successful for $messageId. Clearing needsSync and lastSyncError.")
+                .i("API call successful for $messageId, operation $operationType.")
             appDatabase.withTransaction {
-                messageDao.clearSyncState(messageId)
+                if (operationType == OP_DELETE_MESSAGE) {
+                    Timber.tag(TAG)
+                        .d("Permanently deleting message $messageId from local DB after successful API deletion.")
+                    messageDao.deletePermanentlyById(messageId)
+                } else {
+                    Timber.tag(TAG)
+                        .d("Clearing needsSync and lastSyncError for message $messageId.")
+                    messageDao.clearSyncState(messageId) // Resets needsSync and lastSyncError
+                }
             }
             return ListenableWorker.Result.success()
         } else {
@@ -157,22 +185,46 @@ class SyncMessageStateWorker @AssistedInject constructor(
             val errorDetails = exception?.let { errorMapper.mapExceptionToErrorDetails(it) }
             val errorMessage = errorDetails?.message ?: exception?.message ?: "Unknown API error"
 
-            Timber.tag(TAG).w("API call failed for $messageId: $errorMessage")
-            updateSyncError(messageId, errorMessage)
+            Timber.tag(TAG)
+                .w("API call failed for $messageId, operation $operationType: $errorMessage")
+            // For delete operations, if the API fails, we do not want to clear isLocallyDeleted.
+            // We want to keep it marked for deletion attempt later. updateSyncErrorState will just set error and keep needsSync.
+            val shouldClearLocalDeletionMarker =
+                false // For OP_DELETE_MESSAGE, a failure means we keep the marker
+            updateSyncErrorState(messageId, errorMessage, shouldClearLocalDeletionMarker)
+
             // TODO: Implement more sophisticated retry logic based on error type
             // For now, always retry for API failures.
             return ListenableWorker.Result.retry()
         }
     }
 
-    private suspend fun updateSyncError(messageId: String, errorMessage: String) {
+    private suspend fun updateSyncErrorState(
+        messageId: String,
+        errorMessage: String,
+        clearLocallyDeletedOnError: Boolean
+    ) {
         try {
             Timber.tag(TAG).d("Updating sync error for $messageId: $errorMessage")
-            appDatabase.withTransaction {
-                messageDao.updateLastSyncError(
-                    messageId,
-                    errorMessage.take(500)
-                ) // Limit error message length
+            val message = messageDao.getMessageByIdSuspend(messageId)
+            if (message != null) {
+                appDatabase.withTransaction {
+                    if (clearLocallyDeletedOnError && message.isLocallyDeleted) {
+                        // This case might be for operations OTHER than delete, where an error means we revert optimistic state
+                        messageDao.markAsLocallyDeleted(
+                            messageId,
+                            isLocallyDeleted = false,
+                            needsSync = true
+                        ) // Revert and keep needsSync for error
+                    }
+                    messageDao.updateLastSyncError(
+                        messageId,
+                        errorMessage.take(500)
+                    ) // updateLastSyncError already sets needsSync = true
+                }
+            } else {
+                Timber.tag(TAG)
+                    .w("Message $messageId not found to update sync error. It might have been deleted.")
             }
         } catch (dbException: Exception) {
             Timber.tag(TAG).e(dbException, "Failed to update lastSyncError in DB for $messageId")

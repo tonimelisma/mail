@@ -60,4 +60,14 @@ interface MessageDao {
 
     @Query("UPDATE messages SET isStarred = :isStarred, needsSync = :needsSync WHERE messageId = :messageId")
     suspend fun updateStarredState(messageId: String, isStarred: Boolean, needsSync: Boolean)
+
+    @Query("UPDATE messages SET isLocallyDeleted = :isLocallyDeleted, needsSync = :needsSync, lastSyncError = NULL WHERE messageId = :messageId")
+    suspend fun markAsLocallyDeleted(
+        messageId: String,
+        isLocallyDeleted: Boolean = true,
+        needsSync: Boolean = true
+    )
+
+    @Query("DELETE FROM messages WHERE messageId = :messageId")
+    suspend fun deletePermanentlyById(messageId: String)
 } 
