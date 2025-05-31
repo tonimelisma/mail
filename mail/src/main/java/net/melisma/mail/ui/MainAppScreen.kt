@@ -42,6 +42,7 @@ import net.melisma.mail.MainViewModel
 import net.melisma.mail.R
 import net.melisma.mail.ViewMode
 import net.melisma.mail.navigation.AppRoutes
+import timber.log.Timber
 
 // Helper functions that were originally in MainActivity or might be needed
 // (Consider moving to a Util file if they become more general)
