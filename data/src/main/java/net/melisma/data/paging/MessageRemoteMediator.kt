@@ -102,10 +102,11 @@ class MessageRemoteMediator(
                                 "$dbLogPrefix Clearing old messages and inserting ${messagesFromApi.size} new ones."
                             )
                             // It's important that this deletion is specific to the accountId and folderId
-                            messageDao.deleteMessagesForFolder(accountId, folderId)
+                            // messageDao.deleteMessagesForFolder(accountId, folderId) // Old approach
                             val messageEntities =
                                 messagesFromApi.map { it.toEntity(accountId, folderId) }
-                            messageDao.insertOrUpdateMessages(messageEntities)
+                            Log.d(TAG, "$dbLogPrefix Upserting ${messageEntities.size} messages.")
+                            messageDao.insertOrUpdateMessages(messageEntities) // New approach: Upsert
                             Log.d(TAG, "$dbLogPrefix Database transaction completed.")
                         }
                         // Since the API doesn't support true pagination with next/prev keys,

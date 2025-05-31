@@ -171,6 +171,9 @@ interface MessageDao {
     @Query("UPDATE messages SET lastSendError = :error, needsSync = 1 WHERE messageId = :messageId")
     suspend fun updateSendError(messageId: String, error: String)
 
+    @Query("UPDATE messages SET lastSendError = NULL, needsSync = 1, sendAttempts = 0 WHERE messageId = :messageId")
+    suspend fun prepareForRetry(messageId: String)
+
     @Query("SELECT * FROM messages WHERE needsSync = 1 AND (isDraft = 1 OR isOutbox = 1)")
     suspend fun getPendingSyncDraftsAndOutbox(): List<MessageEntity>
 } 
