@@ -49,11 +49,21 @@ class MessageRemoteMediator(
     private val REFRESH_PAGE_SIZE = 100
 
     override suspend fun initialize(): InitializeAction {
-        // LAUNCH_INITIAL_REFRESH will call load() with LoadType.REFRESH upon initialization of PagingData.
-        Timber.d(
-            "initialize() called for $accountId/$folderId. Returning LAUNCH_INITIAL_REFRESH."
-        )
-        return InitializeAction.LAUNCH_INITIAL_REFRESH
+        val messageCount = withContext(ioDispatcher) {
+            messageDao.getMessagesCountForFolder(accountId, folderId)
+        }
+
+        return if (messageCount == 0) {
+            Timber.d(
+                "initialize() for $accountId/$folderId: No messages cached (count is $messageCount). Returning LAUNCH_INITIAL_REFRESH."
+            )
+            InitializeAction.LAUNCH_INITIAL_REFRESH
+        } else {
+            Timber.d(
+                "initialize() for $accountId/$folderId: Messages found in cache (count is $messageCount). Returning SKIP_INITIAL_REFRESH."
+            )
+            InitializeAction.SKIP_INITIAL_REFRESH
+        }
     }
 
     override suspend fun load(

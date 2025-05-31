@@ -29,8 +29,11 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE messageId = :messageId")
     suspend fun getMessageByIdSuspend(messageId: String): MessageEntity?
 
+    @Query("SELECT COUNT(*) FROM messages WHERE accountId = :accountId AND folderId = :folderId")
+    suspend fun getMessagesCountForFolder(accountId: String, folderId: String): Int
+
     @Query("UPDATE messages SET folderId = :newFolderId, needsSync = :needsSync WHERE messageId = :messageId")
-    suspend fun updateMessageFolderAndNeedsSync(
+    suspend fun updateMessageFolderAndSyncState(
         messageId: String,
         newFolderId: String,
         needsSync: Boolean
@@ -92,13 +95,6 @@ interface MessageDao {
 
     @Query("DELETE FROM messages WHERE messageId = :messageId")
     suspend fun deletePermanentlyById(messageId: String)
-
-    @Query("UPDATE messages SET folderId = :newFolderId, needsSync = :needsSync WHERE messageId = :messageId")
-    suspend fun updateMessageFolderAndSyncState(
-        messageId: String,
-        newFolderId: String,
-        needsSync: Boolean
-    )
 
     @Query("UPDATE messages SET folderId = :newFolderId, needsSync = :needsSync, lastSyncError = :lastSyncError WHERE messageId = :messageId")
     suspend fun updateMessageFolderSyncStateAndError(

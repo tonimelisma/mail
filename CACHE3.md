@@ -1,6 +1,6 @@
 # **Melisma Mail - Caching & Offline-First Implementation Guide**
 
-Version: 2.2 (Drafts, Attachments, Send/Retry Logic - 2024-06-01)
+Version: 2.3 (Thread Repository Refactor - 2024-06-01)
 Date: 2024-06-01
 
 ## **0. Vision & Introduction**
@@ -15,29 +15,33 @@ this local database.
 
 This section reflects the validated state of the codebase after direct inspection and recent
 changes, including the refactor of DAO and Repository methods, implementations for
-message deletion, move, drafts, attachments (downloading), sending, and retrying sends.
+message deletion, move, drafts, attachments (downloading), sending, retrying sends, and the
+**refactoring of thread data handling to rely solely on `MessageEntity`**.
 
 ### **A. Core Caching & SSoT Foundation:**
 
 * **`:core-db` Module & Database:**
-    * `AppDatabase.kt` is at **`version = 7`** (pending update for `AttachmentEntity` and related DAOs if not already included).
-        * **Note:** The last commit added `AttachmentEntity`, `AttachmentDao`, and likely necessitated a DB version bump and migration. This needs verification.
-    * Entities `AccountEntity.kt`, `FolderEntity.kt`, `MessageEntity.kt`, `MessageBodyEntity.kt`, and **`AttachmentEntity.kt`** are defined.
+    * `AppDatabase.kt` is at **`version = 8`**.
+    * Entities `AccountEntity.kt`, `FolderEntity.kt`, `MessageEntity.kt`, `MessageBodyEntity.kt`, and `AttachmentEntity.kt` are defined.
+    * `MailThreadEntity.kt` and `ThreadMessageCrossRef.kt` have been **REMOVED**.
     * `AccountEntity` includes `val needsReauthentication: Boolean = false`.
-    * `MessageEntity` includes `val folderId: String`, `val needsSync: Boolean = false`, `val lastSyncError: String? = null`, `val isLocallyDeleted: Boolean = false`, `val isDraft: Boolean`, `val isOutbox: Boolean`, `val draftType: String?`, `val draftParentId: String?`, `val sendAttempts: Int`.
+    * `MessageEntity` includes `val folderId: String`, `val threadId: String?` (crucial for grouping), `val needsSync: Boolean = false`, `val lastSyncError: String? = null`, `val isLocallyDeleted: Boolean = false`, `val isDraft: Boolean`, `val isOutbox: Boolean`, `val draftType: String?`, `val draftParentId: String?`, `val sendAttempts: Int`.
     * `MessageBodyEntity` includes `messageId`, `contentType`, `content`, `lastFetchedTimestamp`.
     * `AttachmentEntity` includes `attachmentId`, `messageId`, `fileName`, `size`, `contentType`, `contentId`, `isInline`, `isDownloaded`, `localFilePath`, `downloadTimestamp`, `downloadError`.
     * **DAOs (`AccountDao`, `FolderDao`, `MessageDao`, `MessageBodyDao`, `AttachmentDao`):**
+        * `ThreadDao.kt` has been **REMOVED**.
         * Provided via Hilt.
         * `MessageDao.kt` now includes:
             * `suspend fun markAsLocallyDeleted(...)`
             * `suspend fun deletePermanentlyById(...)`
-            * `suspend fun updateMessageFolderAndNeedsSync(...)`
+            * `suspend fun updateMessageFolderAndSyncState(...)` (renamed from `updateMessageFolderAndNeedsSync`)
             * `suspend fun updateFolderIdAndClearSyncStateOnSuccess(...)`
             * `suspend fun updateFolderIdSyncErrorAndNeedsSync(...)`
             * `suspend fun updateDraftContent(...)`
-            * **`suspend fun prepareForRetry(messageId: String)`:** Clears `lastSendError`, sets `needsSync = 1`, resets `sendAttempts = 0`.
-            * `suspend fun updateSendError(messageId: String, error: String)` (parameter `error` is non-null).
+            * `suspend fun prepareForRetry(messageId: String)`
+            * `suspend fun updateSendError(messageId: String, error: String)`
+            * `fun getMessagesForFolder(accountId: String, folderId: String): Flow<List<MessageEntity>>` (used by `DefaultThreadRepository`)
+            * `suspend fun getMessagesCountForFolder(accountId: String, folderId: String): Int` (used by `MessageRemoteMediator`)
             * Methods for `isDraft`, `isOutbox` message properties.
         * `AttachmentDao.kt` includes methods for inserting attachments and updating their download status.
     * TypeConverters (`WellKnownFolderTypeConverter`, `StringListConverter`) are present.
@@ -48,182 +52,123 @@ message deletion, move, drafts, attachments (downloading), sending, and retrying
         * `MIGRATION_4_5`: Adds `lastSyncError` to `messages` table.
         * `MIGRATION_5_6`: Adds `message_bodies` table for `MessageBodyEntity`.
         * `MIGRATION_6_7`: Adds `isLocallyDeleted` to `messages` table.
-        * **PENDING/VERIFY:** Migration for `AttachmentEntity` and `MessageEntity` changes (e.g., `sendAttempts`, `isOutbox`, `isDraft`, etc.) if `AppDatabase.version` is still 7.
+        * `MIGRATION_7_8`: Adds new columns to `messages` for draft/outbox, creates `attachments` table.
+        * **NOTE:** Any migration previously related to `MailThreadEntity` (e.g., MIGRATION_8_9) has been **REVERTED/REMOVED** as part of the `DefaultThreadRepository` refactor.
 
-* **`:core-data` Module Repository Interfaces (`MessageRepository.kt`):**
-    * `suspend fun sendMessage(draft: MessageDraft, account: Account): Result<String>`
-    * `suspend fun getMessageAttachments(accountId: String, messageId: String): Flow<List<Attachment>>`
-    * `suspend fun downloadAttachment(accountId: String, messageId: String, attachment: Attachment): Flow<String?>` (Path to downloaded file)
-    * `suspend fun createDraftMessage(accountId: String, draftDetails: MessageDraft): Result<Message>`
-    * `suspend fun updateDraftMessage(accountId: String, messageId: String, draftDetails: MessageDraft): Result<Message>`
-    * `fun searchMessages(accountId: String, query: String, folderId: String?): Flow<List<Message>>`
-    * **NEW:** `suspend fun retrySendMessage(accountId: String, messageId: String): Result<Unit>`
+* **`:core-data` Module Repository Interfaces (`MessageRepository.kt`, `ThreadRepository.kt`):**
+    * `MessageRepository.kt` remains largely the same in terms of its interface.
+    * `ThreadRepository.kt`:
+        * Interface remains, but its implementation (`DefaultThreadRepository`) now derives thread information from `MessageDao`.
+        * Includes `markThreadRead`, `deleteThread`, `moveThread` (currently stubbed in implementation).
 
 * **`:data` Module Repositories as Synchronizers:**
     * `DefaultMessageRepository.kt`:
-        * `getMessageDetails` (uses `getMessageWithBody`) logic remains.
-        * `markMessageRead`, `starMessage`, `deleteMessage`, `moveMessage` implementations enqueue `SyncMessageStateWorker`.
-        * **`sendMessage` IMPLEMENTED:** Creates an outbox `MessageEntity`, stores `MessageBodyEntity`, enqueues `SyncMessageStateWorker` with `OP_SEND_MESSAGE`.
-        * **`createDraftMessage` IMPLEMENTED:** Creates a draft `MessageEntity`, stores `MessageBodyEntity`, enqueues `SyncMessageStateWorker` with `OP_CREATE_DRAFT`.
-        * **`updateDraftMessage` IMPLEMENTED:** Updates draft `MessageEntity` and `MessageBodyEntity`, enqueues `SyncMessageStateWorker` with `OP_UPDATE_DRAFT`.
-        * **`getMessageAttachments` IMPLEMENTED:** Fetches from local DB and API (if needed), stores API results in `AttachmentDao`.
-        * **`downloadAttachment` IMPLEMENTED:** Calls `MailApiService` to download, saves file to internal storage (`filesDir/attachments/{messageId}/{fileName}`), updates `AttachmentDao` with path and status. Returns `Flow<String?>` for file path.
-        * **`searchMessages` IMPLEMENTED (API Only):** Calls `MailApiService.searchMessages`. Does not use local FTS.
-        * **`retrySendMessage` IMPLEMENTED:** Reconstructs `MessageDraft` (with limitations, see Tech Debt), calls `messageDao.prepareForRetry`, re-enqueues `SyncMessageStateWorker` for `OP_SEND_MESSAGE`.
-        * `enqueueSyncMessageStateWorker` updated to handle new operations and data (`draftData`, `sentFolderId`).
+        * (Details as previously, no major changes from this specific refactor).
+    * `DefaultThreadRepository.kt`:
+        * **REFACTORED:** No longer uses dedicated thread entities or DAO.
+        * Injects `MessageDao` and `AppDatabase`.
+        * `setTargetFolderForThreads` observes `messageDao.getMessagesForFolder()`.
+        * Implements `groupAndMapMessagesToMailThreads` to transform `List<MessageEntity>` into domain `List<MailThread>`.
+        * `launchThreadFetchJobInternal` fetches messages (not threads) from API, saves them via `messageDao.insertOrUpdateMessages()`.
+        * `markThreadRead`, `deleteThread`, `moveThread` are **STUBBED** and need full implementation by operating on messages from `MessageDao`.
 
 * **Paging 3 for Message Lists:**
     * `MessageRemoteMediator.kt`:
+        * **IMPROVED:** `initialize()` method now checks `messageDao.getMessagesCountForFolder()` to determine `InitializeAction.LAUNCH_INITIAL_REFRESH` or `InitializeAction.SKIP_INITIAL_REFRESH`.
         * Uses `MailApiService.getMessagesForFolder` for `LoadType.REFRESH`.
-        * **IMPROVED:** Uses `messageDao.insertOrUpdateMessages` (upsert) within a transaction during `REFRESH` instead of clear and insert for the specific account/folder.
+        * Uses `messageDao.insertOrUpdateMessages` (upsert) within a transaction during `REFRESH`.
         * Still returns `endOfPaginationReached = true` for REFRESH, PREPEND, and APPEND.
 
-### **B. Authentication Layer State:** (Largely unchanged from previous analysis)
-
-* **Google Authentication (`:backend-google`):**
-    * `GoogleAuthManager.kt` and `DefaultAccountRepository.syncGoogleAccount` handle token refresh
-      and `needsReauthentication`.
-* **Microsoft Authentication (`:backend-microsoft` - MSAL Version 6.0.0):**
-    * `MicrosoftAuthManager.kt`: Robust `signOut`. MSAL PII logging enabled.
-    * `MicrosoftAccountMappers.kt`: Maps `IAccount.id`.
-    * `ActiveMicrosoftAccountHolder.kt`: SharedPreferences for active ID.
-    * `MicrosoftAccountRepository.kt`: Implements `getAccountByIdSuspend`, `syncAccount` handles
-      MSAL errors. `overallApplicationAuthState` reflects `AccountDao` and MSAL state.
+### **B. Authentication Layer State:** (Largely unchanged)
 
 ### **C. Implemented Core Offline/Caching Features & UI Data Handling:**
 
-* **WorkManager for "True Offline" Sync (Mark Read/Star/Delete/Move/Drafts/Send):**
-    * `SyncMessageStateWorker.kt` exists:
-        * Handles `OP_MARK_READ`, `OP_STAR_MESSAGE`, `OP_DELETE_MESSAGE`, `OP_MOVE_MESSAGE`.
-        * **NEW:** Handles `OP_CREATE_DRAFT`, `OP_UPDATE_DRAFT`, `OP_SEND_MESSAGE`.
-        * `processApiResult()` for `OP_MOVE_MESSAGE` reverts `folderId` on failure.
-        * **NEW:** `doWork()` for `OP_SEND_MESSAGE` uses `draftData` to call `apiService.sendMessage`. Updates `MessageEntity` (e.g., clears `isOutbox`, sets `sentTimestamp`, updates `messageId` if changed by server) on success. Handles send errors.
-        * **NEW:** `doWork()` for `OP_CREATE_DRAFT` / `OP_UPDATE_DRAFT` syncs draft state with server.
-        * DAO updates for other sync states (`needsSync`, `lastSyncError`, `isLocallyDeleted`) and
-          permanent deletion (for `deleteMessage`) are handled by the worker.
-        * Calls `accountRepository.getAccountByIdSuspend`.
-    * `DefaultMessageRepository.markMessageRead`, `starMessage`, `deleteMessage`, and *
-      *`moveMessage`** enqueue `SyncMessageStateWorker`.
-
-* **On-Demand Message Body Fetching:**
-    * `MessageBodyEntity.kt`, `MessageBodyDao.kt`, `AppDatabase.kt` (MIGRATION_5_6) support this.
-    * `DefaultMessageRepository.getMessageDetails` fetches and saves bodies.
-
+* **WorkManager for "True Offline" Sync:** (Details as previously)
+* **On-Demand Message Body Fetching:** (Details as previously)
 * **Gmail-style Thread View (Progressive Body Loading):** Implemented.
+* **Thread List Display:** Now sources data from `DefaultThreadRepository` which, in turn, gets messages from `MessageDao` and groups them into threads. UI observes `threadDataState` from `DefaultThreadRepository`.
 
 ### **D. Remaining Unimplemented Core Offline/Caching Features:**
 
-* **Local Full-Text Search (FTS):**
-    * No `MessageFtsEntity` or FTS setup in Room.
-    * `DefaultMessageRepository.searchMessages` is API-only.
+* **Local Full-Text Search (FTS):** (Details as previously)
+* **Thread-Level Actions Implementation:** Full implementation of `markThreadRead`, `deleteThread`, `moveThread` in `DefaultThreadRepository` by operating on messages.
 
 ## **II. Unified List of Technical Debt and Other Challenges (Updated 2024-06-01)**
 
 1.  **API and Data Model Limitations (DESIGN/IMPLEMENTATION ISSUES):**
-    *   **API-Model Discrepancies:** Potential for incomplete cached data if `MailApiService` doesn't provide all fields.
-    *   **`MailApiService` Pagination Limitation (DESIGN LIMITATION):** `getMessagesForFolder` only supports `maxResults`.
-    *   **Gmail API `moveMessage` Label Nuances:** (As previously noted).
-    *   **NEW: `DefaultMessageRepository.retrySendMessage` Limitations:**
-        *   **CC/BCC Reconstruction:** `MessageEntity` does not store CC/BCC recipients. `retrySendMessage` currently reconstructs `MessageDraft` without them. This means a retried message will lose original CC/BCC recipients unless addressed.
-        *   **Attachment Reconstruction:** `MessageDraft` in `retrySendMessage` is created with an empty `attachments` list. The worker needs a strategy to handle attachments for retries (e.g., if they were uploaded and have IDs, or if local paths need to be re-processed). The current implementation assumes the worker handles attachments based on the initial draft or existing server state, which might be insufficient for a robust retry.
-    *   **NEW: Database Versioning & Migrations:** The addition of `AttachmentEntity` and changes to `MessageEntity` (e.g., `sendAttempts`, draft/outbox flags) require a database migration. If `AppDatabase.version` is still 7, this is a critical missing step.
+    *   (Existing points remain valid)
+    *   **NEW/HIGHLIGHTED: `DefaultThreadRepository.groupAndMapMessagesToMailThreads` Performance:** For folders with a very large number of messages that form many threads, or for very large individual threads, the in-memory grouping and mapping could be computationally intensive or memory-heavy. This needs monitoring, especially on lower-end devices.
+    *   **NEW: Complexity of Thread-Level Actions:** Implementing actions like "move thread" or "delete thread" now requires fetching all relevant messages for that thread, updating them, and then potentially batching these updates for `SyncMessageStateWorker`. This adds complexity compared to a single API call for a thread ID.
 
 2.  **Data Handling and Persistence Concerns (CODE/SCHEMA ISSUES):**
-    *   **Error Handling in Mappers (Date Parsing):** `MessageMappers.kt` date parsing defaults.
-    *   **`DefaultMessageRepository.kt` `getMessageWithBody` Robustness:** Interaction between API-sourced messages and local cache.
-    *   **`SyncMessageStateWorker` Error Handling for Move (IMPROVED):** (As previously noted).
-    *   **NEW: `DefaultMessageRepository.downloadAttachment` Robustness:**
-        *   **File Management:** Current implementation saves to `filesDir/attachments/{messageId}/{fileName}`. This doesn't handle potential filename conflicts if multiple attachments have the same name for one message. It also doesn't consider storage limits or cleanup of old attachments.
-        *   **Progress Reporting:** The `Flow<String?>` emits the path on completion or null on error. It doesn't provide intermediate progress updates, which would be crucial for large files.
-    *   **NEW: `MessageRemoteMediator` Refresh Strategy:**
-        *   While `REFRESH` now uses an upsert strategy (which is good), it still *always* triggers a network fetch when a folder is selected for the first time or the Pager is re-established (`MessageRemoteMediator` is created and `load(REFRESH)` is called).
-        *   A more optimized approach would be to allow `SKIP_INITIAL_REFRESH` if the local data for that folder is deemed recent enough or valid (e.g., based on a timestamp of last successful sync for that folder).
+    *   (Existing points remain valid)
+    *   **`MessageRemoteMediator` Refresh Strategy:** While `initialize()` is improved, the overall strategy for when and how `REFRESH` is triggered for threads (now derived from messages) versus individual paged messages might need further thought to avoid redundant fetches if `DefaultThreadRepository` also fetches.
 
 3.  **Offline Functionality Gaps (UNIMPLEMENTED FEATURES / ENHANCEMENTS):**
     *   **WorkManager for "True Offline" (`SyncMessageStateWorker.kt`):**
-        *   **REFINEMENT NEEDED (General):** Comprehensive retry policies (e.g., exponential backoff, max attempts per error type) for all operations. Current retry is basic.
-        *   **Send Error Visibility:** `MessageEntity.lastSendError` is populated by the worker on send failure, but there's no UI mechanism yet to display this to the user for outbox items.
-        *   **User-Initiated Retry:** No UI for the user to manually trigger a retry for a failed message in the outbox (which would call `DefaultMessageRepository.retrySendMessage`).
-    *   **On-Demand Message Body Fetching (Refinement):** Strategy for re-fetching stale bodies.
-    *   **Attachment Handling:**
-        *   **`downloadAttachment`:** Lacks progress reporting and robust file management (see Tech Debt). UI for showing progress and opening downloaded files is pending.
+        *   (Existing points remain valid)
+        *   **NEW: Thread Action Sync:** The `SyncMessageStateWorker` will need to correctly handle batch operations on messages if thread-level actions are implemented by modifying multiple messages. Current worker ops are message-centric.
+    *   **On-Demand Message Body Fetching (Refinement):** (Details as previously)
+    *   **Attachment Handling:** (Details as previously)
     *   **Local Full-Text Search Not Implemented.**
+    *   **NEW: Full Implementation of Thread Actions:** `markThreadRead`, `deleteThread`, `moveThread` in `DefaultThreadRepository` are currently stubs.
 
 4.  **Code Health and Maintenance (CODE ISSUES):**
-    *   **Log Spam:** Review and reduce diagnostic logging.
-    *   **Lint Warning in `DefaultAccountRepository.kt`:** Persistent "condition always true" warning. (Minor).
-    *   **TODOs:** The codebase likely contains `TODO` comments from the recent commit that need addressing.
+    *   (Existing points remain valid)
 
 ## **III. Unified List of Work That Is Still To Be Done to Achieve the Vision (Updated 2024-06-01)**
 
-This list outlines the necessary steps to realize the full offline-first caching vision.
-
 1.  **Implement Comprehensive Offline Write Operations with WorkManager (High Priority):**
-    *   **A. Delete Message (`DefaultMessageRepository.deleteMessage`) - DONE**
-    *   **B. Move Message (`DefaultMessageRepository.moveMessage`) - DONE**
-    *   **C. Drafts & Send Message (`createDraftMessage`, `updateDraftMessage`, `sendMessage`) - DONE (Initial Implementation)**
-        *   **Refinement for `retrySendMessage` (see Tech Debt):** Address CC/BCC and attachment reconstruction.
-        *   **Outbox UI:** Display send errors from `MessageEntity.lastSendError`.
-        *   **User-Initiated Retry UI:** Allow users to trigger `DefaultMessageRepository.retrySendMessage` for failed outbox items.
+    *   **A. Message-Level Actions (`DefaultMessageRepository`) - Largely DONE (Ongoing Refinements)**
+        *   (Sub-points as previously)
+    *   **B. Thread-Level Actions (`DefaultThreadRepository`) - NEW/TODO**
+        *   **Implement `markThreadRead`:**
+            *   Fetch all `MessageEntity` items for the given `threadId` via `MessageDao`.
+            *   Update their `isRead` status.
+            *   Save them back via `messageDao.insertOrUpdateMessages`.
+            *   Enqueue `SyncMessageStateWorker` for each affected message to sync `isRead` state.
+        *   **Implement `deleteThread`:**
+            *   Fetch all `MessageEntity` items for the `threadId`.
+            *   Mark them as `isLocallyDeleted = true` (or call appropriate API and then update DB).
+            *   Save them back via `MessageDao`.
+            *   Enqueue `SyncMessageStateWorker` for each message for deletion.
+        *   **Implement `moveThread`:**
+            *   Fetch all `MessageEntity` items for the `threadId` from the `currentFolderId`.
+            *   Update their `folderId` to `destinationFolderId` and set `needsSync = true`.
+            *   Save them back via `MessageDao`.
+            *   Enqueue `SyncMessageStateWorker` for each message to be moved.
 
-2.  **Implement Attachment Handling (High Priority):**
-    *   **A. DB Schema for Attachments (`AttachmentEntity`, `AttachmentDao`) - DONE**
-    *   **B. API Service Updates (`MailApiService.downloadAttachment`, `MailApiService.getMessageAttachments`) - DONE**
-    *   **C. `DefaultMessageRepository.getMessageAttachments` - DONE**
-    *   **D. `DefaultMessageRepository.downloadAttachment` - DONE (Initial Implementation)**
-        *   **Enhancements (see Tech Debt):** Implement robust file management (naming, conflicts, storage limits), progress reporting.
-        *   **UI Integration:** Display download progress, allow opening of downloaded attachments.
+2.  **Implement Attachment Handling (High Priority):** (Details as previously)
 
 3.  **Enhance `SyncMessageStateWorker.kt` (Ongoing with new operations):**
-    *   Now handles Mark Read, Star, Delete, Move, Create/Update Draft, and Send operations.
-    *   **Error Handling (Move specific):** Improved.
-    *   **Error Handling (Send specific):** Populates `lastSendError` in `MessageEntity`.
-    *   **Error Handling (General):** Implement detailed error mapping for each operation. Differentiate between recoverable/non-recoverable errors.
-    *   **Retry Policy:** Use WorkManager's built-in retry mechanisms more effectively. Configure exponential backoff and max retry attempts.
-    *   **Input Data:** Ensure all necessary data for each operation is passed correctly.
+    *   (Existing points remain valid)
+    *   **NEW: Consider Batch Operations:** If APIs support batch operations for marking messages read/deleted/moved, the worker could be enhanced. Otherwise, it will process a queue of individual message operations resulting from a thread action.
 
-4.  **Implement Local Full-Text Search (FTS) (Medium Priority):**
-    *   **A. DB Schema for FTS (`MessageFtsEntity`)**
-    *   **B. Update `AppDatabase.kt` (add FTS table, trigger to populate)**
-    *   **C. Data Population strategy for FTS table.**
-    *   **D. `DefaultMessageRepository.searchMessages` to query local FTS first, then fallback to API if needed/requested.**
+4.  **Implement Local Full-Text Search (FTS) (Medium Priority):** (Details as previously)
 
-5.  **Refine On-Demand Message Body Fetching (Medium Priority):** (Details as before)
-    *   Error handling in `DefaultMessageRepository.getMessageWithBody`.
-    *   Stale body re-fetch strategy.
+5.  **Refine On-Demand Message Body Fetching (Medium Priority):** (Details as previously)
 
-6.  **Address API-Model Discrepancies (Ongoing/As Discovered):** (Details as before)
+6.  **Address API-Model Discrepancies (Ongoing/As Discovered):** (Details as previously)
 
 7.  **Code Health and Maintenance (Ongoing):**
-    *   Review and Reduce Log Spam.
-    *   Resolve/Suppress Lint Warnings.
-    *   **Address `TODO` comments from recent commits.**
-    *   **Database Migration:** Ensure `AppDatabase.version` is incremented and a migration is written for `AttachmentEntity` and `MessageEntity` changes if not already done.
+    *   (Existing points remain valid)
+    *   **Database Migration:** `AppDatabase.version` is now 8. Verified that previous thread-specific migrations are obsolete/removed.
 
 8.  **Enhance API Capabilities and Advanced Synchronization (Longer Term):**
-    *   `MailApiService` Pagination for `getMessagesForFolder`.
-    *   Smart Folder Sync Strategy (e.g., conditional `SKIP_INITIAL_REFRESH` in `MessageRemoteMediator` based on cache recency).
-    *   Conflict Resolution for concurrent modifications.
+    *   (Existing points remain valid)
+    *   **Performance Monitoring for `groupAndMapMessagesToMailThreads`:** Actively monitor and optimize if it becomes a bottleneck.
 
 ## **IV. Soft Spots, Unknowns, and Research Needs (Updated 2024-06-01)**
 
 *   **Soft Spots:**
-    *   **Paging/RemoteMediator Error Handling & Refresh Strategy:** Needs more sophisticated cache-aware refresh logic.
-    *   **`SyncMessageStateWorker.kt` Concurrency & Uniqueness:** Policies seem okay (`SyncMessageState_${accountId}_${messageId}`), but complex interactions with retries and new draft/send operations warrant ongoing observation.
-    *   **Database Transaction Integrity:** Verification of transaction usage, especially with new draft/attachment ops.
-    *   **Gmail `moveMessage` for non-Inbox source folders:** (As previously noted).
-    *   **NEW: Completeness of `MessageDraft` reconstruction in `retrySendMessage`:** Relies heavily on data available in `MessageEntity` and `MessageBodyEntity`. Gaps in CC/BCC/Attachments are current soft spots.
-    *   **NEW: Attachment File Handling:** Local file paths, potential for conflicts, storage management.
+    *   (Existing points remain valid)
+    *   **Performance of `DefaultThreadRepository.groupAndMapMessagesToMailThreads`:** (As noted in Tech Debt).
+    *   **Complexity of `SyncMessageStateWorker` for thread actions:** Managing potentially many individual message operations stemming from a single thread action.
 
-*   **Unknowns (Focus on areas not deeply inspected recently):**
-    *   Detailed implementation nuances of `MicrosoftTokenPersistenceService.kt` and `GoogleTokenPersistenceService.kt`.
-    *   Full error handling and edge case management in API Helpers for *all* implemented operations (send, draft sync, attachment downloads).
+*   **Unknowns (Focus on areas not deeply inspected recently):** (Existing points remain valid)
 
 *   **Research/Investigation Needs:**
-    *   **WorkManager Best Practices for Complex Sync:** Advanced error handling, managing dependencies (e.g., ensuring draft exists before sending), progress/status feedback for multi-step operations (send with attachments).
-    *   **Ktor Client Configuration for Robustness:** Review Ktor client setup for all API calls.
-    *   **Database Performance with FTS.**
-    *   **Secure and efficient local file storage strategy for attachments.**
+    *   (Existing points remain valid)
+    *   **Efficient Batching for DAO/API with Thread Actions:** Investigate best ways to update/sync multiple messages that form a thread without overwhelming the DB or network.
 
-This rewritten `CACHE3.md` should now accurately reflect the project's state post-refactoring,
-delete implementation, Gmail-style thread view, move message implementation, and the recent additions for drafts, attachments, and sending logic, providing an updated roadmap. 
+This rewritten `CACHE3.md` should now accurately reflect the project's state post-refactoring of `DefaultThreadRepository` and the move away from dedicated thread entities. 

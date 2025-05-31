@@ -320,121 +320,103 @@ class DefaultMessageRepository @Inject constructor(
         channelFlow {
             Timber.d("getMessageWithBody called for account $accountId, message $messageId")
 
-            val existingMessageEntity = messageDao.getMessageByIdSuspend(messageId)
-            val existingBodyEntity = messageBodyDao.getMessageBodyByIdSuspend(messageId)
+            // Step 1: Initial DB Load and Emit
+            var existingMessageEntity = messageDao.getMessageByIdSuspend(messageId)
+            var existingBodyEntity = messageBodyDao.getMessageBodyByIdSuspend(messageId)
 
             var messageToSend: Message? = existingMessageEntity?.toDomainModel()?.copy(
                 body = existingBodyEntity?.content,
                 bodyContentType = existingBodyEntity?.contentType
             )
-            // Initial send: Send what we have from DB (could be null, or message with/without body)
-            send(messageToSend)
+            send(messageToSend) // Emit cached state immediately
 
-            if (existingMessageEntity == null || messageToSend?.body.isNullOrEmpty()) {
-                val logReason =
-                    if (existingMessageEntity == null) "MessageEntity not found in DB" else "Message body is null/empty for existing Entity"
-                Timber.d("$logReason for $messageId. Attempting network fetch.")
-
-                val account = accountRepository.getAccountByIdSuspend(accountId)
-                if (account == null) {
-                    Timber.e(
-                        "Account not found for ID: $accountId. Cannot fetch message content for $messageId."
-                    )
-                    close()
-                    return@channelFlow
-                }
-                val providerType = account.providerType.uppercase()
-                val apiService = mailApiServices[providerType]
-                val errorMapper = errorMappers[providerType]
-
-                if (apiService == null || errorMapper == null) {
-                    Timber.e(
-                        "No API service or error mapper for provider: $providerType for $messageId"
-                    )
-                    close()
-                    return@channelFlow
-                }
-
-                try {
-                    val result = apiService.getMessageContent(messageId)
-                    if (result.isSuccess) {
-                        val fetchedMessageFromApi = result.getOrThrow()
-                        Timber.d(
-                            "Successfully fetched message $messageId from API. Body: ${fetchedMessageFromApi.body != null}, ContentType: ${fetchedMessageFromApi.bodyContentType}"
-                        )
-
-                        if (fetchedMessageFromApi.body != null && fetchedMessageFromApi.bodyContentType != null) {
-                            if (existingMessageEntity != null) {
-                                // MessageEntity exists, so we can save MessageBodyEntity and update MessageEntity
-                                val newBodyEntity = MessageBodyEntity(
-                                    messageId = messageId,
-                                    content = fetchedMessageFromApi.body!!,
-                                    contentType = fetchedMessageFromApi.bodyContentType!!,
-                                    lastFetchedTimestamp = System.currentTimeMillis()
-                                )
-                                messageBodyDao.insertOrUpdateMessageBody(newBodyEntity)
-                                Timber.d(
-                                    "Saved/Updated message body in DB for existing MessageEntity $messageId"
-                                )
-
-                                val updatedMessageEntityForSnippet = existingMessageEntity.copy(
-                                    snippet = fetchedMessageFromApi.bodyPreview
-                                        ?: existingMessageEntity.snippet
-                                )
-                                messageDao.insertOrUpdateMessages(
-                                    listOf(
-                                        updatedMessageEntityForSnippet
-                                    )
-                                )
-                                Timber.d(
-                                    "Updated existing MessageEntity $messageId with new snippet."
-                                )
-
-                                messageToSend = updatedMessageEntityForSnippet.toDomainModel().copy(
-                                    body = newBodyEntity.content,
-                                    bodyContentType = newBodyEntity.contentType
-                                )
-                            } else {
-                                // MessageEntity does NOT exist. Send API message directly. DO NOT save MessageBodyEntity without a parent.
-                                Timber.w(
-                                    "Original MessageEntity for $messageId was null. Sending API-fetched message with body. Body will not be persisted in DB standalone."
-                                )
-                                messageToSend = fetchedMessageFromApi // This has the body from API
-                            }
-                            send(messageToSend) // Send the updated or API-fetched message
-                        } else {
-                            Timber.w(
-                                "API fetch for $messageId succeeded but body or contentType was null/empty. Sending previous state."
-                            )
-                            // No new body to send, previous state (messageToSend) was already sent initially.
-                            // If initial messageToSend was null, it stays null. If it was message without body, it stays that way.
-                        }
-                    } else { // apiService.getMessageContent failed
-                        val exception = result.exceptionOrNull()
-                        val errorMessage = errorMapper.mapExceptionToErrorDetails(
-                            exception
-                                ?: Throwable("Unknown error fetching message content from API for $messageId")
-                        ).message
-                        Timber.e(
-                            exception,
-                            "Error fetching message content for $messageId from API: $errorMessage"
-                        )
-                        // No new message to send, previous state (messageToSend) was already sent initially.
-                    }
-                } catch (e: Exception) {
-                    if (e is CancellationException) throw e
-                    Timber.e(
-                        e,
-                        "Exception during network fetch process for $messageId: ${e.message}"
-                    )
-                    // No new message to send, previous state (messageToSend) was already sent initially.
-                }
-            } else {
-                Timber.d(
-                    "Message with body already available in DB for $messageId (sent in initial send). No network fetch needed."
-                )
+            // Step 2: Prepare for Network Fetch (if account/service available)
+            val account = accountRepository.getAccountByIdSuspend(accountId)
+            if (account == null) {
+                Timber.e("Account not found for ID: $accountId. Cannot fetch message content for $messageId.")
+                close() // Close the flow if account is not found
+                return@channelFlow
             }
-            close() // All paths should lead to closing the flow eventually
+
+            val providerType = account.providerType.uppercase()
+            val apiService = mailApiServices[providerType]
+            val errorMapper = errorMappers[providerType]
+
+            if (apiService == null || errorMapper == null) {
+                Timber.e("No API service or error mapper for provider: $providerType for $messageId. Cannot fetch from network.")
+                close() // Close the flow if API service is not found
+                return@channelFlow
+            }
+
+            // Step 3: Perform Network Fetch
+            Timber.d("Attempting network fetch for message $messageId (either cache miss or for potential update).")
+            try {
+                val result = apiService.getMessageContent(messageId)
+                if (result.isSuccess) {
+                    val fetchedMessageFromApi = result.getOrThrow()
+                    Timber.d(
+                        "Successfully fetched message $messageId from API. Body: ${fetchedMessageFromApi.body != null}, ContentType: ${fetchedMessageFromApi.bodyContentType}"
+                    )
+
+                    if (fetchedMessageFromApi.body != null && fetchedMessageFromApi.bodyContentType != null) {
+                        if (existingMessageEntity != null) {
+                            // We have a new body, update DB and emit for existing message
+                            val newBodyEntity = MessageBodyEntity(
+                                messageId = messageId,
+                                content = fetchedMessageFromApi.body!!,
+                                contentType = fetchedMessageFromApi.bodyContentType!!,
+                                lastFetchedTimestamp = System.currentTimeMillis()
+                            )
+                            messageBodyDao.insertOrUpdateMessageBody(newBodyEntity)
+
+                            val messageEntityToSave = existingMessageEntity.copy(
+                                snippet = fetchedMessageFromApi.bodyPreview ?: existingMessageEntity.snippet,
+                                subject = fetchedMessageFromApi.subject ?: existingMessageEntity.subject,
+                                senderName = fetchedMessageFromApi.senderName ?: existingMessageEntity.senderName,
+                                senderAddress = fetchedMessageFromApi.senderAddress ?: existingMessageEntity.senderAddress,
+                                recipientNames = fetchedMessageFromApi.recipientNames ?: existingMessageEntity.recipientNames,
+                                recipientAddresses = fetchedMessageFromApi.recipientAddresses ?: existingMessageEntity.recipientAddresses,
+                                timestamp = fetchedMessageFromApi.timestamp.takeIf { it != 0L } ?: existingMessageEntity.timestamp,
+                                isRead = fetchedMessageFromApi.isRead // API should be source of truth for read state if available
+                                // sentDateTime from API's Message is a String, MessageEntity expects Long.
+                                // This requires parsing similar to what was in the removed parseIso8601DateTimeToLong or in a mapper.
+                                // For now, not updating sentTimestamp here to avoid re-introducing parsing directly.
+                                // Mapper should handle this if API provides sentDateTime.
+                            )
+                            messageDao.insertOrUpdateMessages(listOf(messageEntityToSave))
+                            Timber.d("Saved/Updated message entity and body in DB for $messageId")
+
+                            // Re-fetch from DB to ensure SSoT for the emission
+                            val updatedMessageEntity = messageDao.getMessageByIdSuspend(messageId)
+                            val updatedBodyEntity = messageBodyDao.getMessageBodyByIdSuspend(messageId)
+                            messageToSend = updatedMessageEntity?.toDomainModel()?.copy(
+                                body = updatedBodyEntity?.content,
+                                bodyContentType = updatedBodyEntity?.contentType
+                            )
+                            send(messageToSend) // Send the updated message from DB
+                        } else {
+                            // Message was not in DB (cache miss). Send API-fetched message directly.
+                            // Body will not be persisted as we lack folderId for MessageEntity.
+                            Timber.w("Message $messageId not found in local DB. Sending API-fetched content. Body will not be persisted without folder context.")
+                            messageToSend = fetchedMessageFromApi // This has the body from API directly
+                            send(messageToSend)
+                        }
+                    } else {
+                        Timber.w("API fetch for $messageId succeeded but body or contentType was null/empty. No update to emit beyond cached.")
+                    }
+                } else { // apiService.getMessageContent failed
+                    val exception = result.exceptionOrNull()
+                    val errorMessage = errorMapper.mapExceptionToErrorDetails(
+                        exception ?: Throwable("Unknown error fetching message content from API for $messageId")
+                    ).message
+                    Timber.e(exception, "Error fetching message content for $messageId from API: $errorMessage")
+                }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e // Propagate cancellation
+                Timber.e(e, "Exception during network fetch process for $messageId: ${e.message}")
+            } finally {
+                close() // Close the flow after network attempt (success or failure)
+            }
         }.flowOn(ioDispatcher)
 
     override suspend fun markMessageRead(
@@ -546,7 +528,7 @@ class DefaultMessageRepository @Inject constructor(
 
             // Optimistically update the local database
             appDatabase.withTransaction {
-                messageDao.updateMessageFolderAndNeedsSync(
+                messageDao.updateMessageFolderAndSyncState(
                     messageId = messageId,
                     newFolderId = newFolderId,
                     needsSync = true

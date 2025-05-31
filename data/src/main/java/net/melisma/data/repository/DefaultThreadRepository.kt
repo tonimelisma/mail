@@ -10,7 +10,11 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import net.melisma.core_data.datasource.MailApiService
@@ -25,6 +29,12 @@ import net.melisma.core_data.model.Message
 import net.melisma.core_data.model.ThreadDataState
 import net.melisma.core_data.repository.AccountRepository
 import net.melisma.core_data.repository.ThreadRepository
+import net.melisma.core_db.AppDatabase
+import net.melisma.core_db.dao.MessageDao
+import net.melisma.core_db.entity.MessageEntity
+import net.melisma.data.mapper.toDomainModel
+import net.melisma.data.mapper.toEntity
+import timber.log.Timber
 import java.text.ParseException
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -33,7 +43,7 @@ import java.util.TimeZone
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.cancellation.CancellationException
-import timber.log.Timber
+import androidx.room.withTransaction
 
 @Singleton
 class DefaultThreadRepository @Inject constructor(
@@ -41,7 +51,9 @@ class DefaultThreadRepository @Inject constructor(
     @Dispatcher(MailDispatchers.IO) private val ioDispatcher: CoroutineDispatcher,
     @ApplicationScope private val externalScope: CoroutineScope,
     private val errorMappers: Map<String, @JvmSuppressWildcards ErrorMapperService>,
-    private val accountRepository: AccountRepository // To get account for provider type
+    private val accountRepository: AccountRepository,
+    private val messageDao: MessageDao,
+    private val appDatabase: AppDatabase
 ) : ThreadRepository {
 
     private val TAG = "DefaultThreadRepo"
@@ -50,20 +62,16 @@ class DefaultThreadRepository @Inject constructor(
 
     private var currentTargetAccount: Account? = null
     private var currentTargetFolder: MailFolder? = null
-    private var fetchJob: Job? = null
+    
+    private var collectionJob: Job? = null
+    private var networkFetchJob: Job? = null
 
-    // Number of initial messages to fetch to discover recent thread IDs
-    private val initialMessageFetchCountForThreadDiscovery = 50
-
-    // Max messages to show per thread in the summary list (if API limits, actual count might be less)
-    private val maxMessagesPerThreadInList = 3
+    // Max messages to fetch from API in one go for a folder refresh.
+    private val FOLDER_REFRESH_PAGE_SIZE = 150
 
     init {
         Timber.d(
-            "Initializing DefaultThreadRepository. Injected maps:" +
-                    " mailApiServices keys: ${mailApiServices.keys}, " +
-                    " mailApiServices values: ${mailApiServices.values.joinToString { it.javaClass.name }}, " +
-                    " errorMappers keys: ${errorMappers.keys}"
+            "Initializing DefaultThreadRepository. Injected maps: mailApiServices keys: ${mailApiServices.keys}, errorMappers keys: ${errorMappers.keys}"
         )
     }
 
@@ -73,16 +81,20 @@ class DefaultThreadRepository @Inject constructor(
         activityForRefresh: Activity?
     ) {
         Timber.d(
-            "setTargetFolderForThreads: Account=${account?.username}, Folder=${folder?.displayName}, Job Active: ${fetchJob?.isActive}"
+            "setTargetFolderForThreads: Account=${account?.username}, Folder=${folder?.displayName}, collectionJob Active: ${collectionJob?.isActive}, networkJob Active: ${networkFetchJob?.isActive}"
         )
 
         if (account?.id == currentTargetAccount?.id && folder?.id == currentTargetFolder?.id && _threadDataState.value !is ThreadDataState.Initial) {
-            Timber.d(
-                "setTargetFolderForThreads: Same target and data already loaded/loading. To refresh, call refreshThreads()."
-            )
+            Timber.d("setTargetFolderForThreads: Same target. If data is already loaded, not forcing reload unless refreshThreads() is called.")
+            if (_threadDataState.value is ThreadDataState.Success) {
+                ensureNetworkFetch(account!!, folder!!, isExplicitRefresh = false, isBackgroundCheck = true)
+            }
             return
         }
-        cancelAndClearJob("New target folder for threads: ${folder?.displayName}")
+
+        collectionJob?.cancel(CancellationException("New target folder set for threads: ${folder?.displayName}"))
+        networkFetchJob?.cancel(CancellationException("New target folder set for threads: ${folder?.displayName}, cancelling network job too"))
+        
         currentTargetAccount = account
         currentTargetFolder = folder
 
@@ -91,12 +103,53 @@ class DefaultThreadRepository @Inject constructor(
             Timber.d("setTargetFolderForThreads: Cleared target, state set to Initial.")
             return
         }
+        
+        // Shadowing for non-null access within coroutine scopes
+        val currentAccount = account
+        val currentFolder = folder
+
         _threadDataState.value = ThreadDataState.Loading
-        launchThreadFetchJobInternal(
-            account,
-            folder,
-            isRefresh = false,
-            activity = activityForRefresh
+        
+        collectionJob = externalScope.launch {
+            Timber.d("[${currentFolder.displayName}] Starting to observe MessageDao for account ${currentAccount.id}, folder ${currentFolder.id}")
+            messageDao.getMessagesForFolder(currentAccount.id, currentFolder.id)
+                .map { messageEntities ->
+                    Timber.d("[${currentFolder.displayName}] MessageDao emitted ${messageEntities.size} entities. Grouping into threads.")
+                    groupAndMapMessagesToMailThreads(messageEntities, currentAccount.id, currentFolder.id)
+                }
+                .distinctUntilChanged()
+                .catch { e ->
+                    Timber.e(e, "[${currentFolder.displayName}] Error collecting messages from DAO for threads.")
+                    _threadDataState.value = ThreadDataState.Error("Error loading threads from local cache: ${e.message}")
+                }
+                .collectLatest { mailThreads ->
+                    Timber.i("[${currentFolder.displayName}] Successfully grouped ${mailThreads.size} MailThreads from DB. Emitting Success.")
+                    if (mailThreads.isNotEmpty() || networkFetchJob?.isActive != true) {
+                        _threadDataState.value = ThreadDataState.Success(mailThreads)
+                    } else if (_threadDataState.value !is ThreadDataState.Loading && mailThreads.isEmpty()) {
+                        _threadDataState.value = ThreadDataState.Loading
+                    }
+                    ensureNetworkFetch(currentTargetAccount!!, currentTargetFolder!!, isExplicitRefresh = false, isBackgroundCheck = false)
+                }
+        }
+    }
+    
+    private fun ensureNetworkFetch(account: Account, folder: MailFolder, isExplicitRefresh: Boolean, isBackgroundCheck: Boolean) {
+        if (networkFetchJob?.isActive == true) {
+            Timber.d("[${folder.displayName}] Network fetch job already active. Skipping duplicate call.")
+            return
+        }
+        Timber.d("[${folder.displayName}] Ensuring network fetch. Explicit: $isExplicitRefresh, Background: $isBackgroundCheck")
+        if (!isExplicitRefresh && !isBackgroundCheck && _threadDataState.value is ThreadDataState.Success) {
+             Timber.d("[${folder.displayName}] Data already shown from cache, network fetch will be background.")
+        } else if (!isBackgroundCheck) {
+            _threadDataState.value = ThreadDataState.Loading 
+        }
+
+        networkFetchJob = launchThreadFetchJobInternal(
+            account = account,
+            folder = folder,
+            isRefresh = isExplicitRefresh
         )
     }
 
@@ -108,337 +161,156 @@ class DefaultThreadRepository @Inject constructor(
             _threadDataState.value = ThreadDataState.Error("Cannot refresh: No folder selected.")
             return
         }
-        Timber.d(
-            "refreshThreads called for folder: ${folder.displayName}, Account: ${account.username}"
-        )
-        // Set to loading only if not already loading to avoid UI flicker if refresh is called rapidly
-        if (_threadDataState.value !is ThreadDataState.Loading) {
-            _threadDataState.value = ThreadDataState.Loading
-        }
-        launchThreadFetchJobInternal(account, folder, isRefresh = true, activity = activity)
+        Timber.d("refreshThreads called for folder: ${folder.displayName}, Account: ${account.username}")
+        networkFetchJob?.cancel(CancellationException("User triggered refresh for ${folder.displayName}"))
+        
+        _threadDataState.value = ThreadDataState.Loading 
+        
+        networkFetchJob = launchThreadFetchJobInternal(account, folder, isRefresh = true)
     }
 
     private fun launchThreadFetchJobInternal(
         account: Account,
         folder: MailFolder,
-        isRefresh: Boolean,
-        activity: Activity? // Parameter for future use if auth refresh needs activity
-    ) {
-        cancelAndClearJob("Launching new thread fetch for ${folder.displayName}. Refresh: $isRefresh")
-        Timber.d(
-            "[${folder.displayName}] launchThreadFetchJobInternal for account type: ${account.providerType}"
-        )
+        isRefresh: Boolean
+    ): Job {
+        Timber.i("[${folder.displayName}] Launching Network Thread Fetch Job. isRefresh: $isRefresh")
 
         val providerType = account.providerType.uppercase()
         val apiService = mailApiServices[providerType]
         val errorMapper = errorMappers[providerType]
 
-        Timber.d(
-            "[${folder.displayName}] Using ApiService: ${apiService?.javaClass?.name ?: "NULL"} for provider: $providerType"
-        )
-
         if (apiService == null || errorMapper == null) {
-            val errorMsg =
-                "Unsupported account type: $providerType or missing services for thread fetching."
+            val errorMsg = "Unsupported account type: $providerType or missing services for thread fetching."
             Timber.e(errorMsg)
             _threadDataState.value = ThreadDataState.Error(errorMsg)
-            return
+            return Job().apply { complete() }
         }
 
-        fetchJob = externalScope.launch(ioDispatcher) {
-            Timber.i("[${folder.displayName}] Thread fetch job started. Refresh: $isRefresh")
+        return externalScope.launch(ioDispatcher) {
+            Timber.i("[${folder.displayName}] Network thread fetch job started. isRefresh: $isRefresh")
             try {
-                // Step 1: Fetch initial batch of messages to get their thread IDs
-                Timber.d(
-                    "[${folder.displayName}] Fetching initial messages to discover thread IDs..."
-                )
-                // Ensure selectFields for initial discovery includes "id" and "conversationId" (or provider's equivalent for threadId)
-                val discoverySelectFields = listOfNotNull(
-                    "id",
-                    if (account.providerType.equals(
-                            "GOOGLE",
-                            ignoreCase = true
-                        )
-                    ) "threadId" else "conversationId",
-                    "subject" // Also get subject for logging a more useful initial message
-                )
-
-                val initialMessagesResult = apiService.getMessagesForFolder(
+                val messagesFromApiResult = apiService.getMessagesForFolder(
                     folderId = folder.id,
-                    selectFields = discoverySelectFields,
-                    maxResults = initialMessageFetchCountForThreadDiscovery
+                    selectFields = listOf("id", "threadId", "subject", "snippet", "senderName", "senderAddress", "recipientNames", "recipientAddresses", "timestamp", "sentTimestamp", "isRead", "isStarred", "hasAttachments", "conversationId", "parentFolderId", "from", "toRecipients", "ccRecipients", "bccRecipients", "receivedDateTime"),
+                    maxResults = FOLDER_REFRESH_PAGE_SIZE 
                 )
-                ensureActive() // Check for cancellation
+                ensureActive()
 
-                if (initialMessagesResult.isFailure) {
-                    val details =
-                        errorMapper.mapExceptionToErrorDetails(initialMessagesResult.exceptionOrNull())
-                    Timber.e(
-                        initialMessagesResult.exceptionOrNull(),
-                        "[${folder.displayName}] Error fetching initial messages for thread discovery: ${details.message}"
-                    )
-                    _threadDataState.value =
-                        ThreadDataState.Error("Failed to discover threads: ${details.message}")
-                    return@launch
-                }
+                if (messagesFromApiResult.isSuccess) {
+                    val apiMessages = messagesFromApiResult.getOrThrow()
+                    Timber.i("[${folder.displayName}] Fetched ${apiMessages.size} messages from API for folder ${folder.id}.")
 
-                val initialMessages = initialMessagesResult.getOrThrow()
-                Timber.d(
-                    "[${folder.displayName}] Fetched ${initialMessages.size} initial messages for thread discovery."
-                )
-                if (initialMessages.isNotEmpty()) {
-                    Timber.d(
-                        "[${folder.displayName}] First 5 initial messages (or fewer) for discovery: " +
-                                initialMessages.take(5)
-                                    .joinToString { "MsgID: ${it.id}, ThreadID: ${it.threadId}, Subject: ${it.subject}" })
-                }
-
-                val uniqueThreadIds = initialMessages.mapNotNull { it.threadId }.distinct()
-                Timber.i(
-                    "[${folder.displayName}] Discovered ${uniqueThreadIds.size} unique thread IDs from ${initialMessages.size} initial messages."
-                )
-
-                val fetchedMailThreads = mutableListOf<MailThread>()
-
-                if (uniqueThreadIds.isNotEmpty()) {
-                    // Step 2: For each unique thread ID, fetch its messages and construct a MailThread
-                    val deferredMailThreads = uniqueThreadIds.map { threadId ->
-                        async(ioDispatcher) { // Using ioDispatcher for each API call
-                            ensureActive() // Check before each API call
-                            Timber.d(
-                                "[${folder.displayName}] Fetching messages for ThreadID: $threadId"
-                            )
-
-                            val threadMessagesSelectFields = listOf(
-                                "id", "subject", "sender", "from", "toRecipients",
-                                "receivedDateTime", "sentDateTime", "bodyPreview", "isRead",
-                                if (account.providerType.equals(
-                                        "GOOGLE",
-                                        ignoreCase = true
-                                    )
-                                ) "threadId" else "conversationId"
-                            )
-
-                            val messagesInThreadResult = apiService.getMessagesForThread(
-                                threadId = threadId,
-                                folderId = folder.id, // Pass folderId for context
-                                selectFields = threadMessagesSelectFields,
-                                maxResults = 100 // Fetch up to 100 messages per thread
-                            )
-                            ensureActive()
-
-                            if (messagesInThreadResult.isSuccess) {
-                                val messagesInThread = messagesInThreadResult.getOrThrow()
-                                if (messagesInThread.isNotEmpty()) {
-                                    Timber.d(
-                                        "[${folder.displayName}] Fetched ${messagesInThread.size} messages for ThreadID: $threadId."
-                                    )
-                                    constructMailThread(threadId, messagesInThread, account.id)
-                                } else {
-                                    Timber.w(
-                                        "[${folder.displayName}] No messages found for ThreadID: $threadId, though ID was discovered. Skipping."
-                                    )
-                                    null
-                                }
-                            } else {
-                                val errorDetails =
-                                    errorMapper.mapExceptionToErrorDetails(messagesInThreadResult.exceptionOrNull())
-                                Timber.e(
-                                    messagesInThreadResult.exceptionOrNull(),
-                                    "[${folder.displayName}] Error fetching messages for ThreadID $threadId: ${errorDetails.message}"
-                                )
-                                null
+                    if (apiMessages.isNotEmpty()) {
+                        val messageEntities = apiMessages.map { it.toEntity(account.id, folder.id) }
+                        
+                        appDatabase.withTransaction {
+                            if (isRefresh) {
+                                Timber.i("[${folder.displayName}] Explicit refresh: Clearing old messages from DB for this folder.")
+                                messageDao.deleteMessagesForFolder(account.id, folder.id)
                             }
+                            Timber.d("[${folder.displayName}] Upserting ${messageEntities.size} messages into MessageDao.")
+                            messageDao.insertOrUpdateMessages(messageEntities)
                         }
+                        Timber.i("[${folder.displayName}] Messages saved to DB. DAO Flow will update UI.")
+                    } else {
+                         Timber.i("[${folder.displayName}] No messages returned from API for this folder. If local cache was also empty, UI will show empty state.")
                     }
-                    val results = deferredMailThreads.awaitAll()
-                    fetchedMailThreads.addAll(results.filterNotNull())
-                    Timber.i(
-                        "[${folder.displayName}] Successfully constructed ${fetchedMailThreads.size} MailThread objects."
-                    )
+                    if (_threadDataState.value is ThreadDataState.Loading) {
+                        Timber.d("[${folder.displayName}] Network fetch finished. Trusting DAO flow to update state from Loading if needed.")
+                    }
+
                 } else {
-                    Timber.i(
-                        "[${folder.displayName}] No unique thread IDs discovered. No threads to fetch details for."
-                    )
+                    val exception = messagesFromApiResult.exceptionOrNull()
+                    val errorDetails = errorMapper.mapExceptionToErrorDetails(exception ?: Throwable("Unknown API error"))
+                    Timber.e(exception, "[${folder.displayName}] Error fetching messages from network: ${errorDetails.message}")
+                    if (_threadDataState.value !is ThreadDataState.Success) {
+                         _threadDataState.value = ThreadDataState.Error("Network error: ${errorDetails.message}")
+                    } else {
+                        Timber.w("[${folder.displayName}] Network error but already showing cached data. Error: ${errorDetails.message}")
+                    }
                 }
-
-                if (!isActive) {
-                    Timber.i(
-                        "[${folder.displayName}] Job cancelled after fetching all thread details."
-                    )
-                    return@launch
-                }
-
-                if (fetchedMailThreads.isEmpty() && initialMessages.isNotEmpty() && uniqueThreadIds.isEmpty()) {
-                    Timber.w(
-                        "[${folder.displayName}] No threads constructed. This might be because all discovered messages had null threadIds (e.g. conversationId was null from MS Graph for all items)."
-                    )
-                }
-
-                _threadDataState.value = ThreadDataState.Success(
-                    fetchedMailThreads.sortedByDescending { it.lastMessageDateTime }
-                )
-                Timber.i(
-                    "[${folder.displayName}] Thread fetch job completed. Emitted Success with ${fetchedMailThreads.size} threads."
-                )
-
             } catch (e: CancellationException) {
-                Timber.i(
-                    "[${folder.displayName}] Thread fetch job explicitly cancelled: ${e.message}"
-                )
+                Timber.i("[${folder.displayName}] Network thread fetch job was cancelled. Reason: ${e.message}")
             } catch (e: Exception) {
-                if (isActive) { 
-                    val details = errorMapper.mapExceptionToErrorDetails(e)
-                    Timber.e(
-                        e,
-                        "[${folder.displayName}] Unexpected error in thread fetch job: ${details.message}"
-                    )
-                    _threadDataState.value =
-                        ThreadDataState.Error("Failed to fetch threads: ${details.message}")
+                Timber.e(e, "[${folder.displayName}] Exception during network thread fetch.")
+                if (_threadDataState.value !is ThreadDataState.Success) {
+                    val errorDetails = errorMapper.mapExceptionToErrorDetails(e)
+                    _threadDataState.value = ThreadDataState.Error("Failed to fetch threads: ${errorDetails.message}")
                 } else {
-                    Timber.i(
-                        "[${folder.displayName}] Exception after job cancellation, not updating to error state: ${e.message}"
-                    )
+                     Timber.w("[${folder.displayName}] Exception during network fetch but already showing cached data. Error: ${e.message}")
                 }
             } finally {
-                Timber.d("[${folder.displayName}] Thread fetch job's coroutine scope finished.")
+                Timber.i("[${folder.displayName}] Network thread fetch job finished (was ${if(isActive) "active" else "cancelled/completed"}).")
             }
         }
     }
 
-    private fun constructMailThread(
-        threadId: String,
-        messages: List<Message>,
-        accountId: String
-    ): MailThread? {
-        if (messages.isEmpty()) return null
+    private fun groupAndMapMessagesToMailThreads(
+        messageEntities: List<MessageEntity>,
+        accountId: String,
+        folderIdForContext: String
+    ): List<MailThread> {
+        if (messageEntities.isEmpty()) return emptyList()
 
-        val sortedMessages =
-            messages.sortedByDescending { parseMessageDate(it.receivedDateTime ?: it.sentDateTime) }
-        val latestMessage = sortedMessages.firstOrNull()
-            ?: return null // Handle case where sortedMessages might be empty after filtering (though unlikely here)
+        val threadsMap = messageEntities
+            .filter { !it.threadId.isNullOrBlank() }
+            .groupBy { it.threadId }
 
-        val subject = latestMessage.subject ?: sortedMessages.firstNotNullOfOrNull { it.subject }
-        ?: "(No Subject)"
-        val snippet = latestMessage.bodyPreview ?: ""
+        return threadsMap.mapNotNull { (threadId, messagesInThread) ->
+            if (messagesInThread.isEmpty() || threadId == null) return@mapNotNull null
 
-        val lastMessageDate =
-            parseMessageDate(latestMessage.receivedDateTime ?: latestMessage.sentDateTime)
-
-        val unreadCount = sortedMessages.count { !it.isRead }
-        val totalCount = sortedMessages.size
-
-        val participants = sortedMessages
-            .asSequence() // Use sequence for potentially better performance on multiple operations
-            .mapNotNull { it.senderName?.takeIf { name -> name.isNotBlank() } ?: it.senderAddress }
-            .distinct()
-            .take(3)
-            .toList()
+            val sortedMessages = messagesInThread.sortedByDescending { it.timestamp }
+            val latestMessage = sortedMessages.first()
             
-        val participantsSummary = when {
-            participants.size > 2 -> "${participants.take(2).joinToString(", ")} & more"
-            participants.isNotEmpty() -> participants.joinToString(", ")
-            else -> null
-        }
+            val domainMessages = sortedMessages.map { it.toDomainModel() }
 
-        return MailThread(
-            id = threadId,
-            messages = sortedMessages, 
-            subject = subject,
-            snippet = snippet,
-            lastMessageDateTime = lastMessageDate,
-            participantsSummary = participantsSummary,
-            unreadMessageCount = unreadCount,
-            totalMessageCount = totalCount,
-            accountId = accountId
-        )
-    }
-
-    private fun parseMessageDate(dateTimeString: String?): Date? {
-        if (dateTimeString.isNullOrBlank()) return null
-        val isoFormatters = listOf(
-            SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSSSSS'Z'", Locale.US),
-            SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", Locale.US),
-            SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
-        )
-        for (formatter in isoFormatters) {
-            formatter.timeZone = TimeZone.getTimeZone("UTC")
-            try {
-                return formatter.parse(dateTimeString)
-            } catch (e: ParseException) {
-                // Try next format
-            }
-        }
-        Timber.w("Failed to parse date string for MailThread construction: $dateTimeString")
-        return null
-    }
-
-    private fun cancelAndClearJob(reason: String) {
-        fetchJob?.let {
-            if (it.isActive) {
-                Timber.d(
-                    "Cancelling previous thread fetch job. Reason: $reason. Hash: ${it.hashCode()}"
-                )
-                it.cancel(CancellationException("Job cancelled: $reason"))
-            }
-        }
-        fetchJob = null
-        Timber.d("cancelAndClearJob: Cleared fetchJob. Reason: $reason")
-    }
-
-    override suspend fun markThreadRead(
-        account: Account,
-        threadId: String,
-        isRead: Boolean
-    ): Result<Unit> {
-        Timber.d(
-            "markThreadRead called for thread: $threadId, account: ${account.username}, isRead: $isRead"
-        )
-        val apiService = mailApiServices[account.providerType.uppercase()]
-            ?: return Result.failure(NotImplementedError("markThreadRead not implemented for account ${account.providerType}"))
-
-        val result = apiService.markThreadRead(threadId, isRead)
-        if (result.isSuccess) {
-            _threadDataState.update { currentState ->
-                if (currentState is ThreadDataState.Success) {
-                    val updatedThreads = currentState.threads.map { mailThread ->
-                        if (mailThread.id == threadId) {
-                            val updatedMessages =
-                                mailThread.messages.map { it.copy(isRead = isRead) }
-                            val newUnreadCount =
-                                if (isRead) 0 else mailThread.totalMessageCount // Simplified
-                            mailThread.copy(
-                                messages = updatedMessages,
-                                unreadMessageCount = newUnreadCount
-                                // Removed non-existent isRead = isRead
-                            )
-                        } else mailThread
-                    }
-                    currentState.copy(threads = updatedThreads)
-                } else {
-                    currentState
+            // Create a summary of participants
+            val participantsList = domainMessages
+                .flatMap { 
+                    val senders = listOfNotNull(it.senderName, it.senderAddress?.substringBefore('@'))
+                    val recipients = it.recipientNames.orEmpty() + it.recipientAddresses.orEmpty().mapNotNull { addr -> addr?.substringBefore('@') }
+                    (senders + recipients).filterNotNull().filter { name -> name.isNotBlank() }
                 }
+                .distinct()
+            
+            val participantsSummary = if (participantsList.size > 2) {
+                "${participantsList.take(2).joinToString()}, +${participantsList.size - 2}"
+            } else {
+                participantsList.joinToString()
             }
-        }
-        return result
+
+            MailThread(
+                id = threadId,
+                accountId = accountId,
+                messages = domainMessages,
+                subject = latestMessage.subject ?: domainMessages.mapNotNull { it.subject }.firstOrNull { it.isNotBlank() } ?: "No Subject",
+                snippet = latestMessage.snippet ?: "",
+                lastMessageDateTime = Date(latestMessage.timestamp),
+                totalMessageCount = domainMessages.size,
+                unreadMessageCount = domainMessages.count { !it.isRead },
+                participantsSummary = participantsSummary
+            )
+        }.sortedByDescending { it.lastMessageDateTime?.time }
+    }
+
+    // Methods from ThreadRepository interface - STUB IMPLEMENTATIONS
+    override suspend fun markThreadRead(account: Account, threadId: String, isRead: Boolean): Result<Unit> {
+        Timber.d("markThreadRead called for account ${account.id}, threadId $threadId, isRead $isRead - NOT IMPLEMENTED")
+        // TODO: Implement actual logic:
+        // 1. Get all messages for the threadId from messageDao.
+        // 2. Update their isRead status.
+        // 3. Save them back via messageDao.insertOrUpdateMessages (ensure this handles updates correctly).
+        // 4. Optionally, make an API call to sync this change to the server.
+        return Result.failure(NotImplementedError("markThreadRead is not yet implemented."))
     }
 
     override suspend fun deleteThread(account: Account, threadId: String): Result<Unit> {
-        Timber.d("deleteThread called for thread: $threadId, account: ${account.username}")
-        val apiService = mailApiServices[account.providerType.uppercase()]
-            ?: return Result.failure(NotImplementedError("deleteThread not implemented for account ${account.providerType}"))
-
-        val result = apiService.deleteThread(threadId)
-        if (result.isSuccess) {
-            _threadDataState.update { currentState ->
-                if (currentState is ThreadDataState.Success) {
-                    currentState.copy(threads = currentState.threads.filterNot { it.id == threadId })
-                } else {
-                    currentState
-                }
-            }
-        }
-        return result
+        Timber.d("deleteThread called for account ${account.id}, threadId $threadId - NOT IMPLEMENTED")
+        // TODO: Implement actual logic:
+        // 1. Mark messages in thread as locally deleted / move to trash via API.
+        // 2. Update local DB: messageDao.deleteMessagesByThreadId(accountId, threadId) or update flag.
+        return Result.failure(NotImplementedError("deleteThread is not yet implemented."))
     }
 
     override suspend fun moveThread(
@@ -447,29 +319,25 @@ class DefaultThreadRepository @Inject constructor(
         currentFolderId: String,
         destinationFolderId: String
     ): Result<Unit> {
-        Timber.d(
-            "moveThread called for thread: $threadId, from folder: $currentFolderId, to folder: $destinationFolderId, account: ${account.username}"
-        )
-        val apiService = mailApiServices[account.providerType.uppercase()]
-            ?: return Result.failure(NotImplementedError("moveThread not implemented for account ${account.providerType}"))
+        Timber.d("moveThread called for account ${account.id}, threadId $threadId from $currentFolderId to $destinationFolderId - NOT IMPLEMENTED")
+        // TODO: Implement actual logic:
+        // 1. Call API to move the thread/messages.
+        // 2. Update local DB: update folderId for messages in threadId from currentFolderId to destinationFolderId.
+        return Result.failure(NotImplementedError("moveThread is not yet implemented."))
+    }
 
-        if (currentFolderId.isBlank()) {
-            Timber.e(
-                "moveThread: provided currentFolderId is blank. This is required."
-            )
-            return Result.failure(IllegalArgumentException("currentFolderId cannot be blank."))
-        }
-
-        val result = apiService.moveThread(threadId, currentFolderId, destinationFolderId)
-        if (result.isSuccess) {
-            _threadDataState.update { currentState ->
-                if (currentState is ThreadDataState.Success) {
-                    currentState.copy(threads = currentState.threads.filterNot { it.id == threadId })
-                } else {
-                    currentState
+    companion object {
+        private fun parseIso8601DateTime(dateTimeString: String?): Long? {
+            if (dateTimeString.isNullOrBlank()) return null
+            return try {
+                val sdf = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply {
+                    timeZone = TimeZone.getTimeZone("UTC")
                 }
+                sdf.parse(dateTimeString)?.time
+            } catch (e: Exception) {
+                Timber.w(e, "Failed to parse date-time string: $dateTimeString")
+                null
             }
         }
-        return result
     }
 } 

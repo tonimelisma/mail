@@ -21,7 +21,13 @@ import net.melisma.core_db.entity.MessageBodyEntity
 import net.melisma.core_db.entity.MessageEntity
 
 @Database(
-    entities = [AccountEntity::class, FolderEntity::class, MessageEntity::class, MessageBodyEntity::class, AttachmentEntity::class],
+    entities = [
+        AccountEntity::class, 
+        FolderEntity::class, 
+        MessageEntity::class, 
+        MessageBodyEntity::class, 
+        AttachmentEntity::class
+    ],
     version = 8,
     exportSchema = false // Set to true for production apps for schema migration history
 )
