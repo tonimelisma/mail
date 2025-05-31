@@ -29,6 +29,25 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE messageId = :messageId")
     suspend fun getMessageByIdSuspend(messageId: String): MessageEntity?
 
+    @Query("UPDATE messages SET folderId = :newFolderId, needsSync = :needsSync WHERE messageId = :messageId")
+    suspend fun updateMessageFolderAndNeedsSync(
+        messageId: String,
+        newFolderId: String,
+        needsSync: Boolean
+    )
+
+    // Used by worker after successful API move to update local folderId and clear sync flags
+    @Query("UPDATE messages SET folderId = :newFolderId, needsSync = 0, lastSyncError = NULL WHERE messageId = :messageId")
+    suspend fun updateFolderIdAndClearSyncStateOnSuccess(messageId: String, newFolderId: String)
+
+    @Query("UPDATE messages SET folderId = :folderId, lastSyncError = :errorMessage, needsSync = :needsSync WHERE messageId = :messageId")
+    suspend fun updateFolderIdSyncErrorAndNeedsSync(
+        messageId: String,
+        folderId: String,
+        errorMessage: String,
+        needsSync: Boolean
+    )
+
     @Query("SELECT * FROM messages WHERE accountId = :accountId AND folderId = :folderId ORDER BY timestamp DESC")
     fun getMessagesPagingSource(
         accountId: String,
@@ -48,6 +67,9 @@ interface MessageDao {
 
     @Query("UPDATE messages SET needsSync = 0, lastSyncError = NULL WHERE messageId = :messageId")
     suspend fun clearSyncState(messageId: String)
+
+    @Query("UPDATE messages SET needsSync = 0, lastSyncError = NULL, folderId = :newFolderId WHERE messageId = :messageId")
+    suspend fun clearSyncStateAndSetFolder(messageId: String, newFolderId: String)
 
     @Query("UPDATE messages SET lastSyncError = :errorMessage, needsSync = 1 WHERE messageId = :messageId") // Ensure needsSync is true if error occurs
     suspend fun updateLastSyncError(messageId: String, errorMessage: String)
@@ -70,4 +92,23 @@ interface MessageDao {
 
     @Query("DELETE FROM messages WHERE messageId = :messageId")
     suspend fun deletePermanentlyById(messageId: String)
+
+    @Query("UPDATE messages SET folderId = :newFolderId, needsSync = :needsSync WHERE messageId = :messageId")
+    suspend fun updateMessageFolderAndSyncState(
+        messageId: String,
+        newFolderId: String,
+        needsSync: Boolean
+    )
+
+    @Query("UPDATE messages SET folderId = :newFolderId, needsSync = :needsSync, lastSyncError = :lastSyncError WHERE messageId = :messageId")
+    suspend fun updateMessageFolderSyncStateAndError(
+        messageId: String,
+        newFolderId: String,
+        needsSync: Boolean,
+        lastSyncError: String?
+    )
+
+    // For worker to update folderId and clear sync state on successful API move
+    @Query("UPDATE messages SET folderId = :newFolderId, needsSync = 0, lastSyncError = NULL WHERE messageId = :messageId")
+    suspend fun updateFolderOnMoveSyncSuccess(messageId: String, newFolderId: String)
 } 

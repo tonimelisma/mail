@@ -539,10 +539,66 @@ class DefaultMessageRepository @Inject constructor(
         account: Account,
         messageId: String,
         newFolderId: String
-    ): Result<Unit> {
+    ): Result<Unit> = withContext(ioDispatcher) {
         Timber.tag(TAG)
-            .w("moveMessage called for msg $messageId to folder $newFolderId in account ${account.id}. NOT IMPLEMENTED.")
-        return Result.failure(NotImplementedError("moveMessage not implemented"))
+            .d("moveMessage: msgId=$messageId to newFolderId=$newFolderId for account=${account.id}")
+        var oldFolderId: String? = null
+        try {
+            // First, get the current folderId to pass to the worker for Gmail API requirements
+            val currentMessage = messageDao.getMessageByIdSuspend(messageId)
+            if (currentMessage == null) {
+                Timber.tag(TAG).e("Message $messageId not found. Cannot move.")
+                return@withContext Result.failure(NoSuchElementException("Message $messageId not found"))
+            }
+            oldFolderId = currentMessage.folderId
+
+            if (oldFolderId == newFolderId) {
+                Timber.tag(TAG)
+                    .i("Message $messageId is already in folder $newFolderId. No action taken.")
+                return@withContext Result.success(Unit) // Or a specific result indicating no operation
+            }
+
+            // Optimistically update the local database
+            appDatabase.withTransaction {
+                messageDao.updateMessageFolderAndNeedsSync(
+                    messageId = messageId,
+                    newFolderId = newFolderId,
+                    needsSync = true
+                )
+            }
+            Timber.tag(TAG)
+                .i("Optimistically moved message $messageId to folder $newFolderId, needsSync=true")
+
+            // Enqueue the worker to perform the actual API call
+            enqueueSyncMessageStateWorker(
+                accountId = account.id,
+                messageId = messageId,
+                operationType = SyncMessageStateWorker.OP_MOVE_MESSAGE,
+                newFolderId = newFolderId,
+                oldFolderId = oldFolderId
+            )
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Timber.tag(TAG).e(e, "Error in moveMessage for $messageId to $newFolderId")
+            // If optimistic update failed, try to set sync error on the original record if it exists
+            // The local message's folderId might not have been updated yet if transaction failed.
+            val messageForErrorUpdate = messageDao.getMessageByIdSuspend(messageId)
+            if (messageForErrorUpdate != null) {
+                val errorMessage =
+                    errorMappers[account.providerType.uppercase()]?.mapExceptionToErrorDetails(e)?.message
+                        ?: e.message
+                messageDao.updateLastSyncError(
+                    messageId,
+                    "Optimistic move to $newFolderId failed: $errorMessage"
+                )
+            }
+            Result.failure(
+                Exception(
+                    "Failed to move message $messageId to $newFolderId: ${e.message}",
+                    e
+                )
+            )
+        }
     }
 
     override suspend fun sendMessage(draft: MessageDraft, account: Account): Result<String> {
@@ -606,10 +662,12 @@ class DefaultMessageRepository @Inject constructor(
         messageId: String,
         operationType: String,
         isRead: Boolean? = null,
-        isStarred: Boolean? = null
+        isStarred: Boolean? = null,
+        newFolderId: String? = null,
+        oldFolderId: String? = null
     ) {
         Timber.tag(TAG)
-            .d("Enqueueing SyncMessageStateWorker: Acc=$accountId, Msg=$messageId, Op=$operationType, Read=$isRead, Starred=$isStarred")
+            .d("Enqueueing SyncMessageStateWorker: Acc=$accountId, Msg=$messageId, Op=$operationType, Read=$isRead, Starred=$isStarred, NewFId=$newFolderId, OldFId=$oldFolderId")
 
         val inputDataBuilder = Data.Builder()
             .putString(SyncMessageStateWorker.KEY_ACCOUNT_ID, accountId)
@@ -618,6 +676,18 @@ class DefaultMessageRepository @Inject constructor(
 
         isRead?.let { inputDataBuilder.putBoolean(SyncMessageStateWorker.KEY_IS_READ, it) }
         isStarred?.let { inputDataBuilder.putBoolean(SyncMessageStateWorker.KEY_IS_STARRED, it) }
+        newFolderId?.let {
+            inputDataBuilder.putString(
+                SyncMessageStateWorker.KEY_NEW_FOLDER_ID,
+                it
+            )
+        }
+        oldFolderId?.let {
+            inputDataBuilder.putString(
+                SyncMessageStateWorker.KEY_OLD_FOLDER_ID,
+                it
+            )
+        }
 
         val workRequest = OneTimeWorkRequestBuilder<SyncMessageStateWorker>()
             .setInputData(inputDataBuilder.build())

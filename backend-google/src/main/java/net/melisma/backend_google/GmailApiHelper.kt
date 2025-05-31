@@ -719,88 +719,71 @@ class GmailApiHelper @Inject constructor(
             val addLabelIds = mutableListOf<String>()
             val removeLabelIds = mutableListOf<String>()
 
+            // ARCHIVE is a conceptual folder in UI, not a real label ID to add.
+            // It means removing INBOX and potentially other current folder-like labels.
             if (destinationFolderId.equals("ARCHIVE", ignoreCase = true)) {
-                // Archiving in Gmail typically means removing INBOX and other specific folder-like labels
-                // This could be expanded to remove other user-defined labels if truly mimicking a "move to archive"
-                if (currentFolderId.equals(
-                        GMAIL_LABEL_ID_INBOX,
-                        ignoreCase = true
-                    ) || currentFolderId.isBlank()
-                ) { // If current is inbox or unknown, assume it might be in inbox
-                    removeLabelIds.add(GMAIL_LABEL_ID_INBOX)
+                removeLabelIds.add(GMAIL_LABEL_ID_INBOX) // Always attempt to remove INBOX for archive.
+                if (!currentFolderId.isNullOrBlank() &&
+                    !currentFolderId.equals(GMAIL_LABEL_ID_INBOX, ignoreCase = true) &&
+                    !isSystemLabel(currentFolderId) &&
+                    !currentFolderId.equals("ARCHIVE", ignoreCase = true)
+                ) { // Check against "ARCHIVE" string for current folder
+                    removeLabelIds.add(currentFolderId)
+                    Log.d(
+                        TAG,
+                        "Archiving: also removing current user label '$currentFolderId' for message $messageId"
+                    )
                 }
-                // If it's already in a non-Inbox user label (currentFolderId), and we archive, we might want to remove that too.
-                // For now, simple archive just removes INBOX.
-                Log.d(TAG, "Archiving message $messageId. Will remove INBOX if present.")
-            } else {
-                addLabelIds.add(destinationFolderId) // Add the target folder's label
-                // If moving from INBOX to another specific label (not archive), remove INBOX.
-                if (currentFolderId.equals(
-                        GMAIL_LABEL_ID_INBOX,
-                        ignoreCase = true
-                    ) && !destinationFolderId.equals(GMAIL_LABEL_ID_INBOX, ignoreCase = true)
-                ) {
-                    removeLabelIds.add(GMAIL_LABEL_ID_INBOX)
-                }
-                // More complex scenarios: if moving from UserLabelA to UserLabelB, should UserLabelA be removed?
-                // Gmail allows multiple labels. For a "move" semantic, one might remove the source label.
-                // For now, only INBOX is explicitly removed when moving to another destination.
-                if (currentFolderId.isNotBlank() &&
-                    !currentFolderId.equals(GMAIL_LABEL_ID_INBOX, ignoreCase = true) && // Not INBOX
-                    !currentFolderId.equals(
-                        destinationFolderId,
-                        ignoreCase = true
-                    ) && // Not already the destination
-                    !destinationFolderId.equals("ARCHIVE", ignoreCase = true)
-                ) { // And not archiving
-                    // Potentially remove currentFolderId if it's a user label and we are "moving"
-                    // removeLabelIds.add(currentFolderId)
-                    // Log.d(TAG, "Considering removal of source label '$currentFolderId' for a move.")
-                }
-            }
-
-            // Fallback to original addLabelIds and removeLabelIds if currentLabels logic is commented out
-            val rawGmailMessage = fetchRawGmailMessage(messageId) // Fetch the raw GmailMessage
-
-            if (rawGmailMessage == null) {
-                Log.e(
-                    TAG,
-                    "Failed to fetch message details for $messageId to determine current labels. Aborting move."
-                )
-                return Result.failure(Exception("Failed to fetch message details for $messageId"))
-            }
-
-            val currentLabels: Set<String> = rawGmailMessage.labelIds.toSet()
-
-            val finalAddLabels = addLabelIds.filter { it !in currentLabels }.distinct()
-            val finalRemoveLabels = removeLabelIds.filter { it in currentLabels }.distinct()
-
-            if (finalAddLabels.isEmpty() && finalRemoveLabels.isEmpty()) {
                 Log.d(
                     TAG,
-                    "No actual label changes required for message $messageId to '$destinationFolderId' (from '$currentFolderId'). Already in desired state or no-op."
+                    "Archiving message $messageId. Will remove INBOX and potentially current user label '$currentFolderId'."
+                )
+            } else {
+                addLabelIds.add(destinationFolderId) // Add the target folder's label
+
+                if (!currentFolderId.isNullOrBlank() &&
+                    currentFolderId != destinationFolderId &&
+                    !currentFolderId.equals(
+                        "ARCHIVE",
+                        ignoreCase = true
+                    ) && // Don't remove if current is conceptual ARCHIVE
+                    (currentFolderId.equals(
+                        GMAIL_LABEL_ID_INBOX,
+                        ignoreCase = true
+                    ) || !isSystemLabel(currentFolderId))
+                ) {
+                    removeLabelIds.add(currentFolderId)
+                    Log.d(
+                        TAG,
+                        "Moving from '$currentFolderId' to '$destinationFolderId'. Removing source label."
+                    )
+                }
+            }
+
+            // Deduplicate, as a labelId might be in both add and remove if logic gets complex (e.g. currentFolderId == destinationFolderId initially)
+            val finalAddLabels = addLabelIds.distinct()
+            val finalRemoveLabels = removeLabelIds.distinct()
+                .filterNot { it in finalAddLabels } // ensure a label isn't both added and removed
+
+            if (finalAddLabels.isEmpty() && finalRemoveLabels.isEmpty()) {
+                Log.i(
+                    TAG,
+                    "Move operation for $messageId resulted in no label changes. Skipping API call."
                 )
                 return Result.success(Unit)
             }
 
-            Log.d(
-                TAG,
-                "Message $messageId: Final Add labels: $finalAddLabels, Final Remove labels: $finalRemoveLabels"
-            )
-
             val requestBody = buildJsonObject {
-                if (finalAddLabels.isNotEmpty()) { // Use calculated finalAddLabels
+                if (finalAddLabels.isNotEmpty()) {
                     putJsonArray("addLabelIds") { finalAddLabels.forEach { add(it) } }
                 }
-                if (finalRemoveLabels.isNotEmpty()) { // Use calculated finalRemoveLabels
+                if (finalRemoveLabels.isNotEmpty()) {
                     putJsonArray("removeLabelIds") { finalRemoveLabels.forEach { add(it) } }
                 }
             }
-
             val response: HttpResponse = httpClient.post("$BASE_URL/messages/$messageId/modify") {
-                // Removed explicit Content-Type header. Relying on ContentNegotiation.
                 accept(ContentType.Application.Json)
-                setBody(requestBody) // Send JsonObject directly
+                setBody(requestBody)
             }
 
             if (response.status.isSuccess()) {
@@ -832,6 +815,20 @@ class GmailApiHelper @Inject constructor(
             val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
             Result.failure(Exception(mappedDetails.message, e))
         }
+    }
+
+    private fun isSystemLabel(labelId: String): Boolean {
+        return labelId.uppercase() in listOf(
+            GMAIL_LABEL_ID_INBOX,
+            GMAIL_LABEL_ID_SENT,
+            GMAIL_LABEL_ID_DRAFT,
+            GMAIL_LABEL_ID_TRASH,
+            GMAIL_LABEL_ID_SPAM,
+            GMAIL_LABEL_ID_IMPORTANT,
+            GMAIL_LABEL_ID_STARRED,
+            // GMAIL_LABEL_ID_ARCHIVE is not a real label, so it's not listed here.
+            // "UNREAD" is a state, not a folder label to be removed during a move.
+        )
     }
 
     override suspend fun getMessagesForThread(

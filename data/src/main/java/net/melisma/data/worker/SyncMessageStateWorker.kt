@@ -39,11 +39,14 @@ class SyncMessageStateWorker @AssistedInject constructor(
         const val KEY_OPERATION_TYPE = "OPERATION_TYPE"
         const val KEY_IS_READ = "IS_READ" // For MarkRead/Unread
         const val KEY_IS_STARRED = "IS_STARRED" // For Star/Unstar
+        const val KEY_NEW_FOLDER_ID = "NEW_FOLDER_ID" // For MoveMessage
+        const val KEY_OLD_FOLDER_ID = "OLD_FOLDER_ID" // For MoveMessage
 
         // Operation Types
         const val OP_MARK_READ = "MARK_READ"
         const val OP_STAR_MESSAGE = "STAR_MESSAGE"
         const val OP_DELETE_MESSAGE = "DELETE_MESSAGE" // Added delete operation type
+        const val OP_MOVE_MESSAGE = "MOVE_MESSAGE"
     }
 
     private val TAG = "SyncMsgStateWorker"
@@ -140,6 +143,24 @@ class SyncMessageStateWorker @AssistedInject constructor(
                     mailApiService.deleteMessage(messageId) // mailApiService is now guaranteed non-null
                 }
 
+                OP_MOVE_MESSAGE -> {
+                    val newFolderId = inputData.getString(KEY_NEW_FOLDER_ID)
+                    val oldFolderId =
+                        inputData.getString(KEY_OLD_FOLDER_ID) // oldFolderId is needed by Gmail API
+                    if (newFolderId.isNullOrBlank()) {
+                        Timber.tag(TAG)
+                            .e("Missing newFolderId for $OP_MOVE_MESSAGE on $messageId. Failing.")
+                        // Not updating sync error state here as it's a worker input data issue.
+                        return@withContext ListenableWorker.Result.failure()
+                    }
+                    Timber.tag(TAG)
+                        .d("Executing $OP_MOVE_MESSAGE for $messageId from '$oldFolderId' to '$newFolderId' using $providerType API")
+                    // Note: currentFolderId (oldFolderId) might be null if it's not available or relevant for some providers,
+                    // but MailApiService.moveMessage expects it. It can be an empty string if truly not applicable from source.
+                    // The repository should ideally always try to provide it.
+                    mailApiService.moveMessage(messageId, oldFolderId ?: "", newFolderId)
+                }
+
                 else -> {
                     Timber.tag(TAG).w("Unknown operation type: $operationType")
                     return@withContext ListenableWorker.Result.failure()
@@ -173,6 +194,22 @@ class SyncMessageStateWorker @AssistedInject constructor(
                     Timber.tag(TAG)
                         .d("Permanently deleting message $messageId from local DB after successful API deletion.")
                     messageDao.deletePermanentlyById(messageId)
+                } else if (operationType == OP_MOVE_MESSAGE) {
+                    val newFolderId = inputData.getString(KEY_NEW_FOLDER_ID)
+                    if (newFolderId.isNullOrBlank()) {
+                        // This should ideally not happen if validated before API call
+                        Timber.tag(TAG)
+                            .e("New folder ID is blank in processApiResult for move operation. Message $messageId sync state might be inconsistent.")
+                        // Update error state to reflect this problem
+                        messageDao.updateLastSyncError(
+                            messageId,
+                            "Move success, but new folder ID missing post-API call."
+                        )
+                    } else {
+                        Timber.tag(TAG)
+                            .d("Updating folderId to $newFolderId and clearing sync state for message $messageId after successful API move.")
+                        messageDao.updateFolderIdAndClearSyncStateOnSuccess(messageId, newFolderId)
+                    }
                 } else {
                     Timber.tag(TAG)
                         .d("Clearing needsSync and lastSyncError for message $messageId.")
@@ -189,9 +226,34 @@ class SyncMessageStateWorker @AssistedInject constructor(
                 .w("API call failed for $messageId, operation $operationType: $errorMessage")
             // For delete operations, if the API fails, we do not want to clear isLocallyDeleted.
             // We want to keep it marked for deletion attempt later. updateSyncErrorState will just set error and keep needsSync.
-            val shouldClearLocalDeletionMarker =
-                false // For OP_DELETE_MESSAGE, a failure means we keep the marker
-            updateSyncErrorState(messageId, errorMessage, shouldClearLocalDeletionMarker)
+            // For move operations, if API fails, we want to revert folderId to oldFolderId if possible.
+            if (operationType == OP_MOVE_MESSAGE) {
+                val oldFolderId = inputData.getString(KEY_OLD_FOLDER_ID)
+                val newFolderId = inputData.getString(KEY_NEW_FOLDER_ID) // for error message
+                if (!oldFolderId.isNullOrBlank()) {
+                    Timber.tag(TAG)
+                        .w("Move operation failed for $messageId. Reverting folderId to $oldFolderId and setting error. Target was $newFolderId")
+                    messageDao.updateFolderIdSyncErrorAndNeedsSync(
+                        messageId = messageId,
+                        folderId = oldFolderId,
+                        errorMessage = "API move to '$newFolderId' failed: $errorMessage".take(500),
+                        needsSync = true
+                    )
+                } else {
+                    // Fallback if oldFolderId is not available (should be rare)
+                    Timber.tag(TAG)
+                        .w("Move operation failed for $messageId. OldFolderId not available. Updating error on current (new) folderId $newFolderId")
+                    messageDao.updateLastSyncError(
+                        messageId,
+                        "API move to '$newFolderId' failed: $errorMessage".take(500)
+                    )
+                }
+            } else {
+                // Existing logic for other operations (like delete)
+                val shouldClearLocalDeletionMarker =
+                    false // For OP_DELETE_MESSAGE, a failure means we keep the marker
+                updateSyncErrorState(messageId, errorMessage, shouldClearLocalDeletionMarker)
+            }
 
             // TODO: Implement more sophisticated retry logic based on error type
             // For now, always retry for API failures.
