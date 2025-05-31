@@ -2,12 +2,12 @@ package net.melisma.backend_google.errors
 
 // Remove unused GoogleAuthenticationException if it's no longer directly mapped
 // import net.melisma.backend_google.auth.GoogleAuthenticationException
-import android.util.Log
 import io.mockk.every
 import io.mockk.mockkStatic
 import io.mockk.unmockkStatic
 import org.junit.AfterClass
 import org.junit.BeforeClass
+import timber.log.Timber
 
 /**
  * Unit tests for the GoogleErrorMapper implementation.
@@ -21,22 +21,18 @@ class GoogleErrorMapperTest {
         @BeforeClass
         @JvmStatic
         fun beforeClass() {
-            // Mock Log statically for the entire test class
-            mockkStatic(Log::class)
-            every { Log.v(any(), any()) } returns 0
-            every { Log.d(any(), any()) } returns 0
-            every { Log.i(any(), any()) } returns 0
-            every { Log.w(any(), any<String>()) } returns 0
-            every { Log.w(any(), any<String>(), any()) } returns 0
-            every { Log.e(any(), any()) } returns 0
-            every { Log.e(any(), any(), any()) } returns 0
+            // Mock Timber statically for the entire test class
+            mockkStatic(Timber::class)
+            // Assuming Timber is set up to not actually log during tests or uses a TestTree.
+            // If not, you might need to provide a specific TestTree or mock specific tag calls.
+            // every { Timber.v(any(), any()) } returns Unit // etc. for other levels if needed
         }
 
         @AfterClass
         @JvmStatic
         fun afterClass() {
-            // Unmock Log after all tests in the class have run
-            unmockkStatic(Log::class)
+            // Unmock Timber after all tests in the class have run
+            unmockkStatic(Timber::class)
         }
     }
 

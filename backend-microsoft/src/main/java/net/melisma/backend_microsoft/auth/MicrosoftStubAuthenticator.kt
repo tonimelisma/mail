@@ -5,18 +5,16 @@ import android.accounts.Account
 import android.accounts.AccountAuthenticatorResponse
 import android.content.Context
 import android.os.Bundle
-import android.util.Log
+import timber.log.Timber
 
 class MicrosoftStubAuthenticator(private val context: Context) :
     AbstractAccountAuthenticator(context) {
-
-    private val TAG = "MicrosoftStubAuth"
 
     override fun editProperties(
         response: AccountAuthenticatorResponse?,
         accountType: String?
     ): Bundle? {
-        Log.d(TAG, "editProperties called for accountType: $accountType - Not supported")
+        Timber.d("editProperties called for accountType: $accountType - Not supported")
         throw UnsupportedOperationException()
     }
 
@@ -27,7 +25,7 @@ class MicrosoftStubAuthenticator(private val context: Context) :
         requiredFeatures: Array<out String>?,
         options: Bundle?
     ): Bundle? {
-        Log.d(TAG, "addAccount called for accountType: $accountType - App handles this.")
+        Timber.d("addAccount called for accountType: $accountType - App handles this.")
         return null
     }
 
@@ -36,7 +34,7 @@ class MicrosoftStubAuthenticator(private val context: Context) :
         account: Account?,
         options: Bundle?
     ): Bundle? {
-        Log.d(TAG, "confirmCredentials called for account: ${account?.name} - Not supported")
+        Timber.d("confirmCredentials called for account: ${account?.name} - Not supported")
         return null
     }
 
@@ -46,7 +44,7 @@ class MicrosoftStubAuthenticator(private val context: Context) :
         authTokenType: String?,
         options: Bundle?
     ): Bundle? {
-        Log.d(TAG, "getAuthToken called for account: ${account?.name} - Not supported by stub")
+        Timber.d("getAuthToken called for account: ${account?.name} - Not supported by stub")
         val result = Bundle()
         result.putString(
             android.accounts.AccountManager.KEY_ERROR_MESSAGE,
@@ -56,7 +54,7 @@ class MicrosoftStubAuthenticator(private val context: Context) :
     }
 
     override fun getAuthTokenLabel(authTokenType: String?): String? {
-        Log.d(TAG, "getAuthTokenLabel called for authTokenType: $authTokenType")
+        Timber.d("getAuthTokenLabel called for authTokenType: $authTokenType")
         return authTokenType
     }
 
@@ -66,7 +64,7 @@ class MicrosoftStubAuthenticator(private val context: Context) :
         authTokenType: String?,
         options: Bundle?
     ): Bundle? {
-        Log.d(TAG, "updateCredentials called for account: ${account?.name} - Not supported")
+        Timber.d("updateCredentials called for account: ${account?.name} - Not supported")
         return null
     }
 
@@ -75,7 +73,7 @@ class MicrosoftStubAuthenticator(private val context: Context) :
         account: Account?,
         features: Array<out String>?
     ): Bundle? {
-        Log.d(TAG, "hasFeatures called for account: ${account?.name} - Not supported")
+        Timber.d("hasFeatures called for account: ${account?.name} - Not supported")
         val result = Bundle()
         result.putBoolean(android.accounts.AccountManager.KEY_BOOLEAN_RESULT, false)
         return result

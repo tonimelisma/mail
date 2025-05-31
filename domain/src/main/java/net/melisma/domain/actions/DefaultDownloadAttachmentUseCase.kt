@@ -1,7 +1,7 @@
 package net.melisma.domain.actions
 
-import android.util.Log
 import net.melisma.core_data.repository.MessageRepository
+import timber.log.Timber
 import javax.inject.Inject
 
 class DefaultDownloadAttachmentUseCase @Inject constructor(
@@ -12,8 +12,7 @@ class DefaultDownloadAttachmentUseCase @Inject constructor(
         messageId: String,
         attachmentId: String
     ): Result<ByteArray> {
-        Log.d(
-            "DefaultDownloadAttachmentUseCase",
+        Timber.d(
             "Invoked for accountId: $accountId, messageId: $messageId, attachmentId: $attachmentId"
         )
         // return messageRepository.downloadAttachment(accountId, messageId, attachmentId) // Actual call commented out for stub

@@ -53,6 +53,9 @@ dependencies {
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler) // Use ksp instead of kapt for Hilt
 
+    // Logging
+    implementation(libs.timber)
+
     // Testing
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

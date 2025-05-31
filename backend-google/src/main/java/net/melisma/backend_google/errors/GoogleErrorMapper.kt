@@ -1,6 +1,5 @@
 package net.melisma.backend_google.errors
 
-import android.util.Log
 import net.melisma.core_data.errors.ErrorMapperService
 import net.melisma.core_data.model.ErrorDetails
 import net.openid.appauth.AuthorizationException
@@ -8,15 +7,14 @@ import java.io.IOException
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.cancellation.CancellationException
+import timber.log.Timber
 
 @Singleton
 class GoogleErrorMapper @Inject constructor() : ErrorMapperService {
 
-    private val TAG = "GoogleErrorMapper"
-
     override fun mapExceptionToErrorDetails(exception: Throwable?): ErrorDetails {
-        Log.w(
-            TAG,
+        Timber.w(
+            exception,
             "mapExceptionToErrorDetails: ${exception?.let { it::class.java.simpleName + " - " + it.message } ?: "null"}"
         )
 

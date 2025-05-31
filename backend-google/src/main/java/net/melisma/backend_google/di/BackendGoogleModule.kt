@@ -2,7 +2,6 @@ package net.melisma.backend_google.di
 
 import android.accounts.AccountManager
 import android.content.Context
-import android.util.Log
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -50,8 +49,7 @@ annotation class UnauthenticatedGoogleHttpClient
 object BackendGoogleModule {
 
     init {
-        Log.d(
-            "BackendGoogleModule",
+        Timber.d(
             "BackendGoogleModule (object with @Provides) initialized by Hilt"
         )
     }
@@ -65,7 +63,7 @@ object BackendGoogleModule {
         googleAuthManager: GoogleAuthManager,
         activeGoogleAccountHolder: ActiveGoogleAccountHolder
     ): HttpClient {
-        Log.d("BackendGoogleModule", "Providing Google HTTPClient with Auth plugin setup.")
+        Timber.d("Providing Google HTTPClient with Auth plugin setup.")
         return HttpClient(OkHttp) {
             engine {
                 config {
@@ -87,7 +85,7 @@ object BackendGoogleModule {
                     override fun log(message: String) {
                         // Only log the first non-blank line of the message
                         val firstLine = message.lines().firstOrNull { it.isNotBlank() } ?: message
-                        Log.d("KtorGoogleClient", firstLine)
+                        Timber.tag("KtorGoogleClient").d(firstLine)
                     }
                 }
             }
@@ -135,7 +133,7 @@ object BackendGoogleModule {
     @Singleton
     @UnauthenticatedGoogleHttpClient
     fun provideUnauthenticatedGoogleHttpClient(json: Json): HttpClient {
-        Log.d("BackendGoogleModule", "Providing Unauthenticated Google HTTPClient")
+        Timber.d("Providing Unauthenticated Google HTTPClient")
         return HttpClient(OkHttp) {
             engine {
                 config {
@@ -155,7 +153,7 @@ object BackendGoogleModule {
                 logger = object : io.ktor.client.plugins.logging.Logger {
                     override fun log(message: String) {
                         val firstLine = message.lines().firstOrNull { it.isNotBlank() } ?: message
-                        Log.d("KtorUnauthGoogleClient", firstLine)
+                        Timber.tag("KtorUnauthGoogleClient").d(firstLine)
                     }
                 }
             }
@@ -168,7 +166,7 @@ object BackendGoogleModule {
         @GoogleHttpClient httpClient: HttpClient,
         googleErrorMapper: GoogleErrorMapper
     ): GmailApiHelper {
-        Log.d("BackendGoogleModule", "Providing GmailApiHelper")
+        Timber.d("Providing GmailApiHelper")
         return GmailApiHelper(httpClient, googleErrorMapper)
     }
 
@@ -177,7 +175,7 @@ object BackendGoogleModule {
     @IntoMap
     @StringKey("GOOGLE")
     fun provideGmailApiAsMailService(gmailApiHelper: GmailApiHelper): MailApiService {
-        Log.i("BackendGoogleModule", "Providing MailApiService for 'GOOGLE' key via @Provides")
+        Timber.i("Providing MailApiService for 'GOOGLE' key via @Provides")
         return gmailApiHelper
     }
 
@@ -188,7 +186,7 @@ object BackendGoogleModule {
     fun provideGoogleErrorMapperService(
         googleErrorMapper: GoogleErrorMapper
     ): ErrorMapperService {
-        Log.i("BackendGoogleModule", "Providing ErrorMapperService for 'GOOGLE' key via @Provides")
+        Timber.i("Providing ErrorMapperService for 'GOOGLE' key via @Provides")
         return googleErrorMapper
     }
 
@@ -196,14 +194,14 @@ object BackendGoogleModule {
     @Provides
     @Singleton
     fun provideApplicationContext(@ApplicationContext context: Context): Context {
-        Log.d("BackendGoogleModule", "Providing ApplicationContext")
+        Timber.d("Providing ApplicationContext")
         return context
     }
 
     @Provides
     @Singleton
     fun provideAccountManager(@ApplicationContext context: Context): AccountManager { // Ensure @ApplicationContext if directly using it here for safety
-        Log.d("BackendGoogleModule", "Providing AccountManager")
+        Timber.d("Providing AccountManager")
         return AccountManager.get(context)
     }
 }

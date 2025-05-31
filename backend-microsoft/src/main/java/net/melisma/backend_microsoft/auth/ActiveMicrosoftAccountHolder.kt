@@ -1,18 +1,17 @@
 package net.melisma.backend_microsoft.auth
 
 import android.content.Context
-import android.util.Log
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import javax.inject.Inject
 import javax.inject.Singleton
+import timber.log.Timber
 
 @Singleton
 class ActiveMicrosoftAccountHolder @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
-    private val TAG = "ActiveMsAccountHolder"
     private val PREFS_NAME = "ActiveMicrosoftAccountPrefs"
     private val KEY_ACTIVE_ID = "activeMicrosoftAccountId"
 
@@ -24,8 +23,7 @@ class ActiveMicrosoftAccountHolder @Inject constructor(
     init {
         val persistedAccountId = sharedPreferences.getString(KEY_ACTIVE_ID, null)
         _activeMicrosoftAccountId.value = persistedAccountId
-        Log.d(
-            TAG,
+        Timber.d(
             "ActiveMicrosoftAccountHolder: Initialized. Loaded persisted accountId: ${
                 persistedAccountId?.take(
                     5
@@ -36,8 +34,7 @@ class ActiveMicrosoftAccountHolder @Inject constructor(
 
     // This should be called when a Microsoft account becomes active in the app
     fun setActiveMicrosoftAccountId(accountId: String?) {
-        Log.d(
-            TAG,
+        Timber.d(
             "ActiveMicrosoftAccountHolder: setActiveMicrosoftAccountId called with accountId=${
                 accountId?.take(5)
             }... Old value: ${_activeMicrosoftAccountId.value?.take(5)}..."
@@ -48,14 +45,12 @@ class ActiveMicrosoftAccountHolder @Inject constructor(
             with(sharedPreferences.edit()) {
                 if (accountId == null) {
                     remove(KEY_ACTIVE_ID)
-                    Log.i(
-                        TAG,
+                    Timber.i(
                         "ActiveMicrosoftAccountHolder: Active Microsoft account cleared and preference removed"
                     )
                 } else {
                     putString(KEY_ACTIVE_ID, accountId)
-                    Log.i(
-                        TAG,
+                    Timber.i(
                         "ActiveMicrosoftAccountHolder: Active Microsoft account ID set to: ${
                             accountId.take(5)
                         }... and persisted."
@@ -64,8 +59,7 @@ class ActiveMicrosoftAccountHolder @Inject constructor(
                 apply()
             }
         } else {
-            Log.d(
-                TAG,
+            Timber.d(
                 "ActiveMicrosoftAccountHolder: Active account ID unchanged, not re-persisting."
             )
         }
@@ -73,8 +67,7 @@ class ActiveMicrosoftAccountHolder @Inject constructor(
 
     fun getActiveMicrosoftAccountIdValue(): String? {
         val accountId = _activeMicrosoftAccountId.value
-        // Log.d( // This log can be noisy, consider removing or making it trace level for regular use
-        //     TAG,
+        // Timber.d( // This log can be noisy, consider removing or making it trace level for regular use
         //     "ActiveMicrosoftAccountHolder: getActiveMicrosoftAccountIdValue returning: ${
         //         accountId?.take(5)
         //     }..."

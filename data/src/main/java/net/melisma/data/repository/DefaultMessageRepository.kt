@@ -1,7 +1,6 @@
 package net.melisma.data.repository
 
 import android.app.Activity
-import android.util.Log
 import androidx.paging.ExperimentalPagingApi
 import androidx.paging.Pager
 import androidx.paging.PagingConfig
@@ -82,14 +81,14 @@ class DefaultMessageRepository @Inject constructor(
     private var syncJob: Job? = null
 
     init {
-        Log.d(TAG, "Initializing DefaultMessageRepository with MessageDao.")
+        Timber.d("Initializing DefaultMessageRepository with MessageDao.")
     }
 
     override fun observeMessagesForFolder(
         accountId: String,
         folderId: String
     ): Flow<List<Message>> {
-        Log.d(TAG, "observeMessagesForFolder: accountId=$accountId, folderId=$folderId")
+        Timber.d("observeMessagesForFolder: accountId=$accountId, folderId=$folderId")
         return messageDao.getMessagesForFolder(accountId, folderId)
             .map { entities -> entities.map { it.toDomainModel() } }
     }
@@ -100,8 +99,7 @@ class DefaultMessageRepository @Inject constructor(
         folderId: String,
         pagingConfig: PagingConfig
     ): Flow<PagingData<Message>> {
-        Log.d(
-            TAG,
+        Timber.d(
             "getMessagesPager for accountId=$accountId, folderId=$folderId. PagingConfig: pageSize=${pagingConfig.pageSize}, prefetchDistance=${pagingConfig.prefetchDistance}, initialLoadSize=${pagingConfig.initialLoadSize}"
         )
         val account = runBlocking(ioDispatcher) {
@@ -111,8 +109,7 @@ class DefaultMessageRepository @Inject constructor(
         val apiServiceForMediator = mailApiServices[providerType]
             ?: mailApiServices.values.firstOrNull()
             ?: throw IllegalStateException("No MailApiService available for MessageRemoteMediator. Account: $accountId, Provider: $providerType")
-        Log.d(
-            TAG,
+        Timber.d(
             "getMessagesPager: Using API service for provider: $providerType for RemoteMediator."
         )
 
@@ -141,34 +138,29 @@ class DefaultMessageRepository @Inject constructor(
     ) {
         val newAccountId = account?.id
         val newFolderId = folder?.id
-        Log.d(
-            TAG,
+        Timber.d(
             "setTargetFolder: Account=${account?.username}($newAccountId), Folder=${folder?.displayName}($newFolderId). CurrentTarget: ${currentTargetAccount?.id}/$currentTargetFolderId. SyncJob Active: ${syncJob?.isActive}"
         )
 
         if (newAccountId == currentTargetAccount?.id && newFolderId == currentTargetFolderId) {
-            Log.d(
-                TAG,
+            Timber.d(
                 "setTargetFolder: Same target account/folder. No change to repository\'s internal target."
             )
             return
         }
 
-        Timber.tag(TAG)
-            .i("setTargetFolder: Target changed. Previous: ${currentTargetAccount?.id}/${currentTargetFolderId}, New: $newAccountId/$newFolderId. Clearing old sync job if any.")
+        Timber.i("setTargetFolder: Target changed. Previous: ${currentTargetAccount?.id}/${currentTargetFolderId}, New: $newAccountId/$newFolderId. Clearing old sync job if any.")
         cancelAndClearSyncJob("Target folder changed in setTargetFolder. New: $newAccountId/$newFolderId")
         currentTargetAccount = account
         currentTargetFolderId = newFolderId
 
         if (newAccountId == null || newFolderId == null) {
             _messageSyncState.value = MessageSyncState.Idle
-            Log.d(
-                TAG,
+            Timber.d(
                 "setTargetFolder: Target cleared (account or folder is null). Sync state set to Idle."
             )
         } else {
-            Log.d(
-                TAG,
+            Timber.d(
                 "setTargetFolder: Updated currentTargetAccount and currentTargetFolderId. Paging system will handle data loading for $newAccountId/$newFolderId via getMessagesPager."
             )
         }
@@ -199,7 +191,7 @@ class DefaultMessageRepository @Inject constructor(
     ) {
         val account = accountRepository.getAccountById(accountId).firstOrNull()
         if (account == null) {
-            Log.e(TAG, "syncMessagesForFolder: Account not found for id $accountId")
+            Timber.e("syncMessagesForFolder: Account not found for id $accountId")
             _messageSyncState.value =
                 MessageSyncState.SyncError(accountId, folderId, "Account not found for sync.")
             return
@@ -214,22 +206,19 @@ class DefaultMessageRepository @Inject constructor(
         explicitRequest: Boolean = false
     ) {
         val logPagingBehavior = "Paging Sync (RemoteMediator)"
-        Log.d(
-            TAG,
+        Timber.d(
             "[${account.id}/$folderId] syncMessagesForFolderInternal called. isRefresh: $isRefresh, explicitRequest: $explicitRequest, currentSyncJob active: ${syncJob?.isActive}. ViewModel should rely on $logPagingBehavior for list loading."
         )
 
         if (syncJob?.isActive == true && !isRefresh && !explicitRequest) {
-            Log.d(
-                TAG,
+            Timber.d(
                 "syncMessagesForFolderInternal: Sync job already active for $folderId and not an explicit forced refresh. Ignoring call."
             )
             return
         }
 
         val logPrefix = "[${account.id}/$folderId]"
-        Timber.tag(TAG)
-            .d("$logPrefix syncMessagesForFolderInternal for account type: ${account.providerType}")
+        Timber.d("$logPrefix syncMessagesForFolderInternal for account type: ${account.providerType}")
 
         cancelAndClearSyncJob("$logPrefix Launching new message sync. Refresh: $isRefresh, Explicit: $explicitRequest")
 
@@ -240,7 +229,7 @@ class DefaultMessageRepository @Inject constructor(
         if (apiService == null || errorMapper == null) {
             val errorMsg =
                 "Unsupported account type: $providerType or missing services for message sync."
-            Log.e(TAG, errorMsg)
+            Timber.e(errorMsg)
             _messageSyncState.value = MessageSyncState.SyncError(account.id, folderId, errorMsg)
             return
         }
@@ -248,7 +237,7 @@ class DefaultMessageRepository @Inject constructor(
         _messageSyncState.value = MessageSyncState.Syncing(account.id, folderId)
 
         syncJob = externalScope.launch(ioDispatcher) {
-            Log.i(TAG, "$logPrefix Message sync job started. Refresh: $isRefresh")
+            Timber.i("$logPrefix Message sync job started. Refresh: $isRefresh")
             try {
                 val currentMaxResults = 100
                 val messagesResult = apiService.getMessagesForFolder(
@@ -294,9 +283,9 @@ class DefaultMessageRepository @Inject constructor(
                 )
             } finally {
                 if (isActive) {
-                    Log.d(TAG, "$logPrefix Sync job finished.")
+                    Timber.d("$logPrefix Sync job finished.")
                 } else {
-                    Log.d(TAG, "$logPrefix Sync job finished (was cancelled or completed).")
+                    Timber.d("$logPrefix Sync job finished (was cancelled or completed).")
                 }
             }
         }
@@ -304,7 +293,7 @@ class DefaultMessageRepository @Inject constructor(
 
     private fun cancelAndClearSyncJob(reason: String) {
         if (syncJob?.isActive == true) {
-            Timber.tag(TAG).d("Cancelling active sync job: $reason")
+            Timber.d("Cancelling active sync job: $reason")
             syncJob?.cancel(CancellationException(reason))
         }
         syncJob = null
@@ -314,13 +303,13 @@ class DefaultMessageRepository @Inject constructor(
         messageId: String,
         accountId: String
     ): Flow<Message?> {
-        Timber.tag(TAG).d("getMessageDetails: accountId=$accountId, messageId=$messageId")
+        Timber.d("getMessageDetails: accountId=$accountId, messageId=$messageId")
         return getMessageWithBody(accountId, messageId)
     }
 
     private fun getMessageWithBody(accountId: String, messageId: String): Flow<Message?> =
         channelFlow {
-            Log.d(TAG, "getMessageWithBody called for account $accountId, message $messageId")
+            Timber.d("getMessageWithBody called for account $accountId, message $messageId")
 
             val existingMessageEntity = messageDao.getMessageByIdSuspend(messageId)
             val existingBodyEntity = messageBodyDao.getMessageBodyByIdSuspend(messageId)
@@ -335,12 +324,11 @@ class DefaultMessageRepository @Inject constructor(
             if (existingMessageEntity == null || messageToSend?.body.isNullOrEmpty()) {
                 val logReason =
                     if (existingMessageEntity == null) "MessageEntity not found in DB" else "Message body is null/empty for existing Entity"
-                Log.d(TAG, "$logReason for $messageId. Attempting network fetch.")
+                Timber.d("$logReason for $messageId. Attempting network fetch.")
 
                 val account = accountRepository.getAccountByIdSuspend(accountId)
                 if (account == null) {
-                    Log.e(
-                        TAG,
+                    Timber.e(
                         "Account not found for ID: $accountId. Cannot fetch message content for $messageId."
                     )
                     close()
@@ -351,8 +339,7 @@ class DefaultMessageRepository @Inject constructor(
                 val errorMapper = errorMappers[providerType]
 
                 if (apiService == null || errorMapper == null) {
-                    Log.e(
-                        TAG,
+                    Timber.e(
                         "No API service or error mapper for provider: $providerType for $messageId"
                     )
                     close()
@@ -363,8 +350,7 @@ class DefaultMessageRepository @Inject constructor(
                     val result = apiService.getMessageContent(messageId)
                     if (result.isSuccess) {
                         val fetchedMessageFromApi = result.getOrThrow()
-                        Log.d(
-                            TAG,
+                        Timber.d(
                             "Successfully fetched message $messageId from API. Body: ${fetchedMessageFromApi.body != null}, ContentType: ${fetchedMessageFromApi.bodyContentType}"
                         )
 
@@ -378,8 +364,7 @@ class DefaultMessageRepository @Inject constructor(
                                     lastFetchedTimestamp = System.currentTimeMillis()
                                 )
                                 messageBodyDao.insertOrUpdateMessageBody(newBodyEntity)
-                                Log.d(
-                                    TAG,
+                                Timber.d(
                                     "Saved/Updated message body in DB for existing MessageEntity $messageId"
                                 )
 
@@ -392,8 +377,7 @@ class DefaultMessageRepository @Inject constructor(
                                         updatedMessageEntityForSnippet
                                     )
                                 )
-                                Log.d(
-                                    TAG,
+                                Timber.d(
                                     "Updated existing MessageEntity $messageId with new snippet."
                                 )
 
@@ -403,16 +387,14 @@ class DefaultMessageRepository @Inject constructor(
                                 )
                             } else {
                                 // MessageEntity does NOT exist. Send API message directly. DO NOT save MessageBodyEntity without a parent.
-                                Log.w(
-                                    TAG,
+                                Timber.w(
                                     "Original MessageEntity for $messageId was null. Sending API-fetched message with body. Body will not be persisted in DB standalone."
                                 )
                                 messageToSend = fetchedMessageFromApi // This has the body from API
                             }
                             send(messageToSend) // Send the updated or API-fetched message
                         } else {
-                            Log.w(
-                                TAG,
+                            Timber.w(
                                 "API fetch for $messageId succeeded but body or contentType was null/empty. Sending previous state."
                             )
                             // No new body to send, previous state (messageToSend) was already sent initially.
@@ -424,25 +406,22 @@ class DefaultMessageRepository @Inject constructor(
                             exception
                                 ?: Throwable("Unknown error fetching message content from API for $messageId")
                         ).message
-                        Log.e(
-                            TAG,
-                            "Error fetching message content for $messageId from API: $errorMessage",
-                            exception
+                        Timber.e(
+                            exception,
+                            "Error fetching message content for $messageId from API: $errorMessage"
                         )
                         // No new message to send, previous state (messageToSend) was already sent initially.
                     }
                 } catch (e: Exception) {
                     if (e is CancellationException) throw e
-                    Log.e(
-                        TAG,
-                        "Exception during network fetch process for $messageId: ${e.message}",
-                        e
+                    Timber.e(
+                        e,
+                        "Exception during network fetch process for $messageId: ${e.message}"
                     )
                     // No new message to send, previous state (messageToSend) was already sent initially.
                 }
             } else {
-                Log.d(
-                    TAG,
+                Timber.d(
                     "Message with body already available in DB for $messageId (sent in initial send). No network fetch needed."
                 )
             }
@@ -454,14 +433,12 @@ class DefaultMessageRepository @Inject constructor(
         messageId: String,
         isRead: Boolean
     ): Result<Unit> = withContext(ioDispatcher) {
-        Timber.tag(TAG)
-            .d("markMessageRead: msgId=$messageId, isRead=$isRead, account=${account.id}")
+        Timber.d("markMessageRead: msgId=$messageId, isRead=$isRead, account=${account.id}")
         try {
             appDatabase.withTransaction {
                 messageDao.updateReadState(messageId, isRead, needsSync = true)
             }
-            Timber.tag(TAG)
-                .i("Optimistically marked message $messageId as isRead=$isRead, needsSync=true")
+            Timber.i("Optimistically marked message $messageId as isRead=$isRead, needsSync=true")
             enqueueSyncMessageStateWorker(
                 accountId = account.id,
                 messageId = messageId,
@@ -470,7 +447,7 @@ class DefaultMessageRepository @Inject constructor(
             )
             Result.success(Unit)
         } catch (e: Exception) {
-            Timber.tag(TAG).e(e, "Error in markMessageRead for $messageId")
+            Timber.e(e, "Error in markMessageRead for $messageId")
             val errorDetails =
                 errorMappers[account.providerType.uppercase()]?.mapExceptionToErrorDetails(e)
             Result.failure(Exception(errorDetails?.message ?: e.message, e))
@@ -482,14 +459,12 @@ class DefaultMessageRepository @Inject constructor(
         messageId: String,
         isStarred: Boolean
     ): Result<Unit> = withContext(ioDispatcher) {
-        Timber.tag(TAG)
-            .d("starMessage: msgId=$messageId, isStarred=$isStarred, account=${account.id}")
+        Timber.d("starMessage: msgId=$messageId, isStarred=$isStarred, account=${account.id}")
         try {
             appDatabase.withTransaction {
                 messageDao.updateStarredState(messageId, isStarred, needsSync = true)
             }
-            Timber.tag(TAG)
-                .i("Optimistically starred message $messageId as isStarred=$isStarred, needsSync=true")
+            Timber.i("Optimistically starred message $messageId as isStarred=$isStarred, needsSync=true")
             enqueueSyncMessageStateWorker(
                 accountId = account.id,
                 messageId = messageId,
@@ -498,7 +473,7 @@ class DefaultMessageRepository @Inject constructor(
             )
             Result.success(Unit)
         } catch (e: Exception) {
-            Timber.tag(TAG).e(e, "Error in starMessage for $messageId")
+            Timber.e(e, "Error in starMessage for $messageId")
             val errorDetails =
                 errorMappers[account.providerType.uppercase()]?.mapExceptionToErrorDetails(e)
             Result.failure(Exception(errorDetails?.message ?: e.message, e))
@@ -509,8 +484,7 @@ class DefaultMessageRepository @Inject constructor(
         account: Account,
         messageId: String
     ): Result<Unit> = withContext(ioDispatcher) {
-        Timber.tag(TAG)
-            .d("deleteMessage: msgId=$messageId, account=${account.id}")
+        Timber.d("deleteMessage: msgId=$messageId, account=${account.id}")
         try {
             appDatabase.withTransaction {
                 messageDao.markAsLocallyDeleted(
@@ -519,8 +493,7 @@ class DefaultMessageRepository @Inject constructor(
                     needsSync = true
                 )
             }
-            Timber.tag(TAG)
-                .i("Optimistically marked message $messageId as locally deleted, needsSync=true")
+            Timber.i("Optimistically marked message $messageId as locally deleted, needsSync=true")
 
             enqueueSyncMessageStateWorker(
                 accountId = account.id,
@@ -529,7 +502,7 @@ class DefaultMessageRepository @Inject constructor(
             )
             Result.success(Unit)
         } catch (e: Exception) {
-            Timber.tag(TAG).e(e, "Error in deleteMessage for $messageId")
+            Timber.e(e, "Error in deleteMessage for $messageId")
             val currentMessage = messageDao.getMessageByIdSuspend(messageId)
             if (currentMessage != null && !currentMessage.isLocallyDeleted) {
                 val errorMessage =
@@ -546,21 +519,19 @@ class DefaultMessageRepository @Inject constructor(
         messageId: String,
         newFolderId: String
     ): Result<Unit> = withContext(ioDispatcher) {
-        Timber.tag(TAG)
-            .d("moveMessage: msgId=$messageId to newFolderId=$newFolderId for account=${account.id}")
+        Timber.d("moveMessage: msgId=$messageId to newFolderId=$newFolderId for account=${account.id}")
         var oldFolderId: String? = null
         try {
             // First, get the current folderId to pass to the worker for Gmail API requirements
             val currentMessage = messageDao.getMessageByIdSuspend(messageId)
             if (currentMessage == null) {
-                Timber.tag(TAG).e("Message $messageId not found. Cannot move.")
+                Timber.e("Message $messageId not found. Cannot move.")
                 return@withContext Result.failure(NoSuchElementException("Message $messageId not found"))
             }
             oldFolderId = currentMessage.folderId
 
             if (oldFolderId == newFolderId) {
-                Timber.tag(TAG)
-                    .i("Message $messageId is already in folder $newFolderId. No action taken.")
+                Timber.i("Message $messageId is already in folder $newFolderId. No action taken.")
                 return@withContext Result.success(Unit) // Or a specific result indicating no operation
             }
 
@@ -572,8 +543,7 @@ class DefaultMessageRepository @Inject constructor(
                     needsSync = true
                 )
             }
-            Timber.tag(TAG)
-                .i("Optimistically moved message $messageId to folder $newFolderId, needsSync=true")
+            Timber.i("Optimistically moved message $messageId to folder $newFolderId, needsSync=true")
 
             // Enqueue the worker to perform the actual API call
             enqueueSyncMessageStateWorker(
@@ -585,7 +555,7 @@ class DefaultMessageRepository @Inject constructor(
             )
             Result.success(Unit)
         } catch (e: Exception) {
-            Timber.tag(TAG).e(e, "Error in moveMessage for $messageId to $newFolderId")
+            Timber.e(e, "Error in moveMessage for $messageId to $newFolderId")
             // If optimistic update failed, try to set sync error on the original record if it exists
             // The local message's folderId might not have been updated yet if transaction failed.
             val messageForErrorUpdate = messageDao.getMessageByIdSuspend(messageId)
@@ -660,10 +630,10 @@ class DefaultMessageRepository @Inject constructor(
                     sentFolderId = "SENT" // Default sent folder
                 )
 
-                Log.d(TAG, "Message queued for sending with ID: $messageId")
+                Timber.d("Message queued for sending with ID: $messageId")
                 Result.success(messageId)
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to queue message for sending", e)
+                Timber.e(e, "Failed to queue message for sending")
                 Result.failure(e)
             }
         }
@@ -675,8 +645,7 @@ class DefaultMessageRepository @Inject constructor(
     ): Flow<List<Attachment>> {
         return withContext(ioDispatcher) {
             try {
-                Log.d(
-                    TAG,
+                Timber.d(
                     "getMessageAttachments called for accountId: $accountId, messageId: $messageId"
                 )
 
@@ -713,7 +682,7 @@ class DefaultMessageRepository @Inject constructor(
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error getting message attachments", e)
+                Timber.e(e, "Error getting message attachments")
                 flowOf(emptyList())
             }
         }
@@ -735,7 +704,7 @@ class DefaultMessageRepository @Inject constructor(
             try {
                 val account = accountRepository.getAccountByIdSuspend(accountId)
                 if (account == null) {
-                    Log.e(TAG, "Account not found for ID: $accountId")
+                    Timber.e("Account not found for ID: $accountId")
                     return@withContext Result.failure(IllegalArgumentException("Account not found"))
                 }
 
@@ -806,10 +775,10 @@ class DefaultMessageRepository @Inject constructor(
                     timestamp = currentTime
                 )
 
-                Log.d(TAG, "Draft created with ID: $draftId")
+                Timber.d("Draft created with ID: $draftId")
                 Result.success(message)
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to create draft message", e)
+                Timber.e(e, "Failed to create draft message")
                 Result.failure(e)
             }
         }
@@ -824,14 +793,14 @@ class DefaultMessageRepository @Inject constructor(
             try {
                 val account = accountRepository.getAccountByIdSuspend(accountId)
                 if (account == null) {
-                    Log.e(TAG, "Account not found for ID: $accountId")
+                    Timber.e("Account not found for ID: $accountId")
                     return@withContext Result.failure(IllegalArgumentException("Account not found"))
                 }
 
                 // Check if draft exists
                 val existingDraft = messageDao.getMessageByIdSuspend(messageId)
                 if (existingDraft == null || !existingDraft.isDraft) {
-                    Log.e(TAG, "Draft message not found or not a draft: $messageId")
+                    Timber.e("Draft message not found or not a draft: $messageId")
                     return@withContext Result.failure(IllegalArgumentException("Draft not found"))
                 }
 
@@ -886,10 +855,10 @@ class DefaultMessageRepository @Inject constructor(
                     timestamp = currentTime
                 )
 
-                Log.d(TAG, "Draft updated: $messageId")
+                Timber.d("Draft updated: $messageId")
                 Result.success(message)
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to update draft message", e)
+                Timber.e(e, "Failed to update draft message")
                 Result.failure(e)
             }
         }
@@ -900,8 +869,7 @@ class DefaultMessageRepository @Inject constructor(
         query: String,
         folderId: String?
     ): Flow<List<Message>> {
-        Log.d(
-            TAG,
+        Timber.d(
             "searchMessages called for account: $accountId, query: '$query', folder: $folderId. Not implemented for full DB search."
         )
         return flowOf(emptyList())
@@ -918,8 +886,7 @@ class DefaultMessageRepository @Inject constructor(
         draftData: String? = null,
         sentFolderId: String? = null
     ) {
-        Timber.tag(TAG)
-            .d("Enqueueing SyncMessageStateWorker: Acc=$accountId, Msg=$messageId, Op=$operationType, Read=$isRead, Starred=$isStarred, NewFId=$newFolderId, OldFId=$oldFolderId")
+        Timber.d("Enqueueing SyncMessageStateWorker: Acc=$accountId, Msg=$messageId, Op=$operationType, Read=$isRead, Starred=$isStarred, NewFId=$newFolderId, OldFId=$oldFolderId")
 
         val inputDataBuilder = Data.Builder()
             .putString(SyncMessageStateWorker.KEY_ACCOUNT_ID, accountId)
@@ -959,8 +926,7 @@ class DefaultMessageRepository @Inject constructor(
             .build()
 
         workManager.enqueue(workRequest)
-        Timber.tag(TAG)
-            .i("SyncMessageStateWorker enqueued for message $messageId, operation $operationType.")
+        Timber.i("SyncMessageStateWorker enqueued for message $messageId, operation $operationType.")
     }
 
     // Overloaded method that accepts Account
@@ -1005,14 +971,13 @@ class DefaultMessageRepository @Inject constructor(
                         )
                     }
                     attachmentDao.insertAttachments(attachmentEntities)
-                    Log.d(
-                        TAG,
+                    Timber.d(
                         "Stored ${attachmentEntities.size} attachments for message $messageId"
                     )
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to fetch attachments for message $messageId", e)
+            Timber.e(e, "Failed to fetch attachments for message $messageId")
         }
     }
 }

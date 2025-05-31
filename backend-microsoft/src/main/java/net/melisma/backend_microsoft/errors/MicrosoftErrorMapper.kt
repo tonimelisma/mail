@@ -1,6 +1,5 @@
 package net.melisma.backend_microsoft.errors
 
-import android.util.Log
 import com.microsoft.identity.client.exception.MsalClientException
 import com.microsoft.identity.client.exception.MsalDeclinedScopeException
 import com.microsoft.identity.client.exception.MsalException
@@ -17,6 +16,7 @@ import java.net.UnknownHostException
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.cancellation.CancellationException
+import timber.log.Timber
 
 /**
  * Microsoft-specific implementation of [ErrorMapperService].
@@ -24,8 +24,6 @@ import kotlin.coroutines.cancellation.CancellationException
  */
 @Singleton
 class MicrosoftErrorMapper @Inject constructor() : ErrorMapperService {
-
-    private val TAG = "MicrosoftErrorMapper"
 
     /**
      * Maps an HTTP status code and response body to a user-friendly error message.
@@ -36,7 +34,7 @@ class MicrosoftErrorMapper @Inject constructor() : ErrorMapperService {
      * @return A user-friendly error message
      */
     fun mapHttpError(statusCode: Int, errorBody: String): Exception {
-        Log.w(TAG, "Mapping HTTP error: $statusCode - $errorBody")
+        Timber.w("Mapping HTTP error: $statusCode - $errorBody")
         val errorMessage = when (statusCode) {
             401 -> "Authentication failed. Please sign in again."
             403 -> "You don't have permission to access this resource."
@@ -56,10 +54,9 @@ class MicrosoftErrorMapper @Inject constructor() : ErrorMapperService {
      * @return A user-friendly error message
      */
     fun mapExceptionToError(exception: Exception): Exception {
-        Log.w(
-            TAG,
-            "Mapping exception to error: ${exception.javaClass.simpleName} - ${exception.message}",
-            exception
+        Timber.w(
+            exception,
+            "Mapping exception to error: ${exception.javaClass.simpleName} - ${exception.message}"
         )
         val errorMessage = when (exception) {
             is ClientRequestException -> "Error connecting to Microsoft services (${exception.response.status.value})."
@@ -118,8 +115,8 @@ class MicrosoftErrorMapper @Inject constructor() : ErrorMapperService {
     }
 
     override fun mapExceptionToErrorDetails(exception: Throwable?): ErrorDetails {
-        Log.w(
-            TAG,
+        Timber.w(
+            exception,
             "mapExceptionToErrorDetails: ${exception?.let { it::class.java.simpleName + " - " + it.message } ?: "null"}"
         )
 
@@ -177,8 +174,8 @@ class MicrosoftErrorMapper @Inject constructor() : ErrorMapperService {
     }
 
     fun mapAuthExceptionToUserMessage(exception: Throwable?): String {
-        Log.w(
-            TAG,
+        Timber.w(
+            exception,
             "mapAuthExceptionToUserMessage (legacy): ${exception?.let { it::class.java.simpleName + " - " + it.message } ?: "null"}"
         )
         return mapExceptionToErrorDetails(exception).message
