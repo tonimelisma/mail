@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Mail App</string>
+    <string name="app_name">Mail</string>
     <string name="app_name_google_account">Melisma Mail (Google)</string>
     <string name="app_name_microsoft_account">Melisma Mail (Microsoft)</string>
     <string name="unknown_user">Unknown User</string>

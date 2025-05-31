@@ -35,10 +35,11 @@ dependencyResolutionManagement {
 
 rootProject.name = "Mail"
 // Include all modules in the project build
-include(":app")
+include(":mail")
 include(":core-data")
 include(":backend-microsoft")
 include(":backend-google")  // New Google backend module
 include(":data")
 include(":domain") // Add the new domain module
 include(":core-db") // Add new module
+include(":calendar")
