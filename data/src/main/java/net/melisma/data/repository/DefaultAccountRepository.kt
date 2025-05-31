@@ -664,10 +664,13 @@ class DefaultAccountRepository @Inject constructor(
                 "Failed to save $providerType account ${account.username} to DB: ${failure.message}"
             )
 
-            val errorCode = if (failure.errorType is Enum<*>) {
-                (failure.errorType as Enum<*>).name
+            val errorTypeVal = failure.errorType // Explicitly store to help linter
+
+            @Suppress("SimplifyBooleanExpression") // Try different suppression key
+            val errorCode = if (errorTypeVal != null && errorTypeVal is Enum<*>) {
+                (errorTypeVal as Enum<*>).name
             } else {
-                failure.errorType?.toString() ?: "DB_SAVE_ERROR"
+                errorTypeVal?.toString() ?: "DB_SAVE_ERROR"
             }
 
             val errorDetails = ErrorDetails(
@@ -814,10 +817,10 @@ class DefaultAccountRepository @Inject constructor(
         }
     }
 
-    override suspend fun getAccountByIdNonFlow(accountId: String): Account? {
-        Timber.tag(TAG).d("getAccountByIdNonFlow called for accountId: $accountId")
+    override suspend fun getAccountByIdSuspend(accountId: String): Account? {
+        Timber.tag(TAG).d("getAccountByIdSuspend called for accountId: $accountId")
         val entity =
-            accountDao.getAccountByIdNonFlow(accountId) // Assuming DAO has this non-flow method
+            accountDao.getAccountByIdSuspend(accountId)
         return entity?.toDomainAccount()
     }
 }

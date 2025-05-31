@@ -21,7 +21,7 @@ interface AccountRepository {
      * @param accountId The ID of the account to retrieve.
      * @return The Account object if found, or null otherwise.
      */
-    suspend fun getAccountByIdNonFlow(accountId: String): Account?
+    suspend fun getAccountByIdSuspend(accountId: String): Account?
 
     /**
      * Initiates the sign-in process for the given provider.

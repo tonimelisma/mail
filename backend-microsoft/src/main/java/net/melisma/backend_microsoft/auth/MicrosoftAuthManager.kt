@@ -397,7 +397,7 @@ class MicrosoftAuthManager @Inject constructor(
                         "MSAL client not initialized."
                     )
                 )
-            )
+            ).isSuccess // Consume the result of trySend, though not strictly needed here
             close()
             return@callbackFlow
         }
@@ -408,96 +408,78 @@ class MicrosoftAuthManager @Inject constructor(
             .withCallback(object : AuthenticationCallback {
                 override fun onSuccess(authenticationResult: IAuthenticationResult) {
                     Timber.tag(TAG).i(
-                        "signInInteractive: Success. Account: ${authenticationResult.account.username}, ID: ${
+                        "signInInteractive: MSAL Success. Account: ${authenticationResult.account.username}, ID: ${
                             authenticationResult.account.id?.take(5)
                         }..."
                     )
                     Timber.tag(TAG)
                         .d("Granted scopes from MSAL: ${authenticationResult.scope?.joinToString()}")
 
-                    // Log refresh token availability (MSAL might not expose it directly)
-                    // MSAL typically handles refresh tokens internally.
-                    // We can check if the IAuthenticationResult contains any information related to it,
-                    // or if a new refresh token was issued. However, direct access is unlikely.
-                    // For now, logging the entire authenticationResult for inspection.
-                    Timber.tag(TAG).d("AuthenticationResult details: $authenticationResult")
-                    // You might need to inspect the authenticationResult object structure
-                    // or MSAL documentation to find specific refresh token indicators if any are available.
-
-                    // Verify all requested scopes were granted
-                    val requestedScopesSet = scopes.toSet()
-                    val grantedScopesSet = authenticationResult.scope?.toSet() ?: emptySet()
-
-                    if (!grantedScopesSet.containsAll(requestedScopesSet)) {
-                        Timber.tag(TAG).w(
-                            "signInInteractive: Not all requested scopes were granted. Requested: $requestedScopesSet, Granted: $grantedScopesSet"
-                        )
+                    val msalAccount = authenticationResult.account
+                    val accountId = msalAccount.id ?: run {
+                        Timber.tag(TAG)
+                            .e("signInInteractive: MSAL success but account ID is null. This is unexpected.")
                         trySend(
                             AuthenticationResultWrapper.Error(
                                 MsalClientException(
-                                    "declined_scopes", // Custom error code for declined/missing scopes
-                                    "Not all requested permissions were granted by the user."
+                                    "null_account_id",
+                                    "MSAL returned success with a null account ID."
                                 )
                             )
-                        )
+                        ).isSuccess
                         close()
                         return
                     }
 
-                    Timber.tag(TAG).i("All requested scopes have been granted.")
+                    // --- Critical Synchronous Updates ---
+                    activeMicrosoftAccountHolder.setActiveMicrosoftAccountId(accountId)
+                    _msalAccounts.value = _msalAccounts.value.let { currentList ->
+                        if (currentList.any { it.id == accountId }) {
+                            currentList.map { if (it.id == accountId) msalAccount else it }
+                        } else {
+                            currentList + msalAccount
+                        }
+                    }
+                    Timber.tag(TAG)
+                        .i("signInInteractive: Active account ID set and _msalAccounts updated for ${msalAccount.username}.")
+                    // --- End Critical Synchronous Updates ---
 
-                    externalScope.launch(ioDispatcher) { // Ensure persistence is on IO dispatcher
-                        val displayNameFromClaims =
-                            authenticationResult.account.claims?.get("name") as? String
+                    val managedAccount =
+                        ManagedMicrosoftAccount.fromIAccount(msalAccount, authenticationResult)
+
+                    val sendSuccessResult = trySend(
+                        AuthenticationResultWrapper.Success(
+                            managedAccount,
+                            authenticationResult
+                        )
+                    )
+                    if (!sendSuccessResult.isSuccess) {
+                        Timber.tag(TAG)
+                            .w("signInInteractive: Failed to send AuthenticationResultWrapper.Success to flow collector.")
+                        // Flow might be closed if collector cancelled, error already propagated by close()
+                    }
+
+                    // --- Asynchronous Non-Critical Updates (Persistence) ---
+                    externalScope.launch(ioDispatcher) {
+                        Timber.tag(TAG)
+                            .d("signInInteractive: Starting background persistence for ${msalAccount.username}.")
+                        val displayNameFromClaims = msalAccount.claims?.get("name") as? String
                         val saveResult = tokenPersistenceService.saveAccountInfo(
-                            msalAccount = authenticationResult.account,
+                            msalAccount = msalAccount,
                             displayNameFromClaims = displayNameFromClaims
                         )
                         if (saveResult is PersistenceResult.Success) {
                             Timber.tag(TAG)
-                                .i("Account info (identifiers) saved via TokenPersistenceService for ${authenticationResult.account.username}")
-                            // Add to our internal list of MSAL accounts
-                            _msalAccounts.value = _msalAccounts.value.let { currentList ->
-                                if (currentList.any { it.id == authenticationResult.account.id }) {
-                                    currentList.map { if (it.id == authenticationResult.account.id) authenticationResult.account else it }
-                                } else {
-                                    currentList + authenticationResult.account
-                                }
-                            }
-                            activeMicrosoftAccountHolder.setActiveMicrosoftAccountId(
-                                authenticationResult.account.id
-                            ) // Set active account on successful save
-                            val managedAccount = ManagedMicrosoftAccount.fromIAccount(
-                                authenticationResult.account,
-                                authenticationResult
-                            )
-                            trySend(
-                                AuthenticationResultWrapper.Success(
-                                    managedAccount,
-                                    authenticationResult
-                                )
-                            )
+                                .i("signInInteractive: Account info persistence successful for ${msalAccount.username}.")
                         } else {
                             @Suppress("UNCHECKED_CAST")
                             val specificFailure =
                                 saveResult as PersistenceResult.Failure<PersistenceErrorType>
                             Timber.tag(TAG).e(
                                 specificFailure.cause,
-                                "Failed to save account info for ${authenticationResult.account.username}: ${specificFailure.errorType}, Msg: ${specificFailure.message}"
+                                "signInInteractive: Account info persistence failed for ${msalAccount.username}: ${specificFailure.errorType}, Msg: ${specificFailure.message}. The account is already active."
                             )
-                            // Even if persistence fails, the MSAL auth succeeded.
-                            // We might want to convey this specific error.
-                            // For now, let's treat MSAL success as overall success but log persistence error.
-                            val managedAccount = ManagedMicrosoftAccount.fromIAccount(
-                                authenticationResult.account,
-                                authenticationResult
-                            )
-                            trySend(
-                                AuthenticationResultWrapper.Success(
-                                    managedAccount,
-                                    authenticationResult
-                                )
-                            )
+                            // TODO: Consider scheduling a retry for persistence or notifying a sync component.
                         }
                     }
                 }
@@ -635,17 +617,54 @@ class MicrosoftAuthManager @Inject constructor(
         }
     }
 
-    // TEMPORARILY SIMPLIFIED TO ISOLATE BUILD ERRORS
-    suspend fun signOut(accountId: String): SignOutResultWrapper = withContext(ioDispatcher) {
+    // Helper for local cleanup, to be called within a coroutine context (e.g., on ioDispatcher)
+    private suspend fun performLocalSignOutCleanup(accountIdToClear: String, reason: String) {
         Timber.tag(TAG)
-            .d("signOut: Refactoring with CompletableDeferred for accountId: ${accountId.take(5)}...")
+            .i("performLocalSignOutCleanup: Attempting for account $accountIdToClear due to $reason.")
+        try {
+            // This call is intended to clear data from persistence.
+            // The removeAccountFromManager = true flag *should* ideally trigger necessary updates
+            // in MicrosoftTokenPersistenceService if it's designed to manage lists or notify manager.
+            // However, to be absolutely sure MicrosoftAuthManager's own state is clean,
+            // we update _msalAccounts and activeMicrosoftAccountHolder explicitly here.
+            tokenPersistenceService.clearAccountData(
+                accountIdToClear,
+                removeAccountFromManager = true
+            )
+
+            _msalAccounts.value = _msalAccounts.value.filterNot { it.id == accountIdToClear }
+            if (activeMicrosoftAccountHolder.getActiveMicrosoftAccountIdValue() == accountIdToClear) {
+                activeMicrosoftAccountHolder.setActiveMicrosoftAccountId(null)
+                Timber.tag(TAG)
+                    .i("performLocalSignOutCleanup: Cleared active account holder for $accountIdToClear.")
+            }
+            Timber.tag(TAG)
+                .i("performLocalSignOutCleanup: Completed for account $accountIdToClear.")
+
+        } catch (e: Exception) {
+            Timber.tag(TAG).e(
+                e,
+                "performLocalSignOutCleanup: Failed for account $accountIdToClear during $reason cleanup."
+            )
+            // Log this specific cleanup failure, but don't rethrow,
+            // as the SignOutResultWrapper will carry the primary sign-out error.
+        }
+    }
+
+    // Updated signOut method - making it more robust as per CACHE2.md item.
+    suspend fun signOut(accountId: String): SignOutResultWrapper = withContext(ioDispatcher) {
+        Timber.tag(TAG).d("signOut: Robust sign-out called for accountId: ${accountId.take(5)}...")
 
         val currentApp = mMultipleAccountApp
         if (currentApp == null || !_isMsalInitialized.value) {
-            Timber.tag(TAG).w("signOut: MSAL client not initialized.")
+            Timber.tag(TAG)
+                .w("signOut: MSAL client not initialized. Performing local cleanup only for $accountId.")
+            externalScope.launch { // Launch coroutine for suspend function
+                performLocalSignOutCleanup(accountId, "MSAL client not initialized")
+            }
             return@withContext SignOutResultWrapper.Error(
                 MsalClientException(
-                    MsalClientException.INVALID_PARAMETER,
+                    "client_not_initialized", // Replaced MsalClientException.CLIENT_NOT_INITIALIZED
                     "MSAL client not initialized."
                 )
             )
@@ -655,28 +674,17 @@ class MicrosoftAuthManager @Inject constructor(
 
         if (accountToRemove == null) {
             Timber.tag(TAG)
-                .w("signOut: Account with ID $accountId not found in MSAL. Attempting to clear local persistence only.")
-            // Perform local cleanup directly as MSAL account is not found
-            try {
-                tokenPersistenceService.clearAccountData(accountId, removeAccountFromManager = true)
-                _msalAccounts.value = _msalAccounts.value.filterNot { it.id == accountId }
-                if (activeMicrosoftAccountHolder.getActiveMicrosoftAccountIdValue() == accountId) {
-                    activeMicrosoftAccountHolder.setActiveMicrosoftAccountId(null)
-                }
-                return@withContext SignOutResultWrapper.Success
-            } catch (e: Exception) {
-                Timber.tag(TAG)
-                    .e(e, "Exception during local cleanup for non-MSAL account $accountId")
-                return@withContext SignOutResultWrapper.Error(
-                    MsalClientException(
-                        MsalClientException.UNKNOWN_ERROR,
-                        "Local cleanup failed for non-MSAL account",
-                        e
-                    )
-                )
+                .w("signOut: Account with ID $accountId not found in MSAL. Performing local cleanup only.")
+            externalScope.launch { // Launch coroutine for suspend function
+                performLocalSignOutCleanup(accountId, "Account not found in MSAL by ID")
             }
+            // If account isn't in MSAL, local cleanup is the best we can do.
+            // Consider this a success from the app's perspective as the account is no longer active/usable.
+            return@withContext SignOutResultWrapper.Success
         }
 
+        Timber.tag(TAG)
+            .i("signOut: Attempting to remove MSAL account ${accountToRemove.username} (ID: $accountId)")
         val deferred = CompletableDeferred<SignOutResultWrapper>()
 
         try {
@@ -685,64 +693,72 @@ class MicrosoftAuthManager @Inject constructor(
                 object : IMultipleAccountPublicClientApplication.RemoveAccountCallback {
                     override fun onRemoved() {
                         Timber.tag(TAG)
-                            .i("signOut: Account ${accountToRemove.username} successfully removed from MSAL callback.")
-                        externalScope.launch(ioDispatcher) { // Perform cleanup on IO dispatcher
-                            try {
-                                tokenPersistenceService.clearAccountData(
-                                    accountId,
-                                    removeAccountFromManager = true
-                                )
-                                _msalAccounts.value =
-                                    _msalAccounts.value.filterNot { it.id == accountId }
-                                if (activeMicrosoftAccountHolder.getActiveMicrosoftAccountIdValue() == accountId) {
-                                    activeMicrosoftAccountHolder.setActiveMicrosoftAccountId(null)
-                                }
-                                deferred.complete(SignOutResultWrapper.Success)
-                            } catch (e: Exception) {
-                                Timber.tag(TAG).e(
-                                    e,
-                                    "Exception during signOut onRemoved cleanup for ${accountToRemove.username}"
-                                )
-                                deferred.complete(
-                                    SignOutResultWrapper.Error(
-                                        MsalClientException(
-                                            MsalClientException.UNKNOWN_ERROR,
-                                            "Cleanup failed in onRemoved",
-                                            e
-                                        )
-                                    )
-                                )
-                            }
+                            .i("signOut: MSAL account ${accountToRemove.username} successfully removed (MSAL callback).")
+                        // Local cleanup is critical path for success here.
+                        externalScope.launch { // Launch coroutine for suspend function
+                            performLocalSignOutCleanup(accountId, "MSAL onRemoved callback")
                         }
+                        // Assuming performLocalSignOutCleanup doesn't throw and handles its own errors by logging.
+                        deferred.complete(SignOutResultWrapper.Success)
                     }
 
                     override fun onError(exception: MsalException) {
                         Timber.tag(TAG).e(
                             exception,
-                            "signOut: Error removing account ${accountToRemove.username} from MSAL callback."
+                            "signOut: Error removing MSAL account ${accountToRemove.username} (MSAL callback). Performing local cleanup."
                         )
-                        deferred.complete(SignOutResultWrapper.Error(exception)) // Complete with the error from MSAL
+                        externalScope.launch { // Launch coroutine for suspend function
+                            performLocalSignOutCleanup(accountId, "MSAL onError callback")
+                        }
+                        deferred.complete(SignOutResultWrapper.Error(exception))
                     }
                 }
             )
-            return@withContext deferred.await() // Suspend until the callback completes the deferred
 
-        } catch (e: Exception) { // Catches MsalException or CancellationException from await
-            Timber.tag(TAG).e(e, "Exception in signOut using CompletableDeferred for $accountId")
-            if (e is kotlinx.coroutines.CancellationException) {
-                return@withContext SignOutResultWrapper.Error(
-                    MsalClientException(
-                        MsalClientException.UNKNOWN_ERROR,
-                        "Sign out cancelled",
-                        e
-                    )
-                )
+            // Await the deferred result which is completed by the callbacks
+            val result = deferred.await()
+            Timber.tag(TAG).d("signOut: Deferred completed. Result for account $accountId: $result")
+            return@withContext result
+
+        } catch (e: Exception) { // This catches exceptions from currentApp.removeAccount or deferred.await()
+            Timber.tag(TAG).e(
+                e,
+                "signOut: Exception during MSAL removeAccount call or await for $accountId. Performing local cleanup."
+            )
+            externalScope.launch { // Ensure this call is also wrapped
+                performLocalSignOutCleanup(accountId, "Exception in signOut main try block")
             }
+
+            val errorCode = if (e is kotlinx.coroutines.CancellationException) {
+                "cancelled" // Replaced MsalClientException.CANCELLED
+            } else {
+                MsalClientException.UNKNOWN_ERROR
+            }
+
+            // If the exception is already an MsalException, prefer returning it directly
+            // instead of wrapping it, unless we need to change its error code.
+            if (e is MsalException) {
+                // If it's a cancellation that didn't come through MSAL's known cancellation paths,
+                // we might still want to classify it as CANCELLED.
+                if (e.errorCode == "interaction_required" && e.cause is kotlinx.coroutines.CancellationException) { // Replaced MsalClientException.INTERACTION_REQUIRED
+                    return@withContext SignOutResultWrapper.Error(
+                        MsalClientException(
+                            "cancelled",
+                            "Sign out cancelled during interaction.",
+                            e
+                        )
+                    ) // Replaced MsalClientException.CANCELLED
+                }
+                // For other MsalExceptions caught here (e.g. from await if callback somehow threw it differently)
+                // just return it. The performLocalSignOutCleanup has already run.
+                return@withContext SignOutResultWrapper.Error(e)
+            }
+
             return@withContext SignOutResultWrapper.Error(
                 MsalClientException(
-                    MsalClientException.UNKNOWN_ERROR,
-                    "Sign out failed: ${e.message}",
-                    e
+                    errorCode,
+                    "Sign out failed or was cancelled: ${e.message}",
+                    e 
                 )
             )
         }

@@ -27,7 +27,7 @@ interface MessageDao {
     fun getMessageById(messageId: String): Flow<MessageEntity?>
 
     @Query("SELECT * FROM messages WHERE messageId = :messageId")
-    fun getMessageByIdNonFlow(messageId: String): MessageEntity?
+    suspend fun getMessageByIdSuspend(messageId: String): MessageEntity?
 
     @Query("SELECT * FROM messages WHERE accountId = :accountId AND folderId = :folderId ORDER BY timestamp DESC")
     fun getMessagesPagingSource(

@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -315,8 +316,8 @@ class DefaultMessageRepository @Inject constructor(
         channelFlow {
             Log.d(TAG, "getMessageWithBody called for account $accountId, message $messageId")
 
-            var messageEntity = messageDao.getMessageByIdNonFlow(messageId)
-            var bodyEntity = messageBodyDao.getMessageBodyNonFlow(messageId)
+            var messageEntity = messageDao.getMessageByIdSuspend(messageId)
+            var bodyEntity = messageBodyDao.getMessageBodyByIdSuspend(messageId)
 
             val initialDomainMessage = messageEntity?.toDomainModel()?.copy(
                 body = bodyEntity?.content,
@@ -329,17 +330,19 @@ class DefaultMessageRepository @Inject constructor(
                     TAG,
                     "MessageEntity not found in DB for messageId: $messageId. Cannot proceed to fetch body."
                 )
+                close()
                 return@channelFlow
             }
 
             if (initialDomainMessage?.body.isNullOrEmpty()) {
                 Log.d(
                     TAG,
-                    "Message body for $messageId is null/empty or initial message was null. Fetching from network."
+                    "Message body for $messageId is null/empty. Fetching from network."
                 )
-                val account = accountRepository.getAccountByIdNonFlow(accountId)
+                val account = accountRepository.getAccountByIdSuspend(accountId)
                 if (account == null) {
                     Log.e(TAG, "Account not found for ID: $accountId. Cannot fetch message body.")
+                    close()
                     return@channelFlow
                 }
 
@@ -349,6 +352,7 @@ class DefaultMessageRepository @Inject constructor(
 
                 if (apiService == null || errorMapper == null) {
                     Log.e(TAG, "No API service or error mapper for provider: $providerType")
+                    close()
                     return@channelFlow
                 }
 
@@ -371,30 +375,42 @@ class DefaultMessageRepository @Inject constructor(
                             messageBodyDao.insertOrUpdateMessageBody(newBodyEntity)
                             Log.d(TAG, "Saved new message body to DB for $messageId")
 
-                            val freshMessageEntity = messageDao.getMessageByIdNonFlow(messageId)
-                            if (freshMessageEntity != null) {
-                                val updatedMessageEntity = freshMessageEntity.copy(
-                                    snippet = fetchedMessage.bodyPreview
-                                        ?: freshMessageEntity.snippet
+                            val freshMessageEntityAfterSave =
+                                messageDao.getMessageByIdSuspend(messageId)
+                            val freshBodyEntityAfterSave =
+                                messageBodyDao.getMessageBodyByIdSuspend(messageId)
+
+                            if (freshMessageEntityAfterSave != null) {
+                                val updatedMessageEntityForSnippet =
+                                    freshMessageEntityAfterSave.copy(
+                                        snippet = fetchedMessage.bodyPreview
+                                            ?: freshMessageEntityAfterSave.snippet
                                 )
-                                messageDao.insertOrUpdateMessages(listOf(updatedMessageEntity))
+                                messageDao.insertOrUpdateMessages(
+                                    listOf(
+                                        updatedMessageEntityForSnippet
+                                    )
+                                )
                                 Log.d(
                                     TAG,
                                     "Updated MessageEntity for $messageId with new snippet if available."
                                 )
-
                                 val updatedDomainMessage =
-                                    updatedMessageEntity.toDomainModel().copy(
-                                        body = newBodyEntity.content,
-                                        bodyContentType = newBodyEntity.contentType
+                                    updatedMessageEntityForSnippet.toDomainModel().copy(
+                                        body = freshBodyEntityAfterSave?.content,
+                                        bodyContentType = freshBodyEntityAfterSave?.contentType
                                     )
                                 send(updatedDomainMessage)
                             } else {
                                 Log.w(
                                     TAG,
-                                    "Original MessageEntity for $messageId not found after body fetch. Sending API data directly."
+                                    "Original MessageEntity for $messageId not found after body fetch and snippet update. This case should be rare."
                                 )
-                                send(fetchedMessage)
+                                val fallbackMessage = fetchedMessage.copy(
+                                    body = newBodyEntity.content,
+                                    bodyContentType = newBodyEntity.contentType
+                                )
+                                send(fallbackMessage)
                             }
                         } else {
                             Log.w(
@@ -422,16 +438,15 @@ class DefaultMessageRepository @Inject constructor(
                         "Exception during message content fetch for $messageId: ${e.message}",
                         e
                     )
-                    errorMapper.mapExceptionToErrorDetails(e).message
                     send(initialDomainMessage)
                 }
             } else {
                 Log.d(
                     TAG,
-                    "Message body already present in DB for $messageId or initial message was null. No network fetch needed."
+                    "Message body already present in DB for $messageId. No network fetch needed."
                 )
             }
-    }
+        }.flowOn(ioDispatcher)
 
     override suspend fun markMessageRead(
         account: Account,

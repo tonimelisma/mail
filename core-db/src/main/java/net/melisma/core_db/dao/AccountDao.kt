@@ -19,7 +19,7 @@ interface AccountDao {
     fun getAccountById(accountId: String): Flow<AccountEntity?>
 
     @Query("SELECT * FROM accounts WHERE id = :accountId")
-    suspend fun getAccountByIdNonFlow(accountId: String): AccountEntity?
+    suspend fun getAccountByIdSuspend(accountId: String): AccountEntity?
 
     @Query("SELECT * FROM accounts")
     fun getAllAccounts(): Flow<List<AccountEntity>>

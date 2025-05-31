@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.hilt.work.HiltWorker
 import androidx.room.withTransaction
 import androidx.work.CoroutineWorker
+import androidx.work.ListenableWorker
 import androidx.work.WorkerParameters
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
@@ -17,6 +18,7 @@ import net.melisma.core_data.repository.AccountRepository
 import net.melisma.core_db.AppDatabase
 import net.melisma.core_db.dao.MessageDao
 import timber.log.Timber
+import kotlin.Result as KotlinResult
 
 @HiltWorker
 class SyncMessageStateWorker @AssistedInject constructor(
@@ -45,7 +47,7 @@ class SyncMessageStateWorker @AssistedInject constructor(
 
     private val TAG = "SyncMsgStateWorker"
 
-    override suspend fun doWork(): Result = withContext(ioDispatcher) {
+    override suspend fun doWork(): ListenableWorker.Result = withContext(ioDispatcher) {
         val accountId = inputData.getString(KEY_ACCOUNT_ID)
         val messageId = inputData.getString(KEY_MESSAGE_ID)
         val operationType = inputData.getString(KEY_OPERATION_TYPE)
@@ -53,29 +55,37 @@ class SyncMessageStateWorker @AssistedInject constructor(
         if (accountId.isNullOrBlank() || messageId.isNullOrBlank() || operationType.isNullOrBlank()) {
             Timber.tag(TAG)
                 .e("Missing vital input data: accountId, messageId, or operationType. Failing.")
-            return@withContext Result.failure()
+            return@withContext ListenableWorker.Result.failure()
         }
 
         Timber.tag(TAG)
             .i("Starting work for messageId: $messageId, accountId: $accountId, operation: $operationType")
 
         val account = try {
-            accountRepository.getAccountByIdNonFlow(accountId) // Assuming a suspend fun for direct fetch
+            accountRepository.getAccountByIdSuspend(accountId) // Changed to suspend version
         } catch (e: Exception) {
             Timber.tag(TAG).e(e, "Failed to fetch account details for accountId: $accountId")
             // updateSyncError is tricky here as we don't have messageId for it if account fetch fails early
             // Depending on how critical account fetch is, could retry or fail.
-            return@withContext Result.retry()
+            return@withContext ListenableWorker.Result.retry()
         }
 
         if (account == null) {
             Timber.tag(TAG).e("Account not found for ID: $accountId. Cannot determine API service.")
             // This specific message ID won't be updated with this error, as it's an account-level issue.
             // The job will retry, and if the account remains missing, it will continue to retry.
-            return@withContext Result.retry()
+            return@withContext ListenableWorker.Result.retry()
         }
 
-        val providerType = account.providerType.uppercase()
+        val providerType = account.providerType?.uppercase() // providerType is now nullable
+
+        if (providerType == null) {
+            Timber.tag(TAG)
+                .e("Provider type could not be determined for account $accountId (account might be null or have no provider type). Retrying.")
+            // updateSyncError is not called here because the issue is with the account data itself.
+            return@withContext ListenableWorker.Result.retry()
+        }
+
         val mailApiService = mailApiServices[providerType]
         val errorMapper = errorMappers[providerType]
 
@@ -83,58 +93,65 @@ class SyncMessageStateWorker @AssistedInject constructor(
             Timber.tag(TAG)
                 .e("Could not find MailApiService for provider: $providerType (account $accountId)")
             updateSyncError(messageId, "API service not found for provider: $providerType")
-            return@withContext Result.retry()
+            return@withContext ListenableWorker.Result.retry()
         }
 
         if (errorMapper == null) {
             Timber.tag(TAG)
                 .e("Could not find ErrorMapperService for provider: $providerType (account $accountId)")
             updateSyncError(messageId, "Error mapper service not found for provider: $providerType")
-            return@withContext Result.retry() // Or Result.failure() if this is unrecoverable
+            return@withContext ListenableWorker.Result.retry() // Or Result.failure() if this is unrecoverable
         }
 
         try {
-            val apiResult: Result<Unit> = when (operationType) {
+            val apiResult: KotlinResult<Unit> = when (operationType) {
                 OP_MARK_READ -> {
                     val isRead = inputData.getBoolean(KEY_IS_READ, false)
                     Timber.tag(TAG)
                         .d("Executing $OP_MARK_READ for $messageId to $isRead using $providerType API")
-                    mailApiService.markMessageRead(messageId, isRead)
+                    mailApiService.markMessageRead(
+                        messageId,
+                        isRead
+                    ) // mailApiService is now guaranteed non-null
                 }
 
                 OP_STAR_MESSAGE -> {
                     val isStarred = inputData.getBoolean(KEY_IS_STARRED, false)
                     Timber.tag(TAG)
                         .d("Executing $OP_STAR_MESSAGE for $messageId to $isStarred using $providerType API")
-                    mailApiService.starMessage(messageId, isStarred)
+                    mailApiService.starMessage(
+                        messageId,
+                        isStarred
+                    ) // mailApiService is now guaranteed non-null
                 }
 
                 else -> {
                     Timber.tag(TAG).w("Unknown operation type: $operationType")
-                    return@withContext Result.failure()
+                    return@withContext ListenableWorker.Result.failure()
                 }
             }
             return@withContext processApiResult(apiResult, messageId, errorMapper)
         } catch (e: Exception) { // Catch exceptions from the API calls directly if they aren't Result-wrapped
             Timber.tag(TAG).e(e, "Unhandled exception during API operation for $messageId")
-            val errorDetails = errorMapper.mapExceptionToErrorDetails(e)
+            val errorDetails =
+                errorMapper.mapExceptionToErrorDetails(e) // errorMapper is now guaranteed non-null
             updateSyncError(messageId, errorDetails.message ?: "Unknown error during sync")
-            return@withContext Result.retry()
+            return@withContext ListenableWorker.Result.retry()
         }
     }
 
     private suspend fun processApiResult(
-        apiResult: Result<Unit>,
+        apiResult: KotlinResult<Unit>,
         messageId: String,
         errorMapper: ErrorMapperService // Pass errorMapper
-    ): Result {
+    ): ListenableWorker.Result {
         if (apiResult.isSuccess) {
             Timber.tag(TAG)
                 .i("API call successful for $messageId. Clearing needsSync and lastSyncError.")
             appDatabase.withTransaction {
                 messageDao.clearSyncState(messageId)
             }
-            return Result.success()
+            return ListenableWorker.Result.success()
         } else {
             val exception = apiResult.exceptionOrNull()
             val errorDetails = exception?.let { errorMapper.mapExceptionToErrorDetails(it) }
@@ -144,7 +161,7 @@ class SyncMessageStateWorker @AssistedInject constructor(
             updateSyncError(messageId, errorMessage)
             // TODO: Implement more sophisticated retry logic based on error type
             // For now, always retry for API failures.
-            return Result.retry()
+            return ListenableWorker.Result.retry()
         }
     }
 

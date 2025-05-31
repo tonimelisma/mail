@@ -12,15 +12,15 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.flow.shareIn
+import kotlinx.coroutines.flow.stateIn
 import net.melisma.backend_microsoft.auth.AcquireTokenResult
 import net.melisma.backend_microsoft.auth.AuthenticationResultWrapper
 import net.melisma.backend_microsoft.auth.MicrosoftAuthManager
@@ -51,9 +51,56 @@ class MicrosoftAccountRepository @Inject constructor(
 
     private val TAG = "MsAccountRepo"
 
-    override suspend fun getAccountByIdNonFlow(accountId: String): Account? {
-        Timber.tag(TAG).d("getAccountByIdNonFlow called for: ${accountId.take(5)}...")
-        return accountDao.getAccountByIdNonFlow(accountId)?.toDomainAccount()
+    override val overallApplicationAuthState: StateFlow<OverallApplicationAuthState> =
+        combine(
+            microsoftAuthManager.msalAccounts,
+            accountDao.getAllAccounts().map { entities -> entities.map { it.toDomainAccount() } }
+        ) { msalAccounts, dbAccounts ->
+            val msalAccountIds = msalAccounts.map { it.id }.toSet()
+            val relevantDbAccounts =
+                dbAccounts.filter { it.providerType == Account.PROVIDER_TYPE_MS }
+
+            val resultState: OverallApplicationAuthState = if (relevantDbAccounts.isEmpty()) {
+                OverallApplicationAuthState.NO_ACCOUNTS_CONFIGURED
+            } else {
+                val accountsInBoth = relevantDbAccounts.filter { it.id in msalAccountIds }
+
+                if (accountsInBoth.isEmpty() && msalAccountIds.isNotEmpty()) {
+                    OverallApplicationAuthState.AT_LEAST_ONE_ACCOUNT_AUTHENTICATED
+                } else if (accountsInBoth.all { it.needsReauthentication }) {
+                    OverallApplicationAuthState.ALL_ACCOUNTS_NEED_REAUTHENTICATION
+                } else if (accountsInBoth.any { it.needsReauthentication }) {
+                    OverallApplicationAuthState.PARTIAL_ACCOUNTS_NEED_REAUTHENTICATION
+                } else if (accountsInBoth.isNotEmpty()) {
+                    OverallApplicationAuthState.AT_LEAST_ONE_ACCOUNT_AUTHENTICATED
+                } else {
+                    if (relevantDbAccounts.all { it.needsReauthentication }) {
+                        OverallApplicationAuthState.ALL_ACCOUNTS_NEED_REAUTHENTICATION
+                    } else if (relevantDbAccounts.any { it.needsReauthentication }) {
+                        OverallApplicationAuthState.PARTIAL_ACCOUNTS_NEED_REAUTHENTICATION
+                    } else if (relevantDbAccounts.isNotEmpty()) {
+                        OverallApplicationAuthState.AT_LEAST_ONE_ACCOUNT_AUTHENTICATED
+                    } else {
+                        OverallApplicationAuthState.UNKNOWN
+                    }
+                }
+            }
+            resultState
+        }
+            .distinctUntilChanged()
+            .catch { e ->
+                Timber.tag(TAG).e(e, "Error in overallApplicationAuthState flow computation")
+                emit(OverallApplicationAuthState.UNKNOWN)
+            }
+            .stateIn(
+                scope = externalScope,
+                started = SharingStarted.WhileSubscribed(5000L),
+                initialValue = OverallApplicationAuthState.UNKNOWN
+            )
+
+    override suspend fun getAccountByIdSuspend(accountId: String): Account? {
+        Timber.tag(TAG).d("getAccountByIdSuspend called for: ${accountId.take(5)}...")
+        return accountDao.getAccountByIdSuspend(accountId)?.toDomainAccount()
     }
 
     override fun getAccounts(): Flow<List<Account>> {
@@ -129,20 +176,19 @@ class MicrosoftAccountRepository @Inject constructor(
                         is AuthenticationResultWrapper.Success -> {
                             val domainAccount =
                                 resultWrapper.managedAccount.iAccount.toDomainAccount()
-                            // Ensure needsReauthentication is false on successful sign-in for this account
                             try {
-                                accountDao.getAccountById(domainAccount.id).firstOrNull()
-                                    ?.let { entity ->
-                                        if (entity.needsReauthentication) {
-                                            accountDao.insertOrUpdateAccount(
-                                                entity.copy(
-                                                    needsReauthentication = false
-                                                )
+                                val entity = accountDao.getAccountByIdSuspend(domainAccount.id)
+                                entity?.let {
+                                    if (it.needsReauthentication) {
+                                        accountDao.insertOrUpdateAccount(
+                                            it.copy(
+                                                needsReauthentication = false
                                             )
-                                            Timber.tag(TAG)
-                                                .d("signIn: Cleared needsReauthentication for account ${domainAccount.id}")
-                                        }
+                                        )
+                                        Timber.tag(TAG)
+                                            .d("signIn: Cleared needsReauthentication for account ${domainAccount.id}")
                                     }
+                                }
                             } catch (e: Exception) {
                                 Timber.tag(TAG).e(
                                     e,
@@ -155,13 +201,7 @@ class MicrosoftAccountRepository @Inject constructor(
                         is AuthenticationResultWrapper.Error -> {
                             val errorDetails =
                                 mapMsalExceptionToErrorDetails(resultWrapper.exception)
-                            // If UI is required, try to extract account ID and mark for re-authentication
                             if (resultWrapper.exception is MsalUiRequiredException) {
-                                // Attempt to find the account involved, if possible.
-                                // This is tricky as MsalUiRequiredException might not directly give account ID
-                                // We might need to infer it if a loginHint was used or if there's a single MS account
-                                // For now, we can't reliably get the account ID here.
-                                // The markAccountForReauthentication will be more reliably called during syncAccount or silent refresh failures.
                                 Timber.tag(TAG)
                                     .w("signIn: MsalUiRequiredException occurred. User needs to re-authenticate. Error: ${resultWrapper.exception.message}")
                             }
@@ -222,6 +262,16 @@ class MicrosoftAccountRepository @Inject constructor(
             Timber.tag(TAG).d("signOut: AuthManager returned: $resultWrapper")
             when (resultWrapper) {
                 is SignOutResultWrapper.Success -> {
+                    try {
+                        accountDao.deleteAccount(account.id)
+                        Timber.tag(TAG)
+                            .i("signOut: Successfully deleted account ${account.id} from local DB.")
+                    } catch (e: Exception) {
+                        Timber.tag(TAG).e(
+                            e,
+                            "signOut: Failed to delete account ${account.id} from local DB after MSAL sign out."
+                        )
+                    }
                     emit(GenericSignOutResult.Success)
                 }
 
@@ -260,7 +310,7 @@ class MicrosoftAccountRepository @Inject constructor(
             return
         }
 
-        val accountEntity = accountDao.getAccountById(accountId).flowOn(ioDispatcher).firstOrNull()
+        val accountEntity = accountDao.getAccountByIdSuspend(accountId)
         if (accountEntity != null) {
             if (!accountEntity.needsReauthentication) {
                 val updatedEntity = accountEntity.copy(needsReauthentication = true)
@@ -287,7 +337,7 @@ class MicrosoftAccountRepository @Inject constructor(
 
     override suspend fun syncAccount(accountId: String): Result<Unit> {
         Timber.tag(TAG).d("syncAccount called for $accountId (MSAL)")
-        val accountEntity = accountDao.getAccountById(accountId).flowOn(ioDispatcher).firstOrNull()
+        val accountEntity = accountDao.getAccountByIdSuspend(accountId)
         if (accountEntity == null) {
             Timber.tag(TAG).w("syncAccount: Account $accountId not found in DB.")
             return Result.failure(Exception("Account $accountId not found"))
@@ -299,7 +349,7 @@ class MicrosoftAccountRepository @Inject constructor(
         }
 
         val iAccount = try {
-            microsoftAuthManager.msalAccounts.value.find { it.id == accountId }
+            microsoftAuthManager.getMsalAccount(accountId)
         } catch (e: Exception) {
             Timber.tag(TAG).e(e, "Error fetching IAccount $accountId from MicrosoftAuthManager")
             null
@@ -312,7 +362,7 @@ class MicrosoftAccountRepository @Inject constructor(
             return Result.failure(
                 MsalUiRequiredException(
                     MsalUiRequiredException.NO_ACCOUNT_FOUND,
-                    "MSAL account $accountId not found in MSAL cache"
+                    "MSAL account $accountId not found in MSAL cache or persistence"
                 )
             )
         }
@@ -362,19 +412,14 @@ class MicrosoftAccountRepository @Inject constructor(
                         acquireTokenResult.exception,
                         "syncAccount: Error acquiring token silently for $accountId. Code: ${acquireTokenResult.exception.errorCode}"
                     )
-                    if (acquireTokenResult.exception is MsalUiRequiredException) {
-                        markAccountForReauthentication(accountId, Account.PROVIDER_TYPE_MS)
-                    } else {
-                        markAccountForReauthentication(accountId, Account.PROVIDER_TYPE_MS)
-                        Timber.tag(TAG)
-                            .w("syncAccount: MsalException (${acquireTokenResult.exception.errorCode}) occurred for $accountId. Marking for re-authentication.")
-                    }
+                    markAccountForReauthentication(accountId, Account.PROVIDER_TYPE_MS)
                     Result.failure(acquireTokenResult.exception)
                 }
 
                 is AcquireTokenResult.Cancelled -> {
                     Timber.tag(TAG)
-                        .w("syncAccount: Silent token acquisition cancelled for $accountId. This is unexpected.")
+                        .w("syncAccount: Silent token acquisition cancelled for $accountId. This is unexpected. Marking for re-auth.")
+                    markAccountForReauthentication(accountId, Account.PROVIDER_TYPE_MS)
                     Result.failure(
                         MsalClientException(
                             MsalClientException.UNKNOWN_ERROR,
@@ -396,7 +441,8 @@ class MicrosoftAccountRepository @Inject constructor(
 
                 is AcquireTokenResult.NoAccountProvided -> {
                     Timber.tag(TAG)
-                        .w("syncAccount: No account provided for silent token acquisition for $accountId. This is unexpected.")
+                        .w("syncAccount: No account provided for silent token acquisition for $accountId. This is unexpected. Marking for re-auth.")
+                    markAccountForReauthentication(accountId, Account.PROVIDER_TYPE_MS)
                     Result.failure(
                         MsalUiRequiredException(
                             MsalUiRequiredException.NO_ACCOUNT_FOUND,
@@ -424,69 +470,10 @@ class MicrosoftAccountRepository @Inject constructor(
                 e,
                 "syncAccount: Generic exception during silent token acquisition for $accountId."
             )
+            markAccountForReauthentication(accountId, Account.PROVIDER_TYPE_MS)
             Result.failure(e)
         }
     }
-
-    override val overallApplicationAuthState: Flow<OverallApplicationAuthState> =
-        combine(
-            microsoftAuthManager.msalAccounts,
-            accountDao.getAllAccounts()
-        ) { msalAccounts, dbEntities ->
-            if (msalAccounts.isEmpty()) {
-                // If MSAL knows of no accounts, but DB might (e.g. after app restart, before MSAL fully loads),
-                // check if any of those DB accounts are MS type.
-                val dbMicrosoftAccounts =
-                    dbEntities.filter { it.providerType == Account.PROVIDER_TYPE_MS }
-                if (dbMicrosoftAccounts.isEmpty()) {
-                    OverallApplicationAuthState.NO_ACCOUNTS_CONFIGURED // Or specific like NO_MS_ACCOUNTS_CONFIGURED
-                } else {
-                    // We have MS accounts in DB, check their reauth state
-                    if (dbMicrosoftAccounts.all { it.needsReauthentication }) {
-                        OverallApplicationAuthState.ALL_ACCOUNTS_NEED_REAUTHENTICATION
-                    } else if (dbMicrosoftAccounts.any { it.needsReauthentication }) {
-                        OverallApplicationAuthState.PARTIAL_ACCOUNTS_NEED_REAUTHENTICATION
-                    } else {
-                        OverallApplicationAuthState.AT_LEAST_ONE_ACCOUNT_AUTHENTICATED
-                    }
-                }
-            } else {
-                // MSAL has accounts, so we primarily care about their state as reflected in the DB
-                val msalAccountIds = msalAccounts.map { it.id }.toSet()
-                val relevantDbEntities =
-                    dbEntities.filter { it.id in msalAccountIds && it.providerType == Account.PROVIDER_TYPE_MS }
-
-                if (relevantDbEntities.isEmpty() && msalAccountIds.isNotEmpty()) {
-                    // MSAL has accounts but none are in our DB yet, or not marked as MS type.
-                    // This state is a bit ambiguous. Could be new accounts not yet fully processed.
-                    // Or, if we consider only DB as SSoT for reauth flag, and they are not there, 
-                    // it might be that they are fresh and don't need reauth. 
-                    // For simplicity, if MSAL has them but DB doesn't reflect reauth state, assume auth okay for now.
-                    // This path should ideally not be hit if DB is SSoT and kept in sync.
-                    Timber.tag(TAG)
-                        .w("overallApplicationAuthState: MSAL accounts present but not found or not MS type in DB for re-auth check.")
-                    OverallApplicationAuthState.AT_LEAST_ONE_ACCOUNT_AUTHENTICATED
-                } else if (relevantDbEntities.isEmpty() && msalAccountIds.isEmpty()) {
-                    // This case is covered by the outer if (msalAccounts.isEmpty())
-                    OverallApplicationAuthState.NO_ACCOUNTS_CONFIGURED
-                } else {
-                    if (relevantDbEntities.all { it.needsReauthentication }) {
-                        OverallApplicationAuthState.ALL_ACCOUNTS_NEED_REAUTHENTICATION
-                    } else if (relevantDbEntities.any { it.needsReauthentication }) {
-                        OverallApplicationAuthState.PARTIAL_ACCOUNTS_NEED_REAUTHENTICATION
-                    } else {
-                        OverallApplicationAuthState.AT_LEAST_ONE_ACCOUNT_AUTHENTICATED
-                    }
-                }
-            }
-        }
-            .distinctUntilChanged()
-            .catch { e ->
-                Timber.tag(TAG).e(e, "Error in overallApplicationAuthState flow")
-                emit(OverallApplicationAuthState.UNKNOWN)
-            }
-            .flowOn(ioDispatcher)
-            .shareIn(externalScope, SharingStarted.WhileSubscribed(5000), replay = 1)
 
     override fun getAuthenticationIntentRequest(
         providerType: String,
@@ -494,25 +481,25 @@ class MicrosoftAccountRepository @Inject constructor(
         scopes: List<String>?
     ): Flow<GenericAuthResult> = flow {
         Timber.tag(TAG)
-            .d("getAuthenticationIntentRequest called for provider: $providerType (MSAL)")
+            .d("getAuthenticationIntentRequest called for provider: $providerType, activity: ${activity.localClassName}")
         if (!providerType.equals(Account.PROVIDER_TYPE_MS, ignoreCase = true)) {
             emit(
                 GenericAuthResult.Error(
                     ErrorDetails(
-                        message = "Unsupported provider: $providerType",
-                        code = "UNSUPPORTED_PROVIDER"
+                        "Unsupported provider: $providerType",
+                        "UNSUPPORTED_PROVIDER"
                     )
                 )
             )
             return@flow
         }
         Timber.tag(TAG)
-            .w("getAuthenticationIntentRequest for MSAL: MSAL's acquireToken handles UI internally. Use signIn().")
+            .w("getAuthenticationIntentRequest for MSAL is atypical. Standard flow is via signIn().")
         emit(
             GenericAuthResult.Error(
                 ErrorDetails(
-                    message = "MSAL does not typically provide a separate sign-in intent. Use signIn().",
-                    code = "MSAL_INTENT_NOT_APPLICABLE"
+                    "getAuthenticationIntentRequest is not directly applicable to MSAL's standard flow. Use signIn().",
+                    "MSAL_FLOW_MISMATCH"
                 )
             )
         )
@@ -535,7 +522,7 @@ class MicrosoftAccountRepository @Inject constructor(
             )
 
             is MsalDeclinedScopeException -> ErrorDetails(
-                message = "Some requested permissions were declined. Granted: ${exception.grantedScopes.joinToString()}, Declined: ${exception.declinedScopes.joinToString()}",
+                message = "Some requested permissions were declined. Granted: ${exception.grantedScopes.joinToString()}, Declined: ${exception.declinedScopes.joinToString()}}",
                 code = "SCOPES_DECLINED"
             )
 

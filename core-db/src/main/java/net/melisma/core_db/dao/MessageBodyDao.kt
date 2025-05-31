@@ -17,7 +17,7 @@ interface MessageBodyDao {
     fun getMessageBody(messageId: String): Flow<MessageBodyEntity?>
 
     @Query("SELECT * FROM message_bodies WHERE message_id = :messageId")
-    suspend fun getMessageBodyNonFlow(messageId: String): MessageBodyEntity? // For direct checks
+    suspend fun getMessageBodyByIdSuspend(messageId: String): MessageBodyEntity?
 
     @Query("DELETE FROM message_bodies WHERE message_id = :messageId")
     suspend fun deleteMessageBody(messageId: String)
