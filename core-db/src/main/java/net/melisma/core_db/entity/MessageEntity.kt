@@ -46,5 +46,13 @@ data class MessageEntity(
     val hasAttachments: Boolean, // Assuming this will be handled
     val isLocallyDeleted: Boolean = false, // Added for optimistic deletion
     val needsSync: Boolean = false,
-    val lastSyncError: String? = null
+    val lastSyncError: String? = null,
+    // Draft and Outbox support
+    val isDraft: Boolean = false,
+    val isOutbox: Boolean = false,
+    val draftType: String? = null, // "NEW", "REPLY", "FORWARD"
+    val draftParentId: String? = null, // For reply/forward chains
+    val sendAttempts: Int = 0,
+    val lastSendError: String? = null,
+    val scheduledSendTime: Long? = null // For future: scheduled sending
 ) 

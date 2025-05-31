@@ -124,3 +124,22 @@ data class GmailThread(
     // ensure your `GmailMessage` model is compatible.
     @SerialName("messages") val messages: List<GmailMessage> = emptyList()
 )
+
+/**
+ * Model for Gmail attachment response
+ */
+@Serializable
+data class GmailAttachmentResponse(
+    @SerialName("attachmentId") val attachmentId: String,
+    @SerialName("size") val size: Long? = null,
+    @SerialName("data") val data: String
+)
+
+/**
+ * Model for Gmail draft response
+ */
+@Serializable
+data class GmailDraftResponse(
+    @SerialName("id") val id: String,
+    @SerialName("message") val message: GmailMessage
+)

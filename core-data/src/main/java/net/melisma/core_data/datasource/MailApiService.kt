@@ -161,9 +161,65 @@ interface MailApiService {
      */
     suspend fun getMessageContent(messageId: String): Result<Message>
 
+    /**
+     * Fetches attachments for a specific message.
+     *
+     * @param messageId The ID of the message to fetch attachments for
+     * @return Result containing the list of attachments or an error
+     */
+    suspend fun getMessageAttachments(messageId: String): Result<List<net.melisma.core_data.model.Attachment>>
+
+    /**
+     * Downloads the binary data for a specific attachment.
+     *
+     * @param messageId The ID of the message containing the attachment
+     * @param attachmentId The ID of the attachment to download
+     * @return Result containing the attachment binary data or an error
+     */
+    suspend fun downloadAttachment(messageId: String, attachmentId: String): Result<ByteArray>
+
+    /**
+     * Creates a new draft message.
+     *
+     * @param draft The draft message details to create
+     * @return Result containing the created message with server-assigned ID or an error
+     */
+    suspend fun createDraftMessage(draft: net.melisma.core_data.model.MessageDraft): Result<Message>
+
+    /**
+     * Updates an existing draft message.
+     *
+     * @param messageId The ID of the draft message to update
+     * @param draft The updated draft message details
+     * @return Result containing the updated message or an error
+     */
+    suspend fun updateDraftMessage(
+        messageId: String,
+        draft: net.melisma.core_data.model.MessageDraft
+    ): Result<Message>
+
+    /**
+     * Sends a draft message.
+     *
+     * @param draft The draft message to send
+     * @return Result containing the sent message ID or an error
+     */
+    suspend fun sendMessage(draft: net.melisma.core_data.model.MessageDraft): Result<String>
+
+    /**
+     * Searches messages based on a query string.
+     *
+     * @param query The search query
+     * @param folderId Optional folder ID to limit search scope
+     * @param maxResults Maximum number of results to return
+     * @return Result containing the list of matching messages or an error
+     */
+    suspend fun searchMessages(
+        query: String,
+        folderId: String? = null,
+        maxResults: Int = 50
+    ): Result<List<Message>>
+
     // Future methods to consider:
-    // - sendMessage(message) - For sending new messages
-    // - getAttachments(messageId) - For fetching attachments
-    // - createDraft(message) - For creating draft messages
     // - syncFolders(syncToken) - For delta syncing with sync token
 }

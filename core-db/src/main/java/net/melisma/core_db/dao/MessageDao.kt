@@ -111,4 +111,66 @@ interface MessageDao {
     // For worker to update folderId and clear sync state on successful API move
     @Query("UPDATE messages SET folderId = :newFolderId, needsSync = 0, lastSyncError = NULL WHERE messageId = :messageId")
     suspend fun updateFolderOnMoveSyncSuccess(messageId: String, newFolderId: String)
+
+    // Draft operations
+    @Query("SELECT * FROM messages WHERE accountId = :accountId AND isDraft = 1 ORDER BY timestamp DESC")
+    fun getDraftsForAccount(accountId: String): Flow<List<MessageEntity>>
+
+    @Query("UPDATE messages SET isDraft = :isDraft, needsSync = :needsSync WHERE messageId = :messageId")
+    suspend fun updateDraftState(messageId: String, isDraft: Boolean, needsSync: Boolean)
+
+    @Query(
+        """
+        UPDATE messages 
+        SET subject = :subject, 
+            snippet = :snippet, 
+            recipientNames = :recipientNames, 
+            recipientAddresses = :recipientAddresses,
+            timestamp = :timestamp,
+            needsSync = :needsSync,
+            draftType = :draftType,
+            draftParentId = :draftParentId
+        WHERE messageId = :messageId
+    """
+    )
+    suspend fun updateDraftContent(
+        messageId: String,
+        subject: String?,
+        snippet: String?,
+        recipientNames: List<String>?,
+        recipientAddresses: List<String>?,
+        timestamp: Long,
+        needsSync: Boolean,
+        draftType: String?,
+        draftParentId: String?
+    )
+
+    // Outbox operations
+    @Query("SELECT * FROM messages WHERE accountId = :accountId AND isOutbox = 1 ORDER BY timestamp DESC")
+    fun getOutboxForAccount(accountId: String): Flow<List<MessageEntity>>
+
+    @Query("UPDATE messages SET isOutbox = :isOutbox, isDraft = 0, needsSync = :needsSync WHERE messageId = :messageId")
+    suspend fun moveToOutbox(messageId: String, isOutbox: Boolean = true, needsSync: Boolean = true)
+
+    @Query("UPDATE messages SET sendAttempts = sendAttempts + 1, lastSendError = :error WHERE messageId = :messageId")
+    suspend fun incrementSendAttempts(messageId: String, error: String?)
+
+    @Query(
+        """
+        UPDATE messages 
+        SET isOutbox = 0, 
+            needsSync = 0, 
+            lastSendError = NULL, 
+            folderId = :sentFolderId,
+            sentTimestamp = :sentTimestamp
+        WHERE messageId = :messageId
+    """
+    )
+    suspend fun markAsSent(messageId: String, sentFolderId: String, sentTimestamp: Long)
+
+    @Query("UPDATE messages SET lastSendError = :error, needsSync = 1 WHERE messageId = :messageId")
+    suspend fun updateSendError(messageId: String, error: String)
+
+    @Query("SELECT * FROM messages WHERE needsSync = 1 AND (isDraft = 1 OR isOutbox = 1)")
+    suspend fun getPendingSyncDraftsAndOutbox(): List<MessageEntity>
 } 

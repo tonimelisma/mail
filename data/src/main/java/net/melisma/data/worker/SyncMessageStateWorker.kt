@@ -10,6 +10,7 @@ import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
 import net.melisma.core_data.datasource.MailApiService
 import net.melisma.core_data.di.Dispatcher
 import net.melisma.core_data.di.MailDispatchers
@@ -41,12 +42,17 @@ class SyncMessageStateWorker @AssistedInject constructor(
         const val KEY_IS_STARRED = "IS_STARRED" // For Star/Unstar
         const val KEY_NEW_FOLDER_ID = "NEW_FOLDER_ID" // For MoveMessage
         const val KEY_OLD_FOLDER_ID = "OLD_FOLDER_ID" // For MoveMessage
+        const val KEY_DRAFT_DATA = "DRAFT_DATA" // For Draft operations
+        const val KEY_SENT_FOLDER_ID = "SENT_FOLDER_ID" // For Send operations
 
         // Operation Types
         const val OP_MARK_READ = "MARK_READ"
         const val OP_STAR_MESSAGE = "STAR_MESSAGE"
         const val OP_DELETE_MESSAGE = "DELETE_MESSAGE" // Added delete operation type
         const val OP_MOVE_MESSAGE = "MOVE_MESSAGE"
+        const val OP_CREATE_DRAFT = "CREATE_DRAFT"
+        const val OP_UPDATE_DRAFT = "UPDATE_DRAFT"
+        const val OP_SEND_MESSAGE = "SEND_MESSAGE"
     }
 
     private val TAG = "SyncMsgStateWorker"
@@ -161,6 +167,76 @@ class SyncMessageStateWorker @AssistedInject constructor(
                     mailApiService.moveMessage(messageId, oldFolderId ?: "", newFolderId)
                 }
 
+                OP_CREATE_DRAFT -> {
+                    val draftDataJson = inputData.getString(KEY_DRAFT_DATA)
+                    if (draftDataJson.isNullOrBlank()) {
+                        Timber.tag(TAG)
+                            .e("Missing draft data for $OP_CREATE_DRAFT on $messageId. Failing.")
+                        return@withContext ListenableWorker.Result.failure()
+                    }
+
+                    try {
+                        val draftData =
+                            Json.decodeFromString<net.melisma.core_data.model.MessageDraft>(
+                                draftDataJson
+                            )
+                        Timber.tag(TAG)
+                            .d("Executing $OP_CREATE_DRAFT for $messageId using $providerType API")
+                        val result = mailApiService.createDraftMessage(draftData)
+                        result.map { Unit } // Convert Result<Message> to Result<Unit>
+                    } catch (e: Exception) {
+                        Timber.tag(TAG).e(e, "Failed to parse draft data for $messageId")
+                        return@withContext ListenableWorker.Result.failure()
+                    }
+                }
+
+                OP_UPDATE_DRAFT -> {
+                    val draftDataJson = inputData.getString(KEY_DRAFT_DATA)
+                    if (draftDataJson.isNullOrBlank()) {
+                        Timber.tag(TAG)
+                            .e("Missing draft data for $OP_UPDATE_DRAFT on $messageId. Failing.")
+                        return@withContext ListenableWorker.Result.failure()
+                    }
+
+                    try {
+                        val draftData =
+                            Json.decodeFromString<net.melisma.core_data.model.MessageDraft>(
+                                draftDataJson
+                            )
+                        Timber.tag(TAG)
+                            .d("Executing $OP_UPDATE_DRAFT for $messageId using $providerType API")
+                        val result = mailApiService.updateDraftMessage(messageId, draftData)
+                        result.map { Unit } // Convert Result<Message> to Result<Unit>
+                    } catch (e: Exception) {
+                        Timber.tag(TAG).e(e, "Failed to parse draft data for $messageId")
+                        return@withContext ListenableWorker.Result.failure()
+                    }
+                }
+
+                OP_SEND_MESSAGE -> {
+                    val draftDataJson = inputData.getString(KEY_DRAFT_DATA)
+                    inputData.getString(KEY_SENT_FOLDER_ID)
+                    if (draftDataJson.isNullOrBlank()) {
+                        Timber.tag(TAG)
+                            .e("Missing draft data for $OP_SEND_MESSAGE on $messageId. Failing.")
+                        return@withContext ListenableWorker.Result.failure()
+                    }
+
+                    try {
+                        val draftData =
+                            Json.decodeFromString<net.melisma.core_data.model.MessageDraft>(
+                                draftDataJson
+                            )
+                        Timber.tag(TAG)
+                            .d("Executing $OP_SEND_MESSAGE for $messageId using $providerType API")
+                        val result = mailApiService.sendMessage(draftData)
+                        result.map { Unit } // Convert Result<String> to Result<Unit>
+                    } catch (e: Exception) {
+                        Timber.tag(TAG).e(e, "Failed to parse draft data for $messageId")
+                        return@withContext ListenableWorker.Result.failure()
+                    }
+                }
+
                 else -> {
                     Timber.tag(TAG).w("Unknown operation type: $operationType")
                     return@withContext ListenableWorker.Result.failure()
@@ -210,6 +286,22 @@ class SyncMessageStateWorker @AssistedInject constructor(
                             .d("Updating folderId to $newFolderId and clearing sync state for message $messageId after successful API move.")
                         messageDao.updateFolderIdAndClearSyncStateOnSuccess(messageId, newFolderId)
                     }
+                } else if (operationType == OP_SEND_MESSAGE) {
+                    val sentFolderId = inputData.getString(KEY_SENT_FOLDER_ID)
+                    if (!sentFolderId.isNullOrBlank()) {
+                        Timber.tag(TAG)
+                            .d("Moving message $messageId to sent folder $sentFolderId after successful send.")
+                        messageDao.markAsSent(messageId, sentFolderId, System.currentTimeMillis())
+                    } else {
+                        Timber.tag(TAG)
+                            .d("Marking message $messageId as sent (no sent folder specified).")
+                        messageDao.updateDraftState(messageId, isDraft = false, needsSync = false)
+                        messageDao.clearSyncState(messageId)
+                    }
+                } else if (operationType == OP_CREATE_DRAFT || operationType == OP_UPDATE_DRAFT) {
+                    Timber.tag(TAG)
+                        .d("Draft operation successful for $messageId. Clearing sync state.")
+                    messageDao.clearSyncState(messageId)
                 } else {
                     Timber.tag(TAG)
                         .d("Clearing needsSync and lastSyncError for message $messageId.")

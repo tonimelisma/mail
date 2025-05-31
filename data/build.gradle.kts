@@ -4,6 +4,7 @@ plugins {
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.ksp)
     alias(libs.plugins.hilt.gradle)
+    alias(libs.plugins.kotlin.serialization)
 }
 
 android {
@@ -87,6 +88,9 @@ dependencies {
 
     // --- Coroutines ---
     implementation(libs.kotlinx.coroutines.core)
+
+    // --- Kotlinx Serialization ---
+    implementation(libs.kotlinx.serialization.json)
 
     // --- Activity Result API ---
     implementation(libs.androidx.activity.ktx) // Needed for handling Google sign-in result

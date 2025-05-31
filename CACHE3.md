@@ -220,7 +220,6 @@ message move functionality.
     * **Log Spam:** Review and reduce diagnostic logging.
     * **Lint Warning in `DefaultAccountRepository.kt`:** Persistent "condition always true"
       warning. (Minor).
-    * **WebView Performance in Thread View:** Monitor performance of multiple WebViews.
 
 ## **III. Unified List of Work That Is Still To Be Done to Achieve the Vision (Updated
 {{YYYY-MM-DD}})**
@@ -263,7 +262,6 @@ This list outlines the necessary steps to realize the full offline-first caching
 7. **Code Health and Maintenance (Ongoing):** (Details as before)
     * Review and Reduce Log Spam.
     * Resolve/Suppress Lint Warnings.
-    * `ButtonPrimary` Styling.
 
 8. **Enhance API Capabilities and Advanced Synchronization (Longer Term):** (Details as before)
     * `MailApiService` Pagination.
@@ -278,7 +276,6 @@ This list outlines the necessary steps to realize the full offline-first caching
       policies. `SyncMessageState_${accountId}_${messageId}` should provide per-message sequential
       execution.
     * **Database Transaction Integrity:** Verification of transaction usage.
-    * **Performance and resource management of multiple WebViews in `ThreadDetailScreen`.**
     * **Gmail `moveMessage` for non-Inbox source folders:** The logic in `GmailApiHelper.kt` now
       attempts to remove the source label if it's a user label or INBOX. This is an improvement but
       relies on `currentFolderId` being accurate. The definition of "system label" in
@@ -296,7 +293,6 @@ This list outlines the necessary steps to realize the full offline-first caching
       send).
     * **Ktor Client Configuration for Robustness:** Review Ktor client setup for all API calls.
     * **Database Performance with FTS.**
-    * **Optimizing multiple `WebView` instances in `LazyColumn`.**
 
 This rewritten `CACHE3.md` should now accurately reflect the project's state post-refactoring,
 delete implementation, Gmail-style thread view, and the move message implementation, providing an

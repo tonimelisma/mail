@@ -28,6 +28,8 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import net.melisma.core_data.datasource.MailApiService
 import net.melisma.core_data.di.ApplicationScope
 import net.melisma.core_data.di.Dispatcher
@@ -42,9 +44,12 @@ import net.melisma.core_data.model.MessageSyncState
 import net.melisma.core_data.repository.AccountRepository
 import net.melisma.core_data.repository.MessageRepository
 import net.melisma.core_db.AppDatabase
+import net.melisma.core_db.dao.AttachmentDao
 import net.melisma.core_db.dao.MessageBodyDao
 import net.melisma.core_db.dao.MessageDao
+import net.melisma.core_db.entity.AttachmentEntity
 import net.melisma.core_db.entity.MessageBodyEntity
+import net.melisma.core_db.entity.MessageEntity
 import net.melisma.data.mapper.toDomainModel
 import net.melisma.data.mapper.toEntity
 import net.melisma.data.paging.MessageRemoteMediator
@@ -63,6 +68,7 @@ class DefaultMessageRepository @Inject constructor(
     private val accountRepository: AccountRepository,
     private val messageDao: MessageDao,
     private val messageBodyDao: MessageBodyDao,
+    private val attachmentDao: AttachmentDao,
     private val appDatabase: AppDatabase,
     private val workManager: WorkManager
 ) : MessageRepository {
@@ -122,8 +128,8 @@ class DefaultMessageRepository @Inject constructor(
             ),
             pagingSourceFactory = { messageDao.getMessagesPagingSource(accountId, folderId) }
         ).flow
-            .map { pagingDataEntity: PagingData<net.melisma.core_db.entity.MessageEntity> ->
-                pagingDataEntity.map { messageEntity: net.melisma.core_db.entity.MessageEntity ->
+            .map { pagingDataEntity: PagingData<MessageEntity> ->
+                pagingDataEntity.map { messageEntity: MessageEntity ->
                     messageEntity.toDomainModel()
                 }
             }
@@ -602,16 +608,115 @@ class DefaultMessageRepository @Inject constructor(
     }
 
     override suspend fun sendMessage(draft: MessageDraft, account: Account): Result<String> {
-        return Result.failure(NotImplementedError("sendMessage not part of this repository's direct caching scope"))
+        return withContext(ioDispatcher) {
+            try {
+                // Generate a unique message ID for the outbox entry
+                val messageId = "outbox_${System.currentTimeMillis()}_${account.id}"
+                val currentTime = System.currentTimeMillis()
+
+                // Create outbox message entity
+                val outboxMessage = MessageEntity(
+                    messageId = messageId,
+                    accountId = account.id,
+                    folderId = "OUTBOX", // Special folder for outbox
+                    threadId = draft.originalMessageId, // For reply threading
+                    subject = draft.subject,
+                    snippet = draft.body?.take(150),
+                    senderName = account.username,
+                    senderAddress = account.username,
+                    recipientNames = draft.to, // Will be converted by TypeConverter
+                    recipientAddresses = draft.to, // Will be converted by TypeConverter
+                    timestamp = currentTime,
+                    sentTimestamp = null,
+                    isRead = true,
+                    isStarred = false,
+                    hasAttachments = draft.attachments.isNotEmpty(),
+                    isOutbox = true,
+                    isDraft = false,
+                    draftType = draft.type.name,
+                    draftParentId = draft.originalMessageId,
+                    needsSync = true
+                )
+
+                // Insert into database
+                messageDao.insertOrUpdateMessages(listOf(outboxMessage))
+
+                // Store message body
+                val messageBody = MessageBodyEntity(
+                    messageId = messageId,
+                    contentType = "HTML",
+                    content = draft.body,
+                    lastFetchedTimestamp = currentTime
+                )
+                messageBodyDao.insertOrUpdateMessageBody(messageBody)
+
+                // Enqueue worker to send the message
+                val draftJson = Json.encodeToString(draft)
+                enqueueSyncMessageStateWorker(
+                    account = account,
+                    messageId = messageId,
+                    operation = SyncMessageStateWorker.OP_SEND_MESSAGE,
+                    draftData = draftJson,
+                    sentFolderId = "SENT" // Default sent folder
+                )
+
+                Log.d(TAG, "Message queued for sending with ID: $messageId")
+                Result.success(messageId)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to queue message for sending", e)
+                Result.failure(e)
+            }
+        }
     }
 
     override suspend fun getMessageAttachments(
         accountId: String,
         messageId: String
     ): Flow<List<Attachment>> {
-        Log.d(TAG, "getMessageAttachments called for accountId: $accountId, messageId: $messageId")
-        Log.w(TAG, "getMessageAttachments: Not fully implemented. Returning empty.")
-        return flowOf(emptyList())
+        return withContext(ioDispatcher) {
+            try {
+                Log.d(
+                    TAG,
+                    "getMessageAttachments called for accountId: $accountId, messageId: $messageId"
+                )
+
+                // First try to get attachments from local database
+                val localAttachments = attachmentDao.getAttachmentsForMessage(messageId)
+
+                // Check if we need to fetch from API
+                val message = messageDao.getMessageByIdSuspend(messageId)
+                if (message?.hasAttachments == true) {
+                    // Check if we have attachments in local DB
+                    val existingAttachments =
+                        attachmentDao.getAttachmentsForMessageSuspend(messageId)
+
+                    if (existingAttachments.isEmpty()) {
+                        // Fetch from API
+                        val account = accountRepository.getAccountByIdSuspend(accountId)
+                        if (account != null) {
+                            fetchAndStoreAttachments(account, messageId)
+                        }
+                    }
+                }
+
+                // Return flow of attachments, mapped to domain model
+                localAttachments.map { attachmentEntities ->
+                    attachmentEntities.map { entity ->
+                        Attachment(
+                            id = entity.attachmentId,
+                            fileName = entity.fileName,
+                            size = entity.size,
+                            contentType = entity.contentType,
+                            contentId = entity.contentId,
+                            isInline = entity.isInline
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error getting message attachments", e)
+                flowOf(emptyList())
+            }
+        }
     }
 
     override suspend fun downloadAttachment(
@@ -626,11 +731,88 @@ class DefaultMessageRepository @Inject constructor(
         accountId: String,
         draftDetails: MessageDraft
     ): Result<Message> {
-        Log.d(
-            TAG,
-            "createDraftMessage called for accountId: $accountId. Not implemented with DB sync."
-        )
-        return Result.failure(NotImplementedError("createDraftMessage not yet implemented with DB sync"))
+        return withContext(ioDispatcher) {
+            try {
+                val account = accountRepository.getAccountByIdSuspend(accountId)
+                if (account == null) {
+                    Log.e(TAG, "Account not found for ID: $accountId")
+                    return@withContext Result.failure(IllegalArgumentException("Account not found"))
+                }
+
+                // Generate a unique draft ID
+                val draftId = "draft_${System.currentTimeMillis()}_${accountId}"
+                val currentTime = System.currentTimeMillis()
+
+                // Create draft message entity
+                val draftMessage = MessageEntity(
+                    messageId = draftId,
+                    accountId = accountId,
+                    folderId = "DRAFTS", // Special folder for drafts
+                    threadId = draftDetails.originalMessageId,
+                    subject = draftDetails.subject,
+                    snippet = draftDetails.body?.take(150),
+                    senderName = account.username,
+                    senderAddress = account.username,
+                    recipientNames = draftDetails.to,
+                    recipientAddresses = draftDetails.to,
+                    timestamp = currentTime,
+                    sentTimestamp = null,
+                    isRead = true,
+                    isStarred = false,
+                    hasAttachments = draftDetails.attachments.isNotEmpty(),
+                    isDraft = true,
+                    isOutbox = false,
+                    draftType = draftDetails.type.name,
+                    draftParentId = draftDetails.originalMessageId,
+                    needsSync = true
+                )
+
+                // Insert into database
+                messageDao.insertOrUpdateMessages(listOf(draftMessage))
+
+                // Store message body
+                val messageBody = MessageBodyEntity(
+                    messageId = draftId,
+                    contentType = "HTML",
+                    content = draftDetails.body,
+                    lastFetchedTimestamp = currentTime
+                )
+                messageBodyDao.insertOrUpdateMessageBody(messageBody)
+
+                // Enqueue worker to sync with server
+                val draftJson = Json.encodeToString(draftDetails)
+                enqueueSyncMessageStateWorker(
+                    account = account,
+                    messageId = draftId,
+                    operation = SyncMessageStateWorker.OP_CREATE_DRAFT,
+                    draftData = draftJson
+                )
+
+                // Convert to domain model for return
+                val message = Message(
+                    id = draftId,
+                    threadId = draftDetails.originalMessageId,
+                    receivedDateTime = java.time.Instant.ofEpochMilli(currentTime).toString(),
+                    sentDateTime = null,
+                    subject = draftDetails.subject,
+                    senderName = account.username,
+                    senderAddress = account.username,
+                    bodyPreview = draftDetails.body?.take(150),
+                    isRead = true,
+                    recipientNames = draftDetails.to,
+                    recipientAddresses = draftDetails.to,
+                    isStarred = false,
+                    hasAttachments = draftDetails.attachments.isNotEmpty(),
+                    timestamp = currentTime
+                )
+
+                Log.d(TAG, "Draft created with ID: $draftId")
+                Result.success(message)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to create draft message", e)
+                Result.failure(e)
+            }
+        }
     }
 
     override suspend fun updateDraftMessage(
@@ -638,11 +820,79 @@ class DefaultMessageRepository @Inject constructor(
         messageId: String,
         draftDetails: MessageDraft
     ): Result<Message> {
-        Log.d(
-            TAG,
-            "updateDraftMessage called for accountId: $accountId, messageId: $messageId. Not implemented with DB sync."
-        )
-        return Result.failure(NotImplementedError("updateDraftMessage not yet implemented with DB sync"))
+        return withContext(ioDispatcher) {
+            try {
+                val account = accountRepository.getAccountByIdSuspend(accountId)
+                if (account == null) {
+                    Log.e(TAG, "Account not found for ID: $accountId")
+                    return@withContext Result.failure(IllegalArgumentException("Account not found"))
+                }
+
+                // Check if draft exists
+                val existingDraft = messageDao.getMessageByIdSuspend(messageId)
+                if (existingDraft == null || !existingDraft.isDraft) {
+                    Log.e(TAG, "Draft message not found or not a draft: $messageId")
+                    return@withContext Result.failure(IllegalArgumentException("Draft not found"))
+                }
+
+                val currentTime = System.currentTimeMillis()
+
+                // Update draft content in database
+                messageDao.updateDraftContent(
+                    messageId = messageId,
+                    subject = draftDetails.subject,
+                    snippet = draftDetails.body?.take(150),
+                    recipientNames = draftDetails.to,
+                    recipientAddresses = draftDetails.to,
+                    timestamp = currentTime,
+                    needsSync = true,
+                    draftType = draftDetails.type.name,
+                    draftParentId = draftDetails.originalMessageId
+                )
+
+                // Update message body
+                val messageBody = MessageBodyEntity(
+                    messageId = messageId,
+                    contentType = "HTML",
+                    content = draftDetails.body,
+                    lastFetchedTimestamp = currentTime
+                )
+                messageBodyDao.insertOrUpdateMessageBody(messageBody)
+
+                // Enqueue worker to sync with server
+                val draftJson = Json.encodeToString(draftDetails)
+                enqueueSyncMessageStateWorker(
+                    account = account,
+                    messageId = messageId,
+                    operation = SyncMessageStateWorker.OP_UPDATE_DRAFT,
+                    draftData = draftJson
+                )
+
+                // Convert to domain model for return
+                val message = Message(
+                    id = messageId,
+                    threadId = draftDetails.originalMessageId,
+                    receivedDateTime = java.time.Instant.ofEpochMilli(currentTime).toString(),
+                    sentDateTime = null,
+                    subject = draftDetails.subject,
+                    senderName = account.username,
+                    senderAddress = account.username,
+                    bodyPreview = draftDetails.body?.take(150),
+                    isRead = true,
+                    recipientNames = draftDetails.to,
+                    recipientAddresses = draftDetails.to,
+                    isStarred = false,
+                    hasAttachments = draftDetails.attachments.isNotEmpty(),
+                    timestamp = currentTime
+                )
+
+                Log.d(TAG, "Draft updated: $messageId")
+                Result.success(message)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to update draft message", e)
+                Result.failure(e)
+            }
+        }
     }
 
     override fun searchMessages(
@@ -664,7 +914,9 @@ class DefaultMessageRepository @Inject constructor(
         isRead: Boolean? = null,
         isStarred: Boolean? = null,
         newFolderId: String? = null,
-        oldFolderId: String? = null
+        oldFolderId: String? = null,
+        draftData: String? = null,
+        sentFolderId: String? = null
     ) {
         Timber.tag(TAG)
             .d("Enqueueing SyncMessageStateWorker: Acc=$accountId, Msg=$messageId, Op=$operationType, Read=$isRead, Starred=$isStarred, NewFId=$newFolderId, OldFId=$oldFolderId")
@@ -688,6 +940,18 @@ class DefaultMessageRepository @Inject constructor(
                 it
             )
         }
+        draftData?.let {
+            inputDataBuilder.putString(
+                SyncMessageStateWorker.KEY_DRAFT_DATA,
+                it
+            )
+        }
+        sentFolderId?.let {
+            inputDataBuilder.putString(
+                SyncMessageStateWorker.KEY_SENT_FOLDER_ID,
+                it
+            )
+        }
 
         val workRequest = OneTimeWorkRequestBuilder<SyncMessageStateWorker>()
             .setInputData(inputDataBuilder.build())
@@ -697,5 +961,58 @@ class DefaultMessageRepository @Inject constructor(
         workManager.enqueue(workRequest)
         Timber.tag(TAG)
             .i("SyncMessageStateWorker enqueued for message $messageId, operation $operationType.")
+    }
+
+    // Overloaded method that accepts Account
+    private fun enqueueSyncMessageStateWorker(
+        account: Account,
+        messageId: String,
+        operation: String,
+        draftData: String? = null,
+        sentFolderId: String? = null
+    ) {
+        enqueueSyncMessageStateWorker(
+            accountId = account.id,
+            messageId = messageId,
+            operationType = operation,
+            draftData = draftData,
+            sentFolderId = sentFolderId
+        )
+    }
+
+    // Helper method to fetch and store attachments from API
+    private suspend fun fetchAndStoreAttachments(account: Account, messageId: String) {
+        try {
+            val providerType = account.providerType.uppercase()
+            val mailApiService = mailApiServices[providerType]
+
+            if (mailApiService != null) {
+                val result = mailApiService.getMessageAttachments(messageId)
+                result.onSuccess { attachments ->
+                    val attachmentEntities = attachments.map { attachment ->
+                        AttachmentEntity(
+                            attachmentId = attachment.id,
+                            messageId = messageId,
+                            fileName = attachment.fileName,
+                            size = attachment.size,
+                            contentType = attachment.contentType,
+                            contentId = attachment.contentId,
+                            isInline = attachment.isInline,
+                            isDownloaded = false,
+                            localFilePath = null,
+                            downloadTimestamp = null,
+                            downloadError = null
+                        )
+                    }
+                    attachmentDao.insertAttachments(attachmentEntities)
+                    Log.d(
+                        TAG,
+                        "Stored ${attachmentEntities.size} attachments for message $messageId"
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to fetch attachments for message $messageId", e)
+        }
     }
 }

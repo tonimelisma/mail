@@ -8,6 +8,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import dagger.hilt.components.SingletonComponent
 import net.melisma.core_db.AppDatabase
 import net.melisma.core_db.dao.AccountDao
+import net.melisma.core_db.dao.AttachmentDao
 import net.melisma.core_db.dao.FolderDao
 import net.melisma.core_db.dao.MessageBodyDao
 import net.melisma.core_db.dao.MessageDao
@@ -45,5 +46,11 @@ object DatabaseModule {
     @Singleton
     fun provideMessageBodyDao(appDatabase: AppDatabase): MessageBodyDao {
         return appDatabase.messageBodyDao()
+    }
+
+    @Provides
+    @Singleton
+    fun provideAttachmentDao(appDatabase: AppDatabase): AttachmentDao {
+        return appDatabase.attachmentDao()
     }
 } 

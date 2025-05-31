@@ -7,6 +7,7 @@ import io.ktor.client.call.body
 import io.ktor.client.request.accept
 import io.ktor.client.request.get
 import io.ktor.client.request.parameter
+import io.ktor.client.request.patch
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
@@ -24,6 +25,8 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.putJsonArray
 import net.melisma.backend_google.auth.GoogleNeedsReauthenticationException
 import net.melisma.backend_google.di.GoogleHttpClient
+import net.melisma.backend_google.model.GmailAttachmentResponse
+import net.melisma.backend_google.model.GmailDraftResponse
 import net.melisma.backend_google.model.GmailLabel
 import net.melisma.backend_google.model.GmailLabelList
 import net.melisma.backend_google.model.GmailMessage
@@ -1117,5 +1120,412 @@ class GmailApiHelper @Inject constructor(
             val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
             Result.failure(Exception(mappedDetails.message, e))
         }
+    }
+
+    override suspend fun getMessageAttachments(messageId: String): Result<List<net.melisma.core_data.model.Attachment>> {
+        Log.d(TAG, "getMessageAttachments: messageId='$messageId'")
+        return try {
+            val response = httpClient.get("$BASE_URL/messages/$messageId") {
+                accept(ContentType.Application.Json)
+                parameter("format", "full")
+            }
+
+            if (response.status.isSuccess()) {
+                val message = response.body<GmailMessage>()
+                val attachments = extractAttachmentsFromMessage(message)
+                Result.success(attachments)
+            } else {
+                val errorBody = response.bodyAsText().take(500)
+                Log.e(
+                    TAG,
+                    "Failed to fetch message attachments for $messageId: ${response.status} - $errorBody"
+                )
+                val httpEx = io.ktor.client.plugins.ClientRequestException(response, errorBody)
+                val mappedDetails = errorMapper.mapExceptionToErrorDetails(httpEx)
+                Result.failure(Exception(mappedDetails.message, httpEx))
+            }
+        } catch (e: GoogleNeedsReauthenticationException) {
+            Log.w(
+                TAG,
+                "Google account ${e.accountId} needs re-authentication during getMessageAttachments (message: $messageId).",
+                e
+            )
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(Exception("Re-authentication required: ${mappedDetails.message}", e))
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception in getMessageAttachments for $messageId", e)
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(Exception(mappedDetails.message, e))
+        }
+    }
+
+    override suspend fun downloadAttachment(
+        messageId: String,
+        attachmentId: String
+    ): Result<ByteArray> {
+        Log.d(TAG, "downloadAttachment: messageId='$messageId', attachmentId='$attachmentId'")
+        return try {
+            val response =
+                httpClient.get("$BASE_URL/messages/$messageId/attachments/$attachmentId") {
+                    accept(ContentType.Application.Json)
+                }
+
+            if (response.status.isSuccess()) {
+                val attachmentResponse = response.body<GmailAttachmentResponse>()
+                val data = Base64.decode(
+                    attachmentResponse.data.replace("-", "+").replace("_", "/"),
+                    Base64.DEFAULT
+                )
+                Result.success(data)
+            } else {
+                val errorBody = response.bodyAsText().take(500)
+                Log.e(
+                    TAG,
+                    "Failed to download attachment $attachmentId for message $messageId: ${response.status} - $errorBody"
+                )
+                val httpEx = io.ktor.client.plugins.ClientRequestException(response, errorBody)
+                val mappedDetails = errorMapper.mapExceptionToErrorDetails(httpEx)
+                Result.failure(Exception(mappedDetails.message, httpEx))
+            }
+        } catch (e: GoogleNeedsReauthenticationException) {
+            Log.w(
+                TAG,
+                "Google account ${e.accountId} needs re-authentication during downloadAttachment (message: $messageId).",
+                e
+            )
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(Exception("Re-authentication required: ${mappedDetails.message}", e))
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception in downloadAttachment for $messageId/$attachmentId", e)
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(Exception(mappedDetails.message, e))
+        }
+    }
+
+    override suspend fun createDraftMessage(draft: net.melisma.core_data.model.MessageDraft): Result<Message> {
+        Log.d(TAG, "createDraftMessage: subject='${draft.subject}'")
+        return try {
+            val draftPayload = buildGmailDraftPayload(draft)
+            val response = httpClient.post("$BASE_URL/drafts") {
+                accept(ContentType.Application.Json)
+                setBody(draftPayload)
+            }
+
+            if (response.status.isSuccess()) {
+                val gmailDraft = response.body<GmailDraftResponse>()
+                val message = convertGmailMessageToMessage(gmailDraft.message)
+                Result.success(message)
+            } else {
+                val errorBody = response.bodyAsText().take(500)
+                Log.e(TAG, "Failed to create draft: ${response.status} - $errorBody")
+                val httpEx = io.ktor.client.plugins.ClientRequestException(response, errorBody)
+                val mappedDetails = errorMapper.mapExceptionToErrorDetails(httpEx)
+                Result.failure(Exception(mappedDetails.message, httpEx))
+            }
+        } catch (e: GoogleNeedsReauthenticationException) {
+            Log.w(
+                TAG,
+                "Google account ${e.accountId} needs re-authentication during createDraftMessage.",
+                e
+            )
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(Exception("Re-authentication required: ${mappedDetails.message}", e))
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception in createDraftMessage", e)
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(Exception(mappedDetails.message, e))
+        }
+    }
+
+    override suspend fun updateDraftMessage(
+        messageId: String,
+        draft: net.melisma.core_data.model.MessageDraft
+    ): Result<Message> {
+        Log.d(TAG, "updateDraftMessage: messageId='$messageId', subject='${draft.subject}'")
+        return try {
+            val draftPayload = buildGmailDraftPayload(draft)
+            val response = httpClient.patch("$BASE_URL/drafts/$messageId") {
+                accept(ContentType.Application.Json)
+                setBody(draftPayload)
+            }
+
+            if (response.status.isSuccess()) {
+                val gmailDraft = response.body<GmailDraftResponse>()
+                val message = convertGmailMessageToMessage(gmailDraft.message)
+                Result.success(message)
+            } else {
+                val errorBody = response.bodyAsText().take(500)
+                Log.e(TAG, "Failed to update draft $messageId: ${response.status} - $errorBody")
+                val httpEx = io.ktor.client.plugins.ClientRequestException(response, errorBody)
+                val mappedDetails = errorMapper.mapExceptionToErrorDetails(httpEx)
+                Result.failure(Exception(mappedDetails.message, httpEx))
+            }
+        } catch (e: GoogleNeedsReauthenticationException) {
+            Log.w(
+                TAG,
+                "Google account ${e.accountId} needs re-authentication during updateDraftMessage (draft: $messageId).",
+                e
+            )
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(Exception("Re-authentication required: ${mappedDetails.message}", e))
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception in updateDraftMessage for $messageId", e)
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(Exception(mappedDetails.message, e))
+        }
+    }
+
+    override suspend fun sendMessage(draft: net.melisma.core_data.model.MessageDraft): Result<String> {
+        Log.d(TAG, "sendMessage: subject='${draft.subject}'")
+        return try {
+            val messagePayload = buildGmailSendPayload(draft)
+            val response = httpClient.post("$BASE_URL/messages/send") {
+                accept(ContentType.Application.Json)
+                setBody(messagePayload)
+            }
+
+            if (response.status.isSuccess()) {
+                val sentMessage = response.body<GmailMessage>()
+                Result.success(sentMessage.id ?: "")
+            } else {
+                val errorBody = response.bodyAsText().take(500)
+                Log.e(TAG, "Failed to send message: ${response.status} - $errorBody")
+                val httpEx = io.ktor.client.plugins.ClientRequestException(response, errorBody)
+                val mappedDetails = errorMapper.mapExceptionToErrorDetails(httpEx)
+                Result.failure(Exception(mappedDetails.message, httpEx))
+            }
+        } catch (e: GoogleNeedsReauthenticationException) {
+            Log.w(
+                TAG,
+                "Google account ${e.accountId} needs re-authentication during sendMessage.",
+                e
+            )
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(Exception("Re-authentication required: ${mappedDetails.message}", e))
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception in sendMessage", e)
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(Exception(mappedDetails.message, e))
+        }
+    }
+
+    override suspend fun searchMessages(
+        query: String,
+        folderId: String?,
+        maxResults: Int
+    ): Result<List<Message>> {
+        Log.d(TAG, "searchMessages: query='$query', folderId='$folderId', maxResults=$maxResults")
+        return try {
+            val searchQuery = if (folderId != null) "in:$folderId $query" else query
+            val response = httpClient.get("$BASE_URL/messages") {
+                accept(ContentType.Application.Json)
+                parameter("q", searchQuery)
+                parameter("maxResults", maxResults)
+            }
+
+            if (response.status.isSuccess()) {
+                val messageList = response.body<GmailMessageList>()
+                val messages = messageList.messages?.mapNotNull { gmailMsg ->
+                    gmailMsg.id?.let { messageId ->
+                        // Fetch full details for each message
+                        runCatching {
+                            val detailResponse = httpClient.get("$BASE_URL/messages/$messageId") {
+                                accept(ContentType.Application.Json)
+                                parameter("format", "metadata")
+                            }
+                            if (detailResponse.status.isSuccess()) {
+                                val fullMessage = detailResponse.body<GmailMessage>()
+                                convertGmailMessageToMessage(fullMessage)
+                            } else null
+                        }.getOrNull()
+                    }
+                } ?: emptyList()
+                Result.success(messages)
+            } else {
+                val errorBody = response.bodyAsText().take(500)
+                Log.e(TAG, "Failed to search messages: ${response.status} - $errorBody")
+                val httpEx = io.ktor.client.plugins.ClientRequestException(response, errorBody)
+                val mappedDetails = errorMapper.mapExceptionToErrorDetails(httpEx)
+                Result.failure(Exception(mappedDetails.message, httpEx))
+            }
+        } catch (e: GoogleNeedsReauthenticationException) {
+            Log.w(
+                TAG,
+                "Google account ${e.accountId} needs re-authentication during searchMessages.",
+                e
+            )
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(Exception("Re-authentication required: ${mappedDetails.message}", e))
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception in searchMessages", e)
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(Exception(mappedDetails.message, e))
+        }
+    }
+
+    // Helper methods for the new functionality
+
+    private fun extractAttachmentsFromMessage(message: GmailMessage): List<net.melisma.core_data.model.Attachment> {
+        val attachments = mutableListOf<net.melisma.core_data.model.Attachment>()
+
+        fun extractFromPart(part: MessagePart) {
+            part.body?.attachmentId?.let { attachmentId ->
+                attachments.add(
+                    net.melisma.core_data.model.Attachment(
+                        id = attachmentId,
+                        fileName = part.filename ?: "attachment",
+                        size = part.body.size?.toLong() ?: 0L,
+                        contentType = part.mimeType ?: "application/octet-stream",
+                        contentId = part.headers?.find { it.name == "Content-ID" }?.value,
+                        isInline = part.headers?.find { it.name == "Content-Disposition" }?.value?.contains(
+                            "inline"
+                        ) == true
+                    )
+                )
+            }
+            part.parts?.forEach { extractFromPart(it) }
+        }
+
+        message.payload?.let { payload ->
+            val rootPart = MessagePart(
+                partId = null,
+                mimeType = payload.mimeType,
+                filename = null,
+                headers = payload.headers,
+                body = payload.body,
+                parts = payload.parts
+            )
+            extractFromPart(rootPart)
+        }
+        return attachments
+    }
+
+    private fun buildGmailDraftPayload(draft: net.melisma.core_data.model.MessageDraft): Map<String, Any> {
+        val headers = mutableListOf<Map<String, String>>()
+        headers.add(mapOf("name" to "To", "value" to draft.to.joinToString(", ")))
+        draft.cc?.let {
+            if (it.isNotEmpty()) headers.add(
+                mapOf(
+                    "name" to "Cc",
+                    "value" to it.joinToString(", ")
+                )
+            )
+        }
+        draft.bcc?.let {
+            if (it.isNotEmpty()) headers.add(
+                mapOf(
+                    "name" to "Bcc",
+                    "value" to it.joinToString(", ")
+                )
+            )
+        }
+        draft.subject?.let { headers.add(mapOf("name" to "Subject", "value" to it)) }
+
+        return mapOf(
+            "message" to mapOf(
+                "payload" to mapOf(
+                    "headers" to headers,
+                    "body" to mapOf(
+                        "data" to Base64.encodeToString(
+                            draft.body?.toByteArray() ?: byteArrayOf(),
+                            Base64.URL_SAFE or Base64.NO_WRAP
+                        )
+                    )
+                )
+            )
+        )
+    }
+
+    private fun buildGmailSendPayload(draft: net.melisma.core_data.model.MessageDraft): Map<String, Any> {
+        val rawMessage = buildRfc2822Message(draft)
+        return mapOf(
+            "raw" to Base64.encodeToString(
+                rawMessage.toByteArray(),
+                Base64.URL_SAFE or Base64.NO_WRAP
+            )
+        )
+    }
+
+    private fun buildRfc2822Message(draft: net.melisma.core_data.model.MessageDraft): String {
+        val message = StringBuilder()
+        message.append("To: ${draft.to.joinToString(", ")}\r\n")
+        draft.cc?.let { if (it.isNotEmpty()) message.append("Cc: ${it.joinToString(", ")}\r\n") }
+        draft.bcc?.let { if (it.isNotEmpty()) message.append("Bcc: ${it.joinToString(", ")}\r\n") }
+        draft.subject?.let { message.append("Subject: $it\r\n") }
+        message.append("Content-Type: text/html; charset=utf-8\r\n")
+        message.append("\r\n")
+        message.append(draft.body ?: "")
+        return message.toString()
+    }
+
+    private fun convertGmailMessageToMessage(gmailMessage: GmailMessage): Message {
+        val timestamp = gmailMessage.internalDate?.toLongOrNull() ?: System.currentTimeMillis()
+        val receivedDate = java.time.Instant.ofEpochMilli(timestamp).toString()
+        val sentDate = java.time.Instant.ofEpochMilli(timestamp).toString()
+
+        return Message(
+            id = gmailMessage.id ?: "",
+            threadId = gmailMessage.threadId,
+            receivedDateTime = receivedDate,
+            sentDateTime = sentDate,
+            subject = gmailMessage.payload?.headers?.find { it.name == "Subject" }?.value,
+            senderName = extractSenderName(gmailMessage),
+            senderAddress = extractSenderAddress(gmailMessage),
+            bodyPreview = gmailMessage.snippet,
+            isRead = gmailMessage.labelIds?.contains("UNREAD") != true,
+            recipientNames = extractRecipientNames(gmailMessage),
+            recipientAddresses = extractRecipientAddresses(gmailMessage),
+            isStarred = gmailMessage.labelIds?.contains("STARRED") == true,
+            hasAttachments = gmailMessage.payload?.let { payload ->
+                val rootPart = MessagePart(
+                    partId = null,
+                    mimeType = payload.mimeType,
+                    filename = null,
+                    headers = payload.headers,
+                    body = payload.body,
+                    parts = payload.parts
+                )
+                hasAttachments(rootPart)
+            } == true,
+            timestamp = timestamp
+        )
+    }
+
+    private fun extractSenderName(message: GmailMessage): String? {
+        return message.payload?.headers?.find { it.name == "From" }?.value?.let { from ->
+            if (from.contains("<")) from.substringBefore("<").trim()
+                .removeSurrounding("\"") else from
+        }
+    }
+
+    private fun extractSenderAddress(message: GmailMessage): String? {
+        return message.payload?.headers?.find { it.name == "From" }?.value?.let { from ->
+            if (from.contains("<")) from.substringAfter("<").substringBefore(">") else from
+        }
+    }
+
+    private fun extractRecipientNames(message: GmailMessage): List<String> {
+        return message.payload?.headers?.find { it.name == "To" }?.value?.split(",")
+            ?.map { recipient ->
+                recipient.trim().let { trimmed ->
+                    if (trimmed.contains("<")) trimmed.substringBefore("<").trim()
+                        .removeSurrounding("\"") else trimmed
+                }
+            } ?: emptyList()
+    }
+
+    private fun extractRecipientAddresses(message: GmailMessage): List<String> {
+        return message.payload?.headers?.find { it.name == "To" }?.value?.split(",")
+            ?.map { recipient ->
+                recipient.trim().let { trimmed ->
+                    if (trimmed.contains("<")) trimmed.substringAfter("<")
+                        .substringBefore(">") else trimmed
+                }
+            } ?: emptyList()
+    }
+
+    private fun hasAttachments(payload: MessagePart): Boolean {
+        if (payload.body?.attachmentId != null) return true
+        return payload.parts?.any { hasAttachments(it) } == true
     }
 }

@@ -10,17 +10,19 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 import net.melisma.core_db.converter.StringListConverter
 import net.melisma.core_db.converter.WellKnownFolderTypeConverter
 import net.melisma.core_db.dao.AccountDao
+import net.melisma.core_db.dao.AttachmentDao
 import net.melisma.core_db.dao.FolderDao
 import net.melisma.core_db.dao.MessageBodyDao
 import net.melisma.core_db.dao.MessageDao
 import net.melisma.core_db.entity.AccountEntity
+import net.melisma.core_db.entity.AttachmentEntity
 import net.melisma.core_db.entity.FolderEntity
 import net.melisma.core_db.entity.MessageBodyEntity
 import net.melisma.core_db.entity.MessageEntity
 
 @Database(
-    entities = [AccountEntity::class, FolderEntity::class, MessageEntity::class, MessageBodyEntity::class],
-    version = 7,
+    entities = [AccountEntity::class, FolderEntity::class, MessageEntity::class, MessageBodyEntity::class, AttachmentEntity::class],
+    version = 8,
     exportSchema = false // Set to true for production apps for schema migration history
 )
 @TypeConverters(WellKnownFolderTypeConverter::class, StringListConverter::class)
@@ -29,6 +31,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun folderDao(): FolderDao
     abstract fun messageDao(): MessageDao
     abstract fun messageBodyDao(): MessageBodyDao
+    abstract fun attachmentDao(): AttachmentDao
 
     companion object {
         @Volatile
@@ -48,7 +51,8 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_3_4,
                         MIGRATION_4_5,
                         MIGRATION_5_6,
-                        MIGRATION_6_7
+                        MIGRATION_6_7,
+                        MIGRATION_7_8
                     )
                     .build()
                 INSTANCE = instance
@@ -130,6 +134,44 @@ abstract class AppDatabase : RoomDatabase() {
         val MIGRATION_6_7 = object : Migration(6, 7) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE `messages` ADD COLUMN `isLocallyDeleted` INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Add new columns to messages table for draft/outbox support
+                db.execSQL("ALTER TABLE `messages` ADD COLUMN `isDraft` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `messages` ADD COLUMN `isOutbox` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `messages` ADD COLUMN `draftType` TEXT DEFAULT NULL")
+                db.execSQL("ALTER TABLE `messages` ADD COLUMN `draftParentId` TEXT DEFAULT NULL")
+                db.execSQL("ALTER TABLE `messages` ADD COLUMN `sendAttempts` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `messages` ADD COLUMN `lastSendError` TEXT DEFAULT NULL")
+                db.execSQL("ALTER TABLE `messages` ADD COLUMN `scheduledSendTime` INTEGER DEFAULT NULL")
+
+                // Create attachments table
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `attachments` (
+                        `attachmentId` TEXT NOT NULL,
+                        `messageId` TEXT NOT NULL,
+                        `fileName` TEXT NOT NULL,
+                        `size` INTEGER NOT NULL,
+                        `contentType` TEXT NOT NULL,
+                        `contentId` TEXT,
+                        `isInline` INTEGER NOT NULL DEFAULT 0,
+                        `isDownloaded` INTEGER NOT NULL DEFAULT 0,
+                        `localFilePath` TEXT,
+                        `downloadTimestamp` INTEGER,
+                        `downloadError` TEXT,
+                        PRIMARY KEY(`attachmentId`),
+                        FOREIGN KEY(`messageId`) REFERENCES `messages`(`messageId`) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                """
+                )
+
+                // Create indices for attachments table
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_attachments_messageId` ON `attachments` (`messageId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_attachments_attachmentId` ON `attachments` (`attachmentId`)")
             }
         }
     }

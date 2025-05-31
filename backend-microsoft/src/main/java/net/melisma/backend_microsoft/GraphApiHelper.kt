@@ -61,7 +61,14 @@ private data class GraphMessage(
     val toRecipients: List<GraphRecipient> = emptyList(),
     val isRead: Boolean = true,
     val bodyPreview: String? = null,
-    val body: GraphItemBody? = null // Added body field
+    val body: GraphItemBody? = null,
+    val hasAttachments: Boolean? = null,
+    val flag: GraphFlag? = null
+)
+
+@Serializable
+private data class GraphFlag(
+    val flagStatus: String? = null
 )
 
 @Serializable
@@ -73,6 +80,16 @@ private data class GraphRecipient(
 private data class GraphEmailAddress(
     val name: String? = null,
     val address: String? = null
+)
+
+@Serializable
+private data class GraphAttachment(
+    val id: String,
+    val name: String? = null,
+    val contentType: String? = null,
+    val size: Long? = null,
+    val contentId: String? = null,
+    val isInline: Boolean? = null
 )
 
 @Singleton
@@ -822,5 +839,262 @@ class GraphApiHelper @Inject constructor(
             return Result.failure(errorMapper.mapExceptionToError(e))
         }
     }
-    // End of added Thread operations
+
+    override suspend fun getMessageAttachments(messageId: String): Result<List<net.melisma.core_data.model.Attachment>> {
+        Log.d(TAG, "getMessageAttachments: messageId='$messageId'")
+        return try {
+            val response =
+                httpClient.get("$MS_GRAPH_ROOT_ENDPOINT/me/messages/$messageId/attachments") {
+                    accept(ContentType.Application.Json)
+                }
+
+            if (response.status.isSuccess()) {
+                val attachmentsResponse = response.body<GraphCollection<GraphAttachment>>()
+                val attachments = attachmentsResponse.value.map { graphAttachment ->
+                    net.melisma.core_data.model.Attachment(
+                        id = graphAttachment.id,
+                        fileName = graphAttachment.name ?: "attachment",
+                        size = graphAttachment.size ?: 0L,
+                        contentType = graphAttachment.contentType ?: "application/octet-stream",
+                        contentId = graphAttachment.contentId,
+                        isInline = graphAttachment.isInline == true
+                    )
+                }
+                Result.success(attachments)
+            } else {
+                val errorBody = response.bodyAsText()
+                Log.e(
+                    TAG,
+                    "Failed to get attachments for message $messageId: ${response.status} - $errorBody"
+                )
+                Result.failure(Exception("Failed to get attachments: ${response.status}"))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception in getMessageAttachments for $messageId", e)
+            Result.failure(errorMapper.mapExceptionToError(e))
+        }
+    }
+
+    override suspend fun downloadAttachment(
+        messageId: String,
+        attachmentId: String
+    ): Result<ByteArray> {
+        Log.d(TAG, "downloadAttachment: messageId='$messageId', attachmentId='$attachmentId'")
+        return try {
+            val response =
+                httpClient.get("$MS_GRAPH_ROOT_ENDPOINT/me/messages/$messageId/attachments/$attachmentId/\$value") {
+                    // Note: $value endpoint returns raw binary data
+                }
+
+            if (response.status.isSuccess()) {
+                val data = response.body<ByteArray>()
+                Result.success(data)
+            } else {
+                val errorBody = response.bodyAsText()
+                Log.e(
+                    TAG,
+                    "Failed to download attachment $attachmentId for message $messageId: ${response.status} - $errorBody"
+                )
+                Result.failure(Exception("Failed to download attachment: ${response.status}"))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception in downloadAttachment for $messageId/$attachmentId", e)
+            Result.failure(errorMapper.mapExceptionToError(e))
+        }
+    }
+
+    override suspend fun createDraftMessage(draft: net.melisma.core_data.model.MessageDraft): Result<Message> {
+        Log.d(TAG, "createDraftMessage: subject='${draft.subject}'")
+        return try {
+            val draftPayload = buildGraphDraftPayload(draft)
+            val response = httpClient.post("$MS_GRAPH_ROOT_ENDPOINT/me/messages") {
+                accept(ContentType.Application.Json)
+                setBody(draftPayload)
+            }
+
+            if (response.status.isSuccess()) {
+                val graphMessage = response.body<GraphMessage>()
+                val message = convertGraphMessageToMessage(graphMessage)
+                Result.success(message)
+            } else {
+                val errorBody = response.bodyAsText()
+                Log.e(TAG, "Failed to create draft: ${response.status} - $errorBody")
+                Result.failure(Exception("Failed to create draft: ${response.status}"))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception in createDraftMessage", e)
+            Result.failure(errorMapper.mapExceptionToError(e))
+        }
+    }
+
+    override suspend fun updateDraftMessage(
+        messageId: String,
+        draft: net.melisma.core_data.model.MessageDraft
+    ): Result<Message> {
+        Log.d(TAG, "updateDraftMessage: messageId='$messageId', subject='${draft.subject}'")
+        return try {
+            val draftPayload = buildGraphDraftPayload(draft)
+            val response = httpClient.patch("$MS_GRAPH_ROOT_ENDPOINT/me/messages/$messageId") {
+                accept(ContentType.Application.Json)
+                setBody(draftPayload)
+            }
+
+            if (response.status.isSuccess()) {
+                val graphMessage = response.body<GraphMessage>()
+                val message = convertGraphMessageToMessage(graphMessage)
+                Result.success(message)
+            } else {
+                val errorBody = response.bodyAsText()
+                Log.e(TAG, "Failed to update draft $messageId: ${response.status} - $errorBody")
+                Result.failure(Exception("Failed to update draft: ${response.status}"))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception in updateDraftMessage for $messageId", e)
+            Result.failure(errorMapper.mapExceptionToError(e))
+        }
+    }
+
+    override suspend fun sendMessage(draft: net.melisma.core_data.model.MessageDraft): Result<String> {
+        Log.d(TAG, "sendMessage: subject='${draft.subject}'")
+        return try {
+            val sendPayload = buildGraphSendPayload(draft)
+            val response = httpClient.post("$MS_GRAPH_ROOT_ENDPOINT/me/sendMail") {
+                accept(ContentType.Application.Json)
+                setBody(sendPayload)
+            }
+
+            if (response.status.isSuccess()) {
+                // Microsoft Graph sendMail returns 202 with no body on success
+                // Generate a unique ID since we don't get one back
+                val sentMessageId = "sent_${System.currentTimeMillis()}"
+                Result.success(sentMessageId)
+            } else {
+                val errorBody = response.bodyAsText()
+                Log.e(TAG, "Failed to send message: ${response.status} - $errorBody")
+                Result.failure(Exception("Failed to send message: ${response.status}"))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception in sendMessage", e)
+            Result.failure(errorMapper.mapExceptionToError(e))
+        }
+    }
+
+    override suspend fun searchMessages(
+        query: String,
+        folderId: String?,
+        maxResults: Int
+    ): Result<List<Message>> {
+        Log.d(TAG, "searchMessages: query='$query', folderId='$folderId', maxResults=$maxResults")
+        return try {
+            val searchUrl = if (folderId != null) {
+                "$MS_GRAPH_ROOT_ENDPOINT/me/mailFolders/$folderId/messages"
+            } else {
+                "$MS_GRAPH_ROOT_ENDPOINT/me/messages"
+            }
+
+            val response = httpClient.get(searchUrl) {
+                accept(ContentType.Application.Json)
+                if (query.isNotBlank()) {
+                    // Microsoft Graph uses $search for text search
+                    url.parameters.append("\$search", "\"$query\"")
+                }
+                url.parameters.append("\$top", maxResults.toString())
+            }
+
+            if (response.status.isSuccess()) {
+                val messagesResponse = response.body<GraphCollection<GraphMessage>>()
+                val messages = messagesResponse.value.map { convertGraphMessageToMessage(it) }
+                Result.success(messages)
+            } else {
+                val errorBody = response.bodyAsText()
+                Log.e(TAG, "Failed to search messages: ${response.status} - $errorBody")
+                Result.failure(Exception("Failed to search messages: ${response.status}"))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Exception in searchMessages", e)
+            Result.failure(errorMapper.mapExceptionToError(e))
+        }
+    }
+
+    // Helper methods for the new functionality
+
+    private fun buildGraphDraftPayload(draft: net.melisma.core_data.model.MessageDraft): Map<String, Any> {
+        val payload = mutableMapOf<String, Any>()
+
+        draft.subject?.let { payload["subject"] = it }
+
+        val body = mapOf(
+            "contentType" to "HTML",
+            "content" to (draft.body ?: "")
+        )
+        payload["body"] = body
+
+        val toRecipients = draft.to.map { email ->
+            mapOf("emailAddress" to mapOf("address" to email))
+        }
+        payload["toRecipients"] = toRecipients
+
+        draft.cc?.let { ccList ->
+            if (ccList.isNotEmpty()) {
+                val ccRecipients = ccList.map { email ->
+                    mapOf("emailAddress" to mapOf("address" to email))
+                }
+                payload["ccRecipients"] = ccRecipients
+            }
+        }
+
+        draft.bcc?.let { bccList ->
+            if (bccList.isNotEmpty()) {
+                val bccRecipients = bccList.map { email ->
+                    mapOf("emailAddress" to mapOf("address" to email))
+                }
+                payload["bccRecipients"] = bccRecipients
+            }
+        }
+
+        // Mark as draft
+        payload["isDraft"] = true
+
+        return payload
+    }
+
+    private fun buildGraphSendPayload(draft: net.melisma.core_data.model.MessageDraft): Map<String, Any> {
+        val message = buildGraphDraftPayload(draft).toMutableMap()
+        message.remove("isDraft") // Remove draft flag for sending
+
+        return mapOf("message" to message)
+    }
+
+    private fun convertGraphMessageToMessage(graphMessage: GraphMessage): Message {
+        return Message(
+            id = graphMessage.id,
+            threadId = graphMessage.conversationId,
+            receivedDateTime = graphMessage.receivedDateTime ?: "",
+            sentDateTime = graphMessage.sentDateTime,
+            subject = graphMessage.subject,
+            senderName = graphMessage.from?.emailAddress?.name,
+            senderAddress = graphMessage.from?.emailAddress?.address,
+            bodyPreview = graphMessage.bodyPreview,
+            isRead = graphMessage.isRead ?: false,
+            recipientNames = graphMessage.toRecipients?.map { it.emailAddress?.name ?: "" }
+                ?: emptyList(),
+            recipientAddresses = graphMessage.toRecipients?.map { it.emailAddress?.address ?: "" }
+                ?: emptyList(),
+            isStarred = graphMessage.flag?.flagStatus == "flagged",
+            hasAttachments = graphMessage.hasAttachments == true,
+            timestamp = parseGraphDateTime(graphMessage.receivedDateTime)
+        )
+    }
+
+    private fun parseGraphDateTime(dateTimeString: String?): Long {
+        return dateTimeString?.let {
+            try {
+                // Microsoft Graph returns ISO 8601 format
+                java.time.Instant.parse(it).toEpochMilli()
+            } catch (e: Exception) {
+                System.currentTimeMillis()
+            }
+        } ?: System.currentTimeMillis()
+    }
+    // End of added operations
 }
