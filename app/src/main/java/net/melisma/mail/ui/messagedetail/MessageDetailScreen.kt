@@ -137,6 +137,8 @@ fun MessageDetailScreen(
                                         settings.javaScriptEnabled = false
                                         settings.loadWithOverviewMode = true
                                         settings.useWideViewPort = true
+                                        settings.setInitialScale(1)
+                                        settings.domStorageEnabled = true
                                         settings.defaultTextEncodingName = "utf-8"
                                         // Optional: For dark theme investigation later if needed
                                         // if (WebViewFeature.isFeatureSupported(WebViewFeature.FORCE_DARK)) {
