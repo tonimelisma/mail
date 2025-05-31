@@ -129,6 +129,6 @@ interface MessageRepository {
     suspend fun downloadAttachment(
         accountId: String,
         messageId: String,
-        attachmentId: String
-    ): Result<ByteArray>
+        attachment: Attachment
+    ): Flow<String?>
 }

@@ -95,7 +95,7 @@ class MessageRemoteMediator(
                                 "$dbLogPrefix Clearing old messages and inserting ${messagesFromApi.size} new ones."
                             )
                             // It's important that this deletion is specific to the accountId and folderId
-                            messageDao.deleteMessagesForFolder(accountId, folderId)
+                            // messageDao.deleteMessagesForFolder(accountId, folderId) // Old approach
                             val messageEntities =
                                 messagesFromApi.map { it.toEntity(accountId, folderId) }
                             messageDao.insertOrUpdateMessages(messageEntities)
