@@ -4,7 +4,6 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import android.util.Base64
-import android.util.Log
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -12,6 +11,7 @@ import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 import javax.inject.Inject
 import javax.inject.Singleton
+import timber.log.Timber
 
 /**
  * Service for securely encrypting and decrypting sensitive data using Android Keystore.
@@ -21,7 +21,6 @@ import javax.inject.Singleton
 class SecureEncryptionService @Inject constructor() {
 
     companion object {
-        private const val TAG = "SecureEncryptionService"
         private const val ANDROID_KEYSTORE = "AndroidKeyStore"
         private const val TRANSFORMATION = "AES/GCM/NoPadding"
         private const val KEY_ALIAS = "net.melisma.mail.encryption_key"
@@ -59,7 +58,7 @@ class SecureEncryptionService @Inject constructor() {
             // Return Base64 encoded string (IV + encrypted data)
             Base64.encodeToString(ivAndEncryptedData, Base64.NO_WRAP)
         } catch (e: Exception) {
-            Log.e(TAG, "Encryption failed", e)
+            Timber.e(e, "Encryption failed")
             null
         }
     }
@@ -74,7 +73,7 @@ class SecureEncryptionService @Inject constructor() {
         return try {
             // Get the key from keystore
             val key = getKey() ?: run {
-                Log.w(TAG, "Decryption failed: Key not found for alias $KEY_ALIAS")
+                Timber.w("Decryption failed: Key not found for alias $KEY_ALIAS")
                 return null
             }
 
@@ -98,20 +97,19 @@ class SecureEncryptionService @Inject constructor() {
             // Return decrypted string
             String(decryptedBytes, Charsets.UTF_8)
         } catch (e: KeyPermanentlyInvalidatedException) {
-            Log.e(
-                TAG,
-                "Decryption failed due to KeyPermanentlyInvalidatedException for alias $KEY_ALIAS. Deleting key.",
-                e
+            Timber.e(
+                e,
+                "Decryption failed due to KeyPermanentlyInvalidatedException for alias $KEY_ALIAS. Deleting key."
             )
             try {
                 keyStore.deleteEntry(KEY_ALIAS)
-                Log.i(TAG, "Successfully deleted invalidated key for alias $KEY_ALIAS.")
+                Timber.i("Successfully deleted invalidated key for alias $KEY_ALIAS.")
             } catch (deleteEx: Exception) {
-                Log.e(TAG, "Failed to delete invalidated key for alias $KEY_ALIAS.", deleteEx)
+                Timber.e(deleteEx, "Failed to delete invalidated key for alias $KEY_ALIAS.")
             }
             null
         } catch (e: Exception) {
-            Log.e(TAG, "Decryption failed for alias $KEY_ALIAS", e)
+            Timber.e(e, "Decryption failed for alias $KEY_ALIAS")
             null
         }
     }
@@ -160,7 +158,7 @@ class SecureEncryptionService @Inject constructor() {
                 null
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error retrieving key", e)
+            Timber.e(e, "Error retrieving key")
             null
         }
     }

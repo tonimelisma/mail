@@ -2,7 +2,6 @@ package net.melisma.backend_microsoft.di
 
 // import okhttp3.OkHttpClient // Only needed if customizing OkHttp client directly
 // import okhttp3.logging.HttpLoggingInterceptor // Only needed if using OkHttp interceptor logging
-import android.util.Log
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -17,12 +16,11 @@ import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.json.Json
 import java.util.concurrent.TimeUnit
 import javax.inject.Singleton
+import timber.log.Timber
 
 @Module
 @InstallIn(SingletonComponent::class)
 object NetworkModule {
-
-    private const val KTOR_CLIENT_TAG = "KtorHttpClient"
 
     @Provides
     @Singleton
@@ -51,7 +49,7 @@ object NetworkModule {
                     override fun log(message: String) {
                         // Only log the first non-blank line of the message
                         val firstLine = message.lines().firstOrNull { it.isNotBlank() } ?: message
-                        Log.v(KTOR_CLIENT_TAG, firstLine) // Log to Android Logcat
+                        Timber.tag("KtorHttpClient").v(firstLine) // Log to Android Logcat
                     }
                 }
                 level =

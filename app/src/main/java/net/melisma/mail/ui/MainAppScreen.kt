@@ -2,7 +2,6 @@ package net.melisma.mail.ui
 
 import android.app.Activity
 import android.content.Context
-import android.util.Log
 import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -80,13 +79,12 @@ fun MainAppScreen(
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
-    val TAG_COMPOSABLE = "MainAppScreenComposable"
 
     LaunchedEffect(state.toastMessage) {
         state.toastMessage?.let {
-            Log.d(TAG_COMPOSABLE, "LaunchedEffect: Showing toast message: $it")
+            Timber.d("LaunchedEffect: Showing toast message: $it")
             showToast(context, it)
-            Log.d(TAG_COMPOSABLE, "LaunchedEffect: Notifying ViewModel that toast was shown")
+            Timber.d("LaunchedEffect: Notifying ViewModel that toast was shown")
             mainViewModel.toastMessageShown()
         }
     }
@@ -128,8 +126,7 @@ fun MainAppScreen(
         ) { innerPadding ->
             Box(modifier = Modifier.padding(innerPadding)) {
                 val currentAuthState = state.overallApplicationAuthState
-                Log.d(
-                    TAG_COMPOSABLE,
+                Timber.d(
                     "MainAppScreen recomposing. AuthState: ${currentAuthState::class.simpleName}, isLoadingAccountAction: ${state.isLoadingAccountAction}, Accounts: ${state.accounts.size}, SelectedFolder: ${state.selectedFolder?.displayName}, ViewMode: ${state.currentViewMode}"
                 )
 
@@ -236,16 +233,14 @@ fun MainAppScreen(
                             ) {
                                 when (state.currentViewMode) {
                                     ViewMode.MESSAGES -> {
-                                        Log.d(
-                                            TAG_COMPOSABLE,
+                                        Timber.d(
                                             "MainAppScreen: MESSAGES view. lazyMessageItems.loadState: Refresh=${lazyMessageItems.loadState.refresh}, Append=${lazyMessageItems.loadState.append}, Prepend=${lazyMessageItems.loadState.prepend}. ItemCount: ${lazyMessageItems.itemCount}"
                                         )
                                         MessageListContent(
                                             messages = lazyMessageItems,
                                             accountContext = selectedAccount,
                                             onMessageClick = { messageId ->
-                                                Log.d(
-                                                    TAG_COMPOSABLE,
+                                                Timber.d(
                                                     "MessageListContent clicked. Message ID: $messageId, Account ID: ${selectedAccount?.id}"
                                                 )
                                                 val accountIdToUse = selectedAccount?.id
@@ -257,8 +252,7 @@ fun MainAppScreen(
                                                         )
                                                     )
                                                 } else {
-                                                    Log.e(
-                                                        TAG_COMPOSABLE,
+                                                    Timber.e(
                                                         "Clicked message's accountId is blank or selectedAccount is null. Cannot navigate to message detail."
                                                     )
                                                     showToast(
@@ -268,15 +262,13 @@ fun MainAppScreen(
                                                 }
                                             },
                                             onRetry = {
-                                                Log.i(
-                                                    TAG_COMPOSABLE,
+                                                Timber.i(
                                                     "MessageListContent onRetry called. Calling lazyMessageItems.retry()"
                                                 )
                                                 lazyMessageItems.retry()
                                             },
                                             onRefresh = {
-                                                Log.i(
-                                                    TAG_COMPOSABLE,
+                                                Timber.i(
                                                     "MessageListContent onRefresh called. Calling lazyMessageItems.refresh()"
                                                 )
                                                 userPulledToRefresh = true
@@ -286,8 +278,7 @@ fun MainAppScreen(
                                     }
 
                                     ViewMode.THREADS -> {
-                                        Log.d(
-                                            TAG_COMPOSABLE,
+                                        Timber.d(
                                             "MainAppScreen: THREADS view. threadDataState: ${state.threadDataState::class.simpleName}"
                                         )
                                         ThreadListContent(
@@ -296,8 +287,7 @@ fun MainAppScreen(
                                             onThreadClick = { threadId ->
                                                 val accountIdToUse = state.selectedFolderAccountId
                                                 if (accountIdToUse != null) {
-                                                    Log.d(
-                                                        TAG_COMPOSABLE,
+                                                    Timber.d(
                                                         "Thread clicked: $threadId from account $accountIdToUse. Navigating..."
                                                     )
                                                     navController.navigate(
@@ -307,8 +297,7 @@ fun MainAppScreen(
                                                         )
                                                     )
                                                 } else {
-                                                    Log.e(
-                                                        TAG_COMPOSABLE,
+                                                    Timber.e(
                                                         "selectedFolderAccountId is null, cannot handle thread click."
                                                     )
                                                 }

@@ -1,6 +1,5 @@
 package net.melisma.mail.ui.threaddetail
 
-import android.util.Log
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -17,6 +16,7 @@ import net.melisma.core_data.repository.MessageRepository
 import net.melisma.core_data.repository.ThreadRepository
 import net.melisma.domain.data.GetThreadDetailsUseCase
 import net.melisma.mail.navigation.AppRoutes
+import timber.log.Timber
 import javax.inject.Inject
 
 @HiltViewModel
@@ -32,8 +32,6 @@ class ThreadDetailViewModel @Inject constructor(
 
     private val accountId: String? = savedStateHandle[AppRoutes.ARG_ACCOUNT_ID]
     private val threadId: String? = savedStateHandle[AppRoutes.ARG_THREAD_ID]
-
-    private val TAG = "ThreadDetailVM"
 
     init {
         if (accountId == null || threadId == null) {
@@ -59,10 +57,9 @@ class ThreadDetailViewModel @Inject constructor(
                                     // For example, load the body for the first unread message or the latest message.
                                 },
                                 onFailure = { exception ->
-                                    Log.w(
-                                        TAG,
-                                        "Error getting thread details: ${exception.message}",
-                                        exception
+                                    Timber.w(
+                                        exception,
+                                        "Error getting thread details: ${exception.message}"
                                     )
                                     _uiState.value = ThreadDetailUIState.Error(
                                         exception.message ?: "Error fetching thread details"
@@ -77,29 +74,20 @@ class ThreadDetailViewModel @Inject constructor(
 
     fun requestMessageBody(messageIdToLoad: String) {
         if (accountId == null) {
-            Log.e(
-                TAG,
-                "requestMessageBody: AccountId is null, cannot fetch body for $messageIdToLoad"
-            )
+            Timber.e("requestMessageBody: AccountId is null, cannot fetch body for $messageIdToLoad")
             return
         }
 
         val currentState = _uiState.value
         if (currentState !is ThreadDetailUIState.Success) {
-            Log.w(
-                TAG,
-                "requestMessageBody: Current state is not Success, cannot update body for $messageIdToLoad"
-            )
+            Timber.w("requestMessageBody: Current state is not Success, cannot update body for $messageIdToLoad")
             return
         }
 
         val messageIndex =
             currentState.threadMessages.indexOfFirst { it.message.id == messageIdToLoad }
         if (messageIndex == -1) {
-            Log.w(
-                TAG,
-                "requestMessageBody: Message $messageIdToLoad not found in current threadMessages."
-            )
+            Timber.w("requestMessageBody: Message $messageIdToLoad not found in current threadMessages.")
             return
         }
 
@@ -113,10 +101,10 @@ class ThreadDetailViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
-            Log.d(TAG, "Fetching body for message: $messageIdToLoad in account $accountId")
+            Timber.d("Fetching body for message: $messageIdToLoad in account $accountId")
             messageRepository.getMessageDetails(messageIdToLoad, accountId)
                 .catch { e ->
-                    Log.e(TAG, "Error fetching message body for $messageIdToLoad: ${e.message}", e)
+                    Timber.e(e, "Error fetching message body for $messageIdToLoad: ${e.message}")
                     _uiState.update {
                         if (it is ThreadDetailUIState.Success) {
                             it.copy(threadMessages = it.threadMessages.mapIndexed { index, item ->
@@ -131,10 +119,7 @@ class ThreadDetailViewModel @Inject constructor(
                 }
                 .collectLatest { messageWithBody: Message? ->
                     if (messageWithBody?.body != null) {
-                        Log.d(
-                            TAG,
-                            "Successfully fetched body for message: $messageIdToLoad. Body not null."
-                        )
+                        Timber.d("Successfully fetched body for message: $messageIdToLoad. Body not null.")
                         _uiState.update {
                             if (it is ThreadDetailUIState.Success) {
                                 it.copy(threadMessages = it.threadMessages.mapIndexed { index, item ->
@@ -147,10 +132,7 @@ class ThreadDetailViewModel @Inject constructor(
                             } else it
                         }
                     } else {
-                        Log.w(
-                            TAG,
-                            "Fetched message $messageIdToLoad, but body is still null or empty."
-                        )
+                        Timber.w("Fetched message $messageIdToLoad, but body is still null or empty.")
                         _uiState.update {
                             if (it is ThreadDetailUIState.Success) {
                                 it.copy(threadMessages = it.threadMessages.mapIndexed { index, item ->
