@@ -3,7 +3,6 @@ package net.melisma.mail
 
 import android.content.Intent
 import android.os.Bundle
-import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -18,6 +17,7 @@ import kotlinx.coroutines.launch
 import net.melisma.core_data.model.Account
 import net.melisma.mail.navigation.MailAppNavigationGraph
 import net.melisma.mail.ui.theme.MailTheme
+import timber.log.Timber
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
@@ -28,15 +28,14 @@ class MainActivity : ComponentActivity() {
     private lateinit var appAuthLauncher: ActivityResultLauncher<Intent>
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        Log.d(TAG, "onCreate() called")
+        Timber.d("onCreate() called")
         super.onCreate(savedInstanceState)
 
-        Log.d(TAG, "Setting up appAuthLauncher for AppAuth (Google) Intent results")
+        Timber.d("Setting up appAuthLauncher for AppAuth (Google) Intent results")
         appAuthLauncher = registerForActivityResult(
             ActivityResultContracts.StartActivityForResult()
         ) { result ->
-            Log.i(
-                TAG,
+            Timber.i(
                 "appAuthLauncher (Google): Result received. ResultCode: ${result.resultCode}"
             )
             viewModel.handleAuthenticationResult(
@@ -46,20 +45,19 @@ class MainActivity : ComponentActivity() {
             )
         }
 
-        Log.d(TAG, "Setting up observation of pendingAuthIntent flow from ViewModel")
+        Timber.d("Setting up observation of pendingAuthIntent flow from ViewModel")
         lifecycleScope.launch {
             viewModel.pendingAuthIntent.collect { intent ->
                 intent?.let {
-                    Log.i(
-                        TAG,
+                    Timber.i(
                         "Received pending Intent from ViewModel. Action: ${it.action}, Data: ${it.dataString}"
                     )
                     try {
-                        Log.d(TAG, "Launching pending Intent with appAuthLauncher.")
+                        Timber.d("Launching pending Intent with appAuthLauncher.")
                         appAuthLauncher.launch(it)
                         viewModel.consumePendingAuthIntent()
                     } catch (e: Exception) {
-                        Log.e(TAG, "Error launching pending Intent via appAuthLauncher", e)
+                        Timber.e(e, "Error launching pending Intent via appAuthLauncher")
                         val errorPrefix = getString(R.string.error_google_signin_failed_generic)
                         Toast.makeText(
                             this@MainActivity,
@@ -72,10 +70,10 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        Log.d(TAG, "Setting up UI with enableEdgeToEdge and content")
+        Timber.d("Setting up UI with enableEdgeToEdge and content")
         enableEdgeToEdge()
         setContent {
-            Log.d(TAG, "Content composition started with Jetpack Navigation")
+            Timber.d("Content composition started with Jetpack Navigation")
             MailTheme {
                 val navController = rememberNavController()
                 MailAppNavigationGraph(navController = navController, mainViewModel = viewModel)
@@ -85,8 +83,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        Log.i(
-            TAG,
+        Timber.i(
             "onNewIntent: Intent received. Action: ${intent.action}, Data: ${intent.dataString}, Flags: ${intent.flags}"
         )
     }

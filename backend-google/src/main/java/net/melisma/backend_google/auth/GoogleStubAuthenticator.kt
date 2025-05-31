@@ -5,7 +5,7 @@ import android.accounts.Account
 import android.accounts.AccountAuthenticatorResponse
 import android.content.Context
 import android.os.Bundle
-import android.util.Log
+import timber.log.Timber
 
 /**
  * A minimal stub implementation of AbstractAccountAuthenticator for the custom Google account type.
@@ -15,14 +15,12 @@ import android.util.Log
 class GoogleStubAuthenticator(private val context: Context) :
     AbstractAccountAuthenticator(context) {
 
-    private val TAG = "GoogleStubAuthenticator"
-
     // Editing properties is not supported.
     override fun editProperties(
         response: AccountAuthenticatorResponse?,
         accountType: String?
     ): Bundle? {
-        Log.d(TAG, "editProperties called for accountType: $accountType - Not supported")
+        Timber.d("editProperties called for accountType: $accountType - Not supported")
         throw UnsupportedOperationException()
     }
 
@@ -35,8 +33,7 @@ class GoogleStubAuthenticator(private val context: Context) :
         requiredFeatures: Array<out String>?,
         options: Bundle?
     ): Bundle? {
-        Log.d(
-            TAG,
+        Timber.d(
             "addAccount called for accountType: $accountType - Not launching UI, app handles this."
         )
         // This method might be called if the user tries to add an account
@@ -54,7 +51,7 @@ class GoogleStubAuthenticator(private val context: Context) :
         account: Account?,
         options: Bundle?
     ): Bundle? {
-        Log.d(TAG, "confirmCredentials called for account: ${account?.name} - Not supported")
+        Timber.d("confirmCredentials called for account: ${account?.name} - Not supported")
         return null // Or throw UnsupportedOperationException
     }
 
@@ -66,8 +63,7 @@ class GoogleStubAuthenticator(private val context: Context) :
         authTokenType: String?,
         options: Bundle?
     ): Bundle? {
-        Log.d(
-            TAG,
+        Timber.d(
             "getAuthToken called for account: ${account?.name}, authTokenType: $authTokenType - Not supported by stub"
         )
         // AppAuth flow should be used to get/refresh tokens.
@@ -82,7 +78,7 @@ class GoogleStubAuthenticator(private val context: Context) :
 
     // Label for the auth token type.
     override fun getAuthTokenLabel(authTokenType: String?): String? {
-        Log.d(TAG, "getAuthTokenLabel called for authTokenType: $authTokenType")
+        Timber.d("getAuthTokenLabel called for authTokenType: $authTokenType")
         // You can return a user-friendly name for your token type if needed,
         // though it's often not critical if you don't use different auth token types.
         return authTokenType // Or a custom string like "Access to Gmail"
@@ -95,7 +91,7 @@ class GoogleStubAuthenticator(private val context: Context) :
         authTokenType: String?,
         options: Bundle?
     ): Bundle? {
-        Log.d(TAG, "updateCredentials called for account: ${account?.name} - Not supported")
+        Timber.d("updateCredentials called for account: ${account?.name} - Not supported")
         return null // Or throw UnsupportedOperationException
     }
 
@@ -105,7 +101,7 @@ class GoogleStubAuthenticator(private val context: Context) :
         account: Account?,
         features: Array<out String>?
     ): Bundle? {
-        Log.d(TAG, "hasFeatures called for account: ${account?.name} - Not supported")
+        Timber.d("hasFeatures called for account: ${account?.name} - Not supported")
         // Typically, you'd check if the account supports the requested features.
         // For a stub, returning a bundle indicating false or not supported is okay.
         val result = Bundle()
@@ -113,4 +109,3 @@ class GoogleStubAuthenticator(private val context: Context) :
         return result
     }
 }
-   

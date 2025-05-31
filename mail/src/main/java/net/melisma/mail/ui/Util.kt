@@ -3,7 +3,6 @@
 
 package net.melisma.mail.ui
 
-import android.util.Log
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Archive
@@ -18,6 +17,7 @@ import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.util.Locale
+import timber.log.Timber
 
 /**
  * Helper to get appropriate icon for common folders using updated names.
@@ -71,7 +71,7 @@ fun formatMessageDate(dateTimeString: String?): String {
         }
     } catch (e: Exception) {
         // Log parsing errors and return the original string as a fallback
-        Log.w("FormatDate", "Error parsing date: $dateTimeString", e)
+        Timber.w(e, "Error parsing date: $dateTimeString")
         dateTimeString // Return original string if parsing fails
     }
 }

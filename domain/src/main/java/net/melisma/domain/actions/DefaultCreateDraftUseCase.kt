@@ -1,9 +1,9 @@
 package net.melisma.domain.actions
 
-import android.util.Log
 import net.melisma.core_data.model.Message
 import net.melisma.core_data.model.MessageDraft
 import net.melisma.core_data.repository.MessageRepository
+import timber.log.Timber
 import javax.inject.Inject
 
 class DefaultCreateDraftUseCase @Inject constructor(
@@ -13,8 +13,7 @@ class DefaultCreateDraftUseCase @Inject constructor(
         accountId: String,
         draftDetails: MessageDraft
     ): Result<Message> {
-        Log.d(
-            "DefaultCreateDraftUseCase",
+        Timber.d(
             "Invoked for accountId: $accountId, draftDetails: $draftDetails"
         )
         // return messageRepository.createDraftMessage(accountId, draftDetails) // Actual call commented out for stub

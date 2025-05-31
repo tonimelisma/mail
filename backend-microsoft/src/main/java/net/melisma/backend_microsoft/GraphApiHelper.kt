@@ -1,6 +1,5 @@
 package net.melisma.backend_microsoft
 
-import android.util.Log
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.request.accept
@@ -26,6 +25,7 @@ import net.melisma.core_data.model.Message
 import net.melisma.core_data.model.WellKnownFolderType
 import javax.inject.Inject
 import javax.inject.Singleton
+import timber.log.Timber
 
 @Serializable
 private data class GraphCollection<T>(
@@ -99,7 +99,6 @@ class GraphApiHelper @Inject constructor(
 ) : MailApiService {
 
     companion object {
-        private const val TAG = "GraphApiHelper"
         private const val MS_GRAPH_ROOT_ENDPOINT = "https://graph.microsoft.com/v1.0"
 
         // Actual wellKnownName values from Microsoft Graph (lowercase for matching)
@@ -127,7 +126,7 @@ class GraphApiHelper @Inject constructor(
         accountId: String
     ): Result<List<MailFolder>> {
         return try {
-            Log.d(TAG, "Fetching mail folders for accountId: $accountId...")
+            Timber.d("Fetching mail folders for accountId: $accountId...")
             val response: HttpResponse = httpClient.get("$MS_GRAPH_ROOT_ENDPOINT/me/mailFolders") {
                 url {
                     parameters.append("\$top", "100")
@@ -144,21 +143,19 @@ class GraphApiHelper @Inject constructor(
                     .mapNotNull { mapGraphFolderToMailFolder(it) }
                     .sortedBy { it.displayName }
 
-                Log.d(
-                    TAG,
+                Timber.d(
                     "Successfully fetched and processed ${mailFolders.size} visible folders."
                 )
                 Result.success(mailFolders)
             } else {
                 val errorBody = response.bodyAsText()
-                Log.e(
-                    TAG,
+                Timber.e(
                     "Error fetching folders: ${response.status} - Error details in API response."
                 )
                 Result.failure(errorMapper.mapHttpError(response.status.value, errorBody))
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Exception fetching folders", e)
+            Timber.e(e, "Exception fetching folders")
             Result.failure(errorMapper.mapExceptionToError(e))
         }
     }
@@ -203,8 +200,7 @@ class GraphApiHelper @Inject constructor(
             }
 
             WKNAME_NOTES, WKNAME_SYNCISSUES -> { // Explicitly hide these if identified by wellKnownName
-                Log.d(
-                    TAG,
+                Timber.d(
                     "Hiding Microsoft system folder (by wellKnownName): ${graphFolder.displayName} (wellKnownName: ${graphFolder.wellKnownName})"
                 )
                 return null
@@ -241,8 +237,7 @@ class GraphApiHelper @Inject constructor(
                     }
 
                     "notes", "conversation history", "quick step settings", "rss feeds" -> {
-                        Log.d(
-                            TAG,
+                        Timber.d(
                             "Hiding Microsoft folder (by displayName): ${graphFolder.displayName}"
                         )
                         return null
@@ -253,8 +248,7 @@ class GraphApiHelper @Inject constructor(
             }
         }
 
-        Log.v(
-            TAG,
+        Timber.v(
             "Mapping MS folder: ID='${graphFolder.id}', OrigName='${graphFolder.displayName}', WKN='${graphFolder.wellKnownName}' -> AppName='$finalDisplayName', AppType='$type'"
         )
 
@@ -272,12 +266,11 @@ class GraphApiHelper @Inject constructor(
         selectFields: List<String>,
         maxResults: Int
     ): Result<List<Message>> {
-        Log.d(
-            TAG,
+        Timber.d(
             "GraphApiHelper: getMessagesForFolder called for folderId: $folderId with selectFields: $selectFields, maxResults: $maxResults"
         )
         return try {
-            Log.d(TAG, "Fetching messages for folder: $folderId")
+            Timber.d("Fetching messages for folder: $folderId")
             val response: HttpResponse =
                 httpClient.get("$MS_GRAPH_ROOT_ENDPOINT/me/mailFolders/$folderId/messages") {
                     url {
@@ -290,37 +283,33 @@ class GraphApiHelper @Inject constructor(
 
             if (response.status.isSuccess()) {
                 val graphMessages = response.body<GraphCollection<GraphMessage>>().value
-                Log.d(
-                    TAG,
+                Timber.d(
                     "GraphApiHelper: Fetched ${graphMessages.size} GraphMessages for folder $folderId."
                 )
                 if (graphMessages.isNotEmpty()) {
-                    Log.d(
-                        TAG,
+                    Timber.d(
                         "GraphApiHelper: First 3 GraphMessages (or fewer) for folder $folderId: " +
                                 graphMessages.take(3)
                                     .joinToString { "MsgID: ${it.id}, ConvID: ${it.conversationId}" })
                 }
                 val messages = graphMessages.mapNotNull { mapGraphMessageToMessage(it) }
-                Log.d(TAG, "Successfully fetched ${messages.size} messages for folder $folderId.")
+                Timber.d("Successfully fetched ${messages.size} messages for folder $folderId.")
                 Result.success(messages)
             } else {
                 val errorBody = response.bodyAsText()
-                Log.e(
-                    TAG,
+                Timber.e(
                     "Error fetching messages for $folderId: ${response.status} - Error details in API response."
                 )
                 Result.failure(errorMapper.mapHttpError(response.status.value, errorBody))
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Exception fetching messages for folder $folderId", e)
+            Timber.e(e, "Exception fetching messages for folder $folderId")
             Result.failure(errorMapper.mapExceptionToError(e))
         }
     }
 
     private fun mapGraphMessageToMessage(graphMessage: GraphMessage): Message {
-        Log.v(
-            TAG,
+        Timber.v(
             "GraphApiHelper: mapGraphMessageToMessage - MsgID: ${graphMessage.id}, ConvID: ${graphMessage.conversationId}, Received: ${graphMessage.receivedDateTime}, Sent: ${graphMessage.sentDateTime}"
         )
         val sender = graphMessage.sender
@@ -338,8 +327,7 @@ class GraphApiHelper @Inject constructor(
             if (it.equals("html", ignoreCase = true)) "text/html" else "text/plain"
         } ?: "text/plain"
 
-        Log.d(
-            TAG,
+        Timber.d(
             "Mapping GraphMessage: ID='${graphMessage.id}', Subject='${graphMessage.subject}', Preview='${graphMessage.bodyPreview}', HasFullBodyObject: ${graphMessage.body != null}, BodyContentType (from API): ${graphMessage.body?.contentType}, MappedContentType: $bodyContentType, BodyContentIsEmpty: ${bodyContent.isNullOrEmpty()}"
         )
 
@@ -392,12 +380,12 @@ class GraphApiHelper @Inject constructor(
             } catch (e: Exception) { /* Try next format */
             }
         }
-        Log.w(TAG, "Could not parse Outlook date string: '$dateStr' with known formats.")
+        Timber.w("Could not parse Outlook date string: '$dateStr' with known formats.")
         return null
     }
 
     override suspend fun markMessageRead(messageId: String, isRead: Boolean): Result<Unit> {
-        Log.d(TAG, "Marking message $messageId as isRead=$isRead")
+        Timber.d("Marking message $messageId as isRead=$isRead")
         return try {
             val requestBody = buildJsonObject {
                 put("isRead", isRead)
@@ -412,21 +400,21 @@ class GraphApiHelper @Inject constructor(
                 }
 
             if (response.status.isSuccess()) {
-                Log.d(TAG, "Successfully marked message $messageId as isRead=$isRead")
+                Timber.d("Successfully marked message $messageId as isRead=$isRead")
                 Result.success(Unit)
             } else {
                 val errorBody = response.bodyAsText()
-                Log.e(TAG, "Error marking message $messageId: ${response.status} - $errorBody")
+                Timber.e("Error marking message $messageId: ${response.status} - $errorBody")
                 Result.failure(errorMapper.mapHttpError(response.status.value, errorBody))
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Exception marking message $messageId", e)
+            Timber.e(e, "Exception marking message $messageId")
             Result.failure(errorMapper.mapExceptionToError(e))
         }
     }
 
     override suspend fun starMessage(messageId: String, isStarred: Boolean): Result<Unit> {
-        Log.d(TAG, "starMessage: messageId=$messageId, isStarred=$isStarred")
+        Timber.d("starMessage: messageId=$messageId, isStarred=$isStarred")
         return try {
             val requestBody = buildJsonObject {
                 put("flag", buildJsonObject {
@@ -442,27 +430,25 @@ class GraphApiHelper @Inject constructor(
                 }
 
             if (response.status.isSuccess()) {
-                Log.i(
-                    TAG,
+                Timber.i(
                     "Successfully starred/unstarred message $messageId as isStarred=$isStarred"
                 )
                 Result.success(Unit)
             } else {
                 val errorBody = response.bodyAsText()
-                Log.e(
-                    TAG,
+                Timber.e(
                     "Error starring/unstarring message $messageId: ${response.status} - $errorBody"
                 )
                 Result.failure(errorMapper.mapHttpError(response.status.value, errorBody))
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Exception in starMessage for message $messageId", e)
+            Timber.e(e, "Exception in starMessage for message $messageId")
             Result.failure(errorMapper.mapExceptionToError(e))
         }
     }
 
     override suspend fun deleteMessage(messageId: String): Result<Unit> {
-        Log.d(TAG, "Deleting message $messageId (moving to deleteditems)")
+        Timber.d("Deleting message $messageId (moving to deleteditems)")
         return try {
             val response: HttpResponse =
                 httpClient.post("$MS_GRAPH_ROOT_ENDPOINT/me/messages/$messageId/move") {
@@ -471,15 +457,15 @@ class GraphApiHelper @Inject constructor(
                     accept(ContentType.Application.Json) // Keeping accept for now, as it's separate from Content-Type for body
                 }
             if (response.status.isSuccess()) { // isSuccess covers 2xx
-                Log.d(TAG, "Successfully deleted (moved to deleteditems) message $messageId")
+                Timber.d("Successfully deleted (moved to deleteditems) message $messageId")
                 Result.success(Unit)
             } else {
                 val errorBody = response.bodyAsText()
-                Log.e(TAG, "Error deleting message $messageId: ${response.status} - $errorBody")
+                Timber.e("Error deleting message $messageId: ${response.status} - $errorBody")
                 Result.failure(errorMapper.mapHttpError(response.status.value, errorBody))
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Exception deleting message $messageId", e)
+            Timber.e(e, "Exception deleting message $messageId")
             Result.failure(errorMapper.mapExceptionToError(e))
         }
     }
@@ -489,7 +475,7 @@ class GraphApiHelper @Inject constructor(
         currentFolderId: String,
         destinationFolderId: String
     ): Result<Unit> {
-        Log.d(TAG, "Moving message $messageId from $currentFolderId to $destinationFolderId")
+        Timber.d("Moving message $messageId from $currentFolderId to $destinationFolderId")
         return try {
             val requestBody = buildJsonObject {
                 put("destinationId", destinationFolderId)
@@ -502,15 +488,15 @@ class GraphApiHelper @Inject constructor(
             }
 
             if (response.status.isSuccess()) { // Graph move returns 201 Created on success
-                Log.d(TAG, "Successfully moved message $messageId to $destinationFolderId")
+                Timber.d("Successfully moved message $messageId to $destinationFolderId")
                 Result.success(Unit)
             } else {
                 val errorBody = response.bodyAsText()
-                Log.e(TAG, "Error moving message $messageId: ${response.status} - $errorBody")
+                Timber.e("Error moving message $messageId: ${response.status} - $errorBody")
                 Result.failure(errorMapper.mapHttpError(response.status.value, errorBody))
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Exception moving message $messageId", e)
+            Timber.e(e, "Exception moving message $messageId")
             Result.failure(errorMapper.mapExceptionToError(e))
         }
     }
@@ -521,8 +507,7 @@ class GraphApiHelper @Inject constructor(
         selectFields: List<String>, // Removed default value
         maxResults: Int // Removed default value
     ): Result<List<Message>> {
-        Log.d(
-            TAG,
+        Timber.d(
             "GraphApiHelper: getMessagesForThread (Outlook) called for conversationId: $threadId. FolderId '$folderId' (context). MaxResults: $maxResults. SelectFields: $selectFields"
         )
         return try {
@@ -555,28 +540,26 @@ class GraphApiHelper @Inject constructor(
                 val graphMessageCollection = response.body<GraphCollection<GraphMessage>>()
                 val messages =
                     graphMessageCollection.value.mapNotNull { mapGraphMessageToMessage(it) }
-                Log.d(
-                    TAG,
+                Timber.d(
                     "GraphApiHelper: Successfully mapped ${messages.size} messages for Outlook conversationId: $threadId"
                 )
                 Result.success(messages)
             } else {
                 val errorBody = response.bodyAsText()
-                Log.e(
-                    TAG,
+                Timber.e(
                     "Error fetching messages for conversation $threadId (Outlook): ${response.status} - Error details in API response."
                 )
                 Result.failure(errorMapper.mapHttpError(response.status.value, errorBody))
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Exception in getMessagesForThread for ID: $threadId (Outlook)", e)
+            Timber.e(e, "Exception in getMessagesForThread for ID: $threadId (Outlook)")
             Result.failure(errorMapper.mapExceptionToError(e))
         }
     }
 
     // Added missing getMessageDetails implementation
     override suspend fun getMessageDetails(messageId: String): Flow<Message?> = flow {
-        Log.d(TAG, "Fetching details for message ID: $messageId")
+        Timber.d("Fetching details for message ID: $messageId")
         try {
             val response: HttpResponse =
                 httpClient.get("$MS_GRAPH_ROOT_ENDPOINT/me/messages/$messageId") {
@@ -597,20 +580,19 @@ class GraphApiHelper @Inject constructor(
                 emit(mappedMessage)
             } else {
                 val errorBody = response.bodyAsText()
-                Log.e(
-                    TAG,
+                Timber.e(
                     "Error fetching message details for $messageId: ${response.status} - $errorBody"
                 )
                 emit(null) 
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Exception fetching message details for $messageId", e)
+            Timber.e(e, "Exception fetching message details for $messageId")
             emit(null) 
         }
     }
 
     override suspend fun getMessageContent(messageId: String): Result<Message> {
-        Log.d(TAG, "getMessageContent: Fetching full content for messageId $messageId")
+        Timber.d("getMessageContent: Fetching full content for messageId $messageId")
         return try {
             val response: HttpResponse =
                 httpClient.get("$MS_GRAPH_ROOT_ENDPOINT/me/messages/$messageId") {
@@ -626,8 +608,7 @@ class GraphApiHelper @Inject constructor(
 
             if (!response.status.isSuccess()) {
                 val errorBody = response.bodyAsText()
-                Log.e(
-                    TAG,
+                Timber.e(
                     "Error fetching message content for $messageId: ${response.status} - $errorBody"
                 )
                 return Result.failure(errorMapper.mapHttpError(response.status.value, errorBody))
@@ -637,21 +618,20 @@ class GraphApiHelper @Inject constructor(
             val message =
                 mapGraphMessageToMessage(graphMessage) // mapGraphMessageToMessage should now populate body and bodyContentType
 
-            Log.i(
-                TAG,
+            Timber.i(
                 "Successfully fetched and mapped content for message $messageId. Content type: ${message.bodyContentType}"
             )
             Result.success(message)
 
         } catch (e: Exception) {
-            Log.e(TAG, "Exception in getMessageContent for $messageId", e)
+            Timber.e(e, "Exception in getMessageContent for $messageId")
             Result.failure(errorMapper.mapExceptionToError(e))
         }
     }
 
     // Start of added Thread operations
     override suspend fun markThreadRead(threadId: String, isRead: Boolean): Result<Unit> {
-        Log.d(TAG, "Attempting to mark all messages in conversation $threadId as isRead=$isRead")
+        Timber.d("Attempting to mark all messages in conversation $threadId as isRead=$isRead")
         // Microsoft Graph does not have a direct "mark conversation as read" endpoint.
         // This typically requires fetching all messages in the conversation and marking them individually or in batches.
         // For this stub, we'll mimic a single conceptual operation, knowing it's more complex underneath.
@@ -668,8 +648,7 @@ class GraphApiHelper @Inject constructor(
             // The following is a conceptual test of httpClient.patch with setBody
             // It will likely fail at runtime if not a valid PATCH endpoint or if body is not right for such an endpoint.
             // The goal here is to ensure it COMPILES without Ktor DSL unresolved reference errors.
-            Log.w(
-                TAG,
+            Timber.w(
                 "markThreadRead: Using a conceptual PATCH for conversation $threadId. THIS IS A STUB AND WILL LIKELY FAIL AT RUNTIME IF ENDPOINT ISN'T CORRECT FOR PATCH."
             )
 
@@ -683,8 +662,7 @@ class GraphApiHelper @Inject constructor(
             if (messagesResult.isSuccess) {
                 val messages = messagesResult.getOrThrow()
                 if (messages.isEmpty()) {
-                    Log.w(
-                        TAG,
+                    Timber.w(
                         "No messages found for conversation $threadId to mark as read=$isRead"
                     )
                     return Result.success(Unit)
@@ -694,16 +672,14 @@ class GraphApiHelper @Inject constructor(
                     val markResult = markMessageRead(message.id, isRead)
                     if (markResult.isFailure) {
                         allSuccessful = false
-                        Log.e(
-                            TAG,
+                        Timber.e(
                             "Failed to mark message ${message.id} in conversation $threadId. Error: ${markResult.exceptionOrNull()?.message}"
                         )
                         // Optionally, break or collect errors
                     }
                 }
                 if (allSuccessful) {
-                    Log.d(
-                        TAG,
+                    Timber.d(
                         "Successfully marked all ${messages.size} messages in conversation $threadId as isRead=$isRead"
                     )
                     Result.success(Unit)
@@ -711,8 +687,7 @@ class GraphApiHelper @Inject constructor(
                     Result.failure(Exception("Failed to mark one or more messages in conversation $threadId"))
                 }
             } else {
-                Log.e(
-                    TAG,
+                Timber.e(
                     "Failed to get messages for conversation $threadId to mark read. Error: ${messagesResult.exceptionOrNull()?.message}"
                 )
                 Result.failure(
@@ -721,15 +696,14 @@ class GraphApiHelper @Inject constructor(
                 )
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Exception in markThreadRead for $threadId", e)
+            Timber.e(e, "Exception in markThreadRead for $threadId")
             Result.failure(errorMapper.mapExceptionToError(e))
         }
     }
 
     override suspend fun deleteThread(threadId: String): Result<Unit> {
-        Log.d(TAG, "deleteThread called for conversationId: $threadId")
-        Log.e(
-            TAG,
+        Timber.d("deleteThread called for conversationId: $threadId")
+        Timber.e(
             "deleteThread for Microsoft Graph is complex and not fully implemented in this stub. It would involve fetching all messages in conversation $threadId and deleting them individually or batching."
         )
         try {
@@ -740,7 +714,7 @@ class GraphApiHelper @Inject constructor(
             if (messagesResult.isSuccess) {
                 val messages = messagesResult.getOrThrow()
                 if (messages.isEmpty()) {
-                    Log.w(TAG, "No messages found for conversation $threadId to delete")
+                    Timber.w("No messages found for conversation $threadId to delete")
                     return Result.success(Unit)
                 }
                 var allSuccessful = true
@@ -748,15 +722,13 @@ class GraphApiHelper @Inject constructor(
                     val deleteOp = deleteMessage(message.id) // deleteMessage moves to deleteditems
                     if (deleteOp.isFailure) {
                         allSuccessful = false
-                        Log.e(
-                            TAG,
+                        Timber.e(
                             "Failed to delete message ${message.id} in conversation $threadId. Error: ${deleteOp.exceptionOrNull()?.message}"
                         )
                     }
                 }
                 return if (allSuccessful) {
-                    Log.d(
-                        TAG,
+                    Timber.d(
                         "Successfully deleted all ${messages.size} messages in conversation $threadId"
                     )
                     Result.success(Unit)
@@ -764,8 +736,7 @@ class GraphApiHelper @Inject constructor(
                     Result.failure(Exception("Failed to delete one or more messages in conversation $threadId"))
                 }
             } else {
-                Log.e(
-                    TAG,
+                Timber.e(
                     "Failed to get messages for conversation $threadId to delete. Error: ${messagesResult.exceptionOrNull()?.message}"
                 )
                 return Result.failure(
@@ -774,7 +745,7 @@ class GraphApiHelper @Inject constructor(
                 )
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Exception in deleteThread for $threadId", e)
+            Timber.e(e, "Exception in deleteThread for $threadId")
             return Result.failure(errorMapper.mapExceptionToError(e))
         }
     }
@@ -784,12 +755,10 @@ class GraphApiHelper @Inject constructor(
         currentFolderId: String,
         destinationFolderId: String
     ): Result<Unit> {
-        Log.d(
-            TAG,
+        Timber.d(
             "moveThread called for conversationId: $threadId from $currentFolderId to $destinationFolderId"
         )
-        Log.e(
-            TAG,
+        Timber.e(
             "moveThread for Microsoft Graph is complex and not fully implemented in this stub. It would involve fetching all messages in conversation $threadId from $currentFolderId and moving them individually or batching to $destinationFolderId."
         )
         try {
@@ -798,8 +767,7 @@ class GraphApiHelper @Inject constructor(
             if (messagesResult.isSuccess) {
                 val messages = messagesResult.getOrThrow()
                 if (messages.isEmpty()) {
-                    Log.w(
-                        TAG,
+                    Timber.w(
                         "No messages found in folder $currentFolderId for conversation $threadId to move to $destinationFolderId"
                     )
                     return Result.success(Unit)
@@ -809,15 +777,13 @@ class GraphApiHelper @Inject constructor(
                     val moveOp = moveMessage(message.id, currentFolderId, destinationFolderId)
                     if (moveOp.isFailure) {
                         allSuccessful = false
-                        Log.e(
-                            TAG,
+                        Timber.e(
                             "Failed to move message ${message.id} in conversation $threadId. Error: ${moveOp.exceptionOrNull()?.message}"
                         )
                     }
                 }
                 return if (allSuccessful) {
-                    Log.d(
-                        TAG,
+                    Timber.d(
                         "Successfully moved all ${messages.size} messages in conversation $threadId to $destinationFolderId"
                     )
                     Result.success(Unit)
@@ -825,8 +791,7 @@ class GraphApiHelper @Inject constructor(
                     Result.failure(Exception("Failed to move one or more messages in conversation $threadId to $destinationFolderId"))
                 }
             } else {
-                Log.e(
-                    TAG,
+                Timber.e(
                     "Failed to get messages for conversation $threadId in folder $currentFolderId to move. Error: ${messagesResult.exceptionOrNull()?.message}"
                 )
                 return Result.failure(
@@ -835,13 +800,13 @@ class GraphApiHelper @Inject constructor(
                 )
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Exception in moveThread for $threadId", e)
+            Timber.e(e, "Exception in moveThread for $threadId")
             return Result.failure(errorMapper.mapExceptionToError(e))
         }
     }
 
     override suspend fun getMessageAttachments(messageId: String): Result<List<net.melisma.core_data.model.Attachment>> {
-        Log.d(TAG, "getMessageAttachments: messageId='$messageId'")
+        Timber.d("getMessageAttachments: messageId='$messageId'")
         return try {
             val response =
                 httpClient.get("$MS_GRAPH_ROOT_ENDPOINT/me/messages/$messageId/attachments") {
@@ -863,14 +828,13 @@ class GraphApiHelper @Inject constructor(
                 Result.success(attachments)
             } else {
                 val errorBody = response.bodyAsText()
-                Log.e(
-                    TAG,
+                Timber.e(
                     "Failed to get attachments for message $messageId: ${response.status} - $errorBody"
                 )
                 Result.failure(Exception("Failed to get attachments: ${response.status}"))
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Exception in getMessageAttachments for $messageId", e)
+            Timber.e(e, "Exception in getMessageAttachments for $messageId")
             Result.failure(errorMapper.mapExceptionToError(e))
         }
     }
@@ -879,7 +843,7 @@ class GraphApiHelper @Inject constructor(
         messageId: String,
         attachmentId: String
     ): Result<ByteArray> {
-        Log.d(TAG, "downloadAttachment: messageId='$messageId', attachmentId='$attachmentId'")
+        Timber.d("downloadAttachment: messageId='$messageId', attachmentId='$attachmentId'")
         return try {
             val response =
                 httpClient.get("$MS_GRAPH_ROOT_ENDPOINT/me/messages/$messageId/attachments/$attachmentId/\$value") {
@@ -891,20 +855,19 @@ class GraphApiHelper @Inject constructor(
                 Result.success(data)
             } else {
                 val errorBody = response.bodyAsText()
-                Log.e(
-                    TAG,
+                Timber.e(
                     "Failed to download attachment $attachmentId for message $messageId: ${response.status} - $errorBody"
                 )
                 Result.failure(Exception("Failed to download attachment: ${response.status}"))
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Exception in downloadAttachment for $messageId/$attachmentId", e)
+            Timber.e(e, "Exception in downloadAttachment for $messageId/$attachmentId")
             Result.failure(errorMapper.mapExceptionToError(e))
         }
     }
 
     override suspend fun createDraftMessage(draft: net.melisma.core_data.model.MessageDraft): Result<Message> {
-        Log.d(TAG, "createDraftMessage: subject='${draft.subject}'")
+        Timber.d("createDraftMessage: subject='${draft.subject}'")
         return try {
             val draftPayload = buildGraphDraftPayload(draft)
             val response = httpClient.post("$MS_GRAPH_ROOT_ENDPOINT/me/messages") {
@@ -918,11 +881,11 @@ class GraphApiHelper @Inject constructor(
                 Result.success(message)
             } else {
                 val errorBody = response.bodyAsText()
-                Log.e(TAG, "Failed to create draft: ${response.status} - $errorBody")
+                Timber.e("Failed to create draft: ${response.status} - $errorBody")
                 Result.failure(Exception("Failed to create draft: ${response.status}"))
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Exception in createDraftMessage", e)
+            Timber.e(e, "Exception in createDraftMessage")
             Result.failure(errorMapper.mapExceptionToError(e))
         }
     }
@@ -931,7 +894,7 @@ class GraphApiHelper @Inject constructor(
         messageId: String,
         draft: net.melisma.core_data.model.MessageDraft
     ): Result<Message> {
-        Log.d(TAG, "updateDraftMessage: messageId='$messageId', subject='${draft.subject}'")
+        Timber.d("updateDraftMessage: messageId='$messageId', subject='${draft.subject}'")
         return try {
             val draftPayload = buildGraphDraftPayload(draft)
             val response = httpClient.patch("$MS_GRAPH_ROOT_ENDPOINT/me/messages/$messageId") {
@@ -945,17 +908,17 @@ class GraphApiHelper @Inject constructor(
                 Result.success(message)
             } else {
                 val errorBody = response.bodyAsText()
-                Log.e(TAG, "Failed to update draft $messageId: ${response.status} - $errorBody")
+                Timber.e("Failed to update draft $messageId: ${response.status} - $errorBody")
                 Result.failure(Exception("Failed to update draft: ${response.status}"))
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Exception in updateDraftMessage for $messageId", e)
+            Timber.e(e, "Exception in updateDraftMessage for $messageId")
             Result.failure(errorMapper.mapExceptionToError(e))
         }
     }
 
     override suspend fun sendMessage(draft: net.melisma.core_data.model.MessageDraft): Result<String> {
-        Log.d(TAG, "sendMessage: subject='${draft.subject}'")
+        Timber.d("sendMessage: subject='${draft.subject}'")
         return try {
             val sendPayload = buildGraphSendPayload(draft)
             val response = httpClient.post("$MS_GRAPH_ROOT_ENDPOINT/me/sendMail") {
@@ -970,11 +933,11 @@ class GraphApiHelper @Inject constructor(
                 Result.success(sentMessageId)
             } else {
                 val errorBody = response.bodyAsText()
-                Log.e(TAG, "Failed to send message: ${response.status} - $errorBody")
+                Timber.e("Failed to send message: ${response.status} - $errorBody")
                 Result.failure(Exception("Failed to send message: ${response.status}"))
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Exception in sendMessage", e)
+            Timber.e(e, "Exception in sendMessage")
             Result.failure(errorMapper.mapExceptionToError(e))
         }
     }
@@ -984,7 +947,7 @@ class GraphApiHelper @Inject constructor(
         folderId: String?,
         maxResults: Int
     ): Result<List<Message>> {
-        Log.d(TAG, "searchMessages: query='$query', folderId='$folderId', maxResults=$maxResults")
+        Timber.d("searchMessages: query='$query', folderId='$folderId', maxResults=$maxResults")
         return try {
             val searchUrl = if (folderId != null) {
                 "$MS_GRAPH_ROOT_ENDPOINT/me/mailFolders/$folderId/messages"
@@ -1007,11 +970,11 @@ class GraphApiHelper @Inject constructor(
                 Result.success(messages)
             } else {
                 val errorBody = response.bodyAsText()
-                Log.e(TAG, "Failed to search messages: ${response.status} - $errorBody")
+                Timber.e("Failed to search messages: ${response.status} - $errorBody")
                 Result.failure(Exception("Failed to search messages: ${response.status}"))
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Exception in searchMessages", e)
+            Timber.e(e, "Exception in searchMessages")
             Result.failure(errorMapper.mapExceptionToError(e))
         }
     }

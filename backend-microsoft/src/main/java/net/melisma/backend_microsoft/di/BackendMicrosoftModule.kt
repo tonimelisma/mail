@@ -1,7 +1,6 @@
 package net.melisma.backend_microsoft.di
 
 import android.content.Context
-import android.util.Log
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -46,8 +45,7 @@ annotation class MicrosoftGraphHttpClient
 object BackendMicrosoftModule { // Changed to object module as it now only contains @Provides
 
     init {
-        Log.d(
-            "BackendMSModule",
+        Timber.d(
             "BackendMicrosoftModule (object with @Provides) initialized by Hilt"
         )
     }
@@ -62,8 +60,7 @@ object BackendMicrosoftModule { // Changed to object module as it now only conta
         activeMicrosoftAccountHolder: ActiveMicrosoftAccountHolder,
         @net.melisma.core_data.di.Dispatcher(net.melisma.core_data.di.MailDispatchers.IO) ioDispatcher: kotlinx.coroutines.CoroutineDispatcher
     ): MicrosoftAuthManager {
-        Log.d(
-            "BackendMSModule",
+        Timber.d(
             "Providing MicrosoftAuthManager with correct dependencies"
         )
         return MicrosoftAuthManager(
@@ -84,7 +81,7 @@ object BackendMicrosoftModule { // Changed to object module as it now only conta
         microsoftKtorTokenProvider: MicrosoftKtorTokenProvider,
         microsoftAuthManager: MicrosoftAuthManager
     ): HttpClient {
-        Log.d("BackendMSModule", "Providing Microsoft Graph HTTPClient with Auth plugin.")
+        Timber.d("Providing Microsoft Graph HTTPClient with Auth plugin.")
         return HttpClient(OkHttp) {
             engine {
                 config {
@@ -99,7 +96,7 @@ object BackendMicrosoftModule { // Changed to object module as it now only conta
                 logger = object : io.ktor.client.plugins.logging.Logger {
                     override fun log(message: String) {
                         val firstLine = message.lines().firstOrNull { it.isNotBlank() } ?: message
-                        Log.d("KtorMSGraphClient", firstLine)
+                        Timber.tag("KtorMSGraphClient").d(firstLine)
                     }
                 }
             }
@@ -162,7 +159,7 @@ object BackendMicrosoftModule { // Changed to object module as it now only conta
     fun provideErrorMapperService(
         microsoftErrorMapper: MicrosoftErrorMapper // Hilt injects this
     ): ErrorMapperService {
-        Log.i("BackendMSModule", "Providing ErrorMapperService for 'MS' key via @Provides")
+        Timber.i("Providing ErrorMapperService for 'MS' key via @Provides")
         return microsoftErrorMapper
     }
 
@@ -174,7 +171,7 @@ object BackendMicrosoftModule { // Changed to object module as it now only conta
         @MicrosoftGraphHttpClient httpClient: HttpClient,
         microsoftErrorMapper: MicrosoftErrorMapper
     ): GraphApiHelper {
-        Log.d("BackendMSModule", "Providing GraphApiHelper with MS Graph HTTPClient")
+        Timber.d("Providing GraphApiHelper with MS Graph HTTPClient")
         return GraphApiHelper(httpClient, microsoftErrorMapper)
     }
 
@@ -186,8 +183,7 @@ object BackendMicrosoftModule { // Changed to object module as it now only conta
     fun provideMailApiService(
         graphApiHelper: GraphApiHelper // Hilt injects this
     ): MailApiService {
-        Log.i(
-            "BackendMSModule",
+        Timber.i(
             "Providing MailApiService for 'MS' key via @Provides (now Ktor Auth enabled)"
         )
         return graphApiHelper

@@ -3,7 +3,6 @@ package net.melisma.backend_google.auth
 import android.app.Activity
 import android.content.Intent
 import android.net.Uri
-import android.util.Log
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.Flow
@@ -70,7 +69,6 @@ class GoogleAuthManager @Inject constructor(
     @ApplicationScope private val externalScope: CoroutineScope,
     @Dispatcher(MailDispatchers.IO) private val ioDispatcher: CoroutineDispatcher
 ) {
-    private val TAG = "GoogleAuthManager"
     // Forcing recompilation
 
     // Step 2.3: Helper Functions (Private)
@@ -78,10 +76,9 @@ class GoogleAuthManager @Inject constructor(
         failure: PersistenceResult.Failure<GooglePersistenceErrorType>,
         contextMessage: String
     ): GoogleSignInResult.Error {
-        Log.e(
-            TAG,
-            "$contextMessage: Persistence Error: ${failure.errorType}, Msg: ${failure.message}",
-            failure.cause
+        Timber.e(
+            failure.cause,
+            "$contextMessage: Persistence Error: ${failure.errorType}, Msg: ${failure.message}"
         )
         return GoogleSignInResult.Error(
             errorMessage = "$contextMessage: ${failure.message ?: failure.errorType.name}",
@@ -94,10 +91,9 @@ class GoogleAuthManager @Inject constructor(
         failure: PersistenceResult.Failure<GooglePersistenceErrorType>,
         contextMessage: String
     ): GoogleSignOutResult.Error {
-        Log.e(
-            TAG,
-            "$contextMessage: Persistence Error: ${failure.errorType}, Msg: ${failure.message}",
-            failure.cause
+        Timber.e(
+            failure.cause,
+            "$contextMessage: Persistence Error: ${failure.errorType}, Msg: ${failure.message}"
         )
         return GoogleSignOutResult.Error(
             errorMessage = "$contextMessage: ${failure.message ?: failure.errorType.name}",
@@ -110,10 +106,9 @@ class GoogleAuthManager @Inject constructor(
         failure: PersistenceResult.Failure<GooglePersistenceErrorType>,
         contextMessage: String
     ): GoogleGetTokenResult.Error {
-        Log.e(
-            TAG,
-            "$contextMessage: Persistence Error: ${failure.errorType}, Msg: ${failure.message}",
-            failure.cause
+        Timber.e(
+            failure.cause,
+            "$contextMessage: Persistence Error: ${failure.errorType}, Msg: ${failure.message}"
         )
         return GoogleGetTokenResult.Error(
             errorMessage = "$contextMessage: ${failure.message ?: failure.errorType.name}",
@@ -138,7 +133,7 @@ class GoogleAuthManager @Inject constructor(
                 )
                 appAuthHelperService.createAuthorizationRequestIntent(authRequest)
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to create sign-in intent", e)
+                Timber.e(e, "Failed to create sign-in intent")
                 throw IllegalStateException("Failed to create sign-in intent: ${e.message}", e)
             }
         }
@@ -150,7 +145,7 @@ class GoogleAuthManager @Inject constructor(
         authException: AuthorizationException?
     ): Flow<GoogleSignInResult> = flow {
         if (authException != null) {
-            Log.w(TAG, "Authorization failed with exception", authException)
+            Timber.w(authException, "Authorization failed with exception")
             if (authException.code == AuthorizationException.GeneralErrors.USER_CANCELED_AUTH_FLOW.code) {
                 emit(GoogleSignInResult.Cancelled)
             } else {
@@ -165,33 +160,32 @@ class GoogleAuthManager @Inject constructor(
         }
 
         if (authResponse == null) {
-            Log.e(TAG, "Authorization response is null without exception")
+            Timber.e("Authorization response is null without exception")
             emit(GoogleSignInResult.Error("Authorization failed: No response received."))
             return@flow
         }
 
-        Log.d(TAG, "Handling authorization response: $authResponse")
+        Timber.d("Handling authorization response: $authResponse")
 
         val tokenResponse: TokenResponse? = try {
             appAuthHelperService.exchangeAuthorizationCode(authResponse)
         } catch (e: AuthorizationException) {
-            Log.e(TAG, "Token exchange failed with AuthorizationException", e)
+            Timber.e(e, "Token exchange failed with AuthorizationException")
             emit(GoogleSignInResult.Error("Token exchange failed: ${e.message}", e))
             return@flow
         } catch (e: Exception) {
-            Log.e(TAG, "Token exchange failed with generic Exception", e)
+            Timber.e(e, "Token exchange failed with generic Exception")
             emit(GoogleSignInResult.Error("Token exchange failed: ${e.message}", e))
             return@flow
         }
 
         if (tokenResponse == null) {
-            Log.e(TAG, "Token exchange result is null after try-catch block")
+            Timber.e("Token exchange result is null after try-catch block")
             emit(GoogleSignInResult.Error("Token exchange failed: No token response received."))
             return@flow
         }
 
-        Log.d(
-            TAG,
+        Timber.d(
             "Token exchange successful. ID Token present: ${tokenResponse.idToken != null}, Access Token present: ${tokenResponse.accessToken != null}"
         )
 
@@ -201,8 +195,7 @@ class GoogleAuthManager @Inject constructor(
         val grantedScopesSet = grantedScopesString?.split(' ')?.toSet() ?: emptySet()
 
         if (!grantedScopesSet.containsAll(requestedScopesSet)) {
-            Log.w(
-                TAG,
+            Timber.w(
                 "Not all requested Google scopes were granted. Requested: $requestedScopesSet, Granted: $grantedScopesSet. ID Token: ${tokenResponse.idToken}, Access Token: ${tokenResponse.accessToken}"
             )
             // Attempt to revoke tokens if any were issued, as the grant is incomplete
@@ -222,30 +215,29 @@ class GoogleAuthManager @Inject constructor(
             )
             return@flow
         }
-        Log.i(
-            TAG,
+        Timber.i(
             "All requested Google scopes have been granted: ${grantedScopesSet.joinToString()}"
         )
 
         val parsedTokenInfo = try {
             tokenResponse.idToken?.let { appAuthHelperService.parseIdToken(it) }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to parse ID token", e)
+            Timber.e(e, "Failed to parse ID token")
             emit(GoogleSignInResult.Error("Failed to parse ID token: ${e.message}", e))
             return@flow
         }
 
         if (parsedTokenInfo == null) {
-            Log.e(TAG, "User info (parsedTokenInfo) is null after parsing ID token")
+            Timber.e("User info (parsedTokenInfo) is null after parsing ID token")
             emit(GoogleSignInResult.Error("Failed to retrieve user info from ID token."))
             return@flow
         }
 
-        Log.d(TAG, "User info parsed: $parsedTokenInfo")
+        Timber.d("User info parsed: $parsedTokenInfo")
 
         // Ensure parsedTokenInfo and its userId are not null before calling saveTokens
         if (parsedTokenInfo.userId == null) {
-            Log.e(TAG, "Parsed token info or userId is null before saving. This should not happen.")
+            Timber.e("Parsed token info or userId is null before saving. This should not happen.")
             emit(GoogleSignInResult.Error("Critical error: User information missing after parsing token."))
             return@flow
         }
@@ -262,8 +254,7 @@ class GoogleAuthManager @Inject constructor(
         when (val opResult = persistenceOpResult) {
             is PersistenceResult.Success -> {
                 // val accountId = parsedTokenInfo.userId!! // Already have this
-                Log.d(
-                    TAG,
+                Timber.d(
                     "Tokens and user info saved successfully for account ${parsedTokenInfo.userId}"
                 )
                 activeGoogleAccountHolder.setActiveAccountId(parsedTokenInfo.userId!!)
@@ -292,13 +283,13 @@ class GoogleAuthManager @Inject constructor(
             }
         }
     }.flowOn(ioDispatcher).catch { e ->
-        Log.e(TAG, "Error in handleAuthorizationResponse flow", e)
+        Timber.e(e, "Error in handleAuthorizationResponse flow")
         emit(GoogleSignInResult.Error("An unexpected error occurred: ${e.message}", e))
     }
 
     // Step 2.6: Implement GoogleAuthManager.getAccount(accountId: String): Flow<ManagedGoogleAccount?>
     fun getAccount(accountId: String): Flow<ManagedGoogleAccount?> = flow {
-        Log.d(TAG, "Getting account for ID: $accountId")
+        Timber.d("Getting account for ID: $accountId")
         when (val persistenceResult = tokenPersistenceService.getUserInfo(accountId)) {
             is PersistenceResult.Success -> {
                 val userInfo = persistenceResult.data
@@ -316,22 +307,21 @@ class GoogleAuthManager @Inject constructor(
                 @Suppress("UNCHECKED_CAST")
                 val failure =
                     persistenceResult as PersistenceResult.Failure<GooglePersistenceErrorType>
-                Log.e(
-                    TAG,
-                    "Failed to get user info for $accountId: ${failure.errorType.name}",
-                    failure.cause
+                Timber.e(
+                    failure.cause,
+                    "Failed to get user info for $accountId: ${failure.errorType.name}"
                 )
                 emit(null) // Always emit null on any failure for this function
             }
         }
     }.flowOn(ioDispatcher).catch { e ->
-        Log.e(TAG, "Error in getAccount flow for $accountId", e)
+        Timber.e(e, "Error in getAccount flow for $accountId")
         emit(null)
     }
 
     // Step 2.7: Implement GoogleAuthManager.getAccounts(): Flow<List<ManagedGoogleAccount>>
     fun getAccounts(): Flow<List<ManagedGoogleAccount>> = flow {
-        Log.d(TAG, "Getting all Google accounts")
+        Timber.d("Getting all Google accounts")
         when (val persistenceResult = tokenPersistenceService.getAllGoogleUserInfos()) {
             is PersistenceResult.Success -> {
                 val managedAccounts = persistenceResult.data.mapNotNull { userInfo ->
@@ -351,22 +341,21 @@ class GoogleAuthManager @Inject constructor(
                 @Suppress("UNCHECKED_CAST")
                 val failure =
                     persistenceResult as PersistenceResult.Failure<GooglePersistenceErrorType>
-                Log.e(
-                    TAG,
-                    "Failed to get all user infos: ${failure.errorType.name}",
-                    failure.cause
+                Timber.e(
+                    failure.cause,
+                    "Failed to get all user infos: ${failure.errorType.name}"
                 )
                 emit(emptyList()) // Always emit emptyList on any failure for this function
             }
         }
     }.flowOn(ioDispatcher).catch { e ->
-        Log.e(TAG, "Error in getAccounts flow", e)
+        Timber.e(e, "Error in getAccounts flow")
         emit(emptyList())
     }
 
     // Step 2.8: Implement GoogleAuthManager.signOut(managedAccount: ManagedGoogleAccount): Flow<GoogleSignOutResult>
     fun signOut(accountId: String): Flow<GoogleSignOutResult> = flow {
-        Log.d(TAG, "Signing out account: $accountId")
+        Timber.d("Signing out account: $accountId")
 
         val authStateResult = tokenPersistenceService.getAuthState(accountId)
         val authState: AuthState? = when (authStateResult) {
@@ -375,8 +364,7 @@ class GoogleAuthManager @Inject constructor(
                 @Suppress("UNCHECKED_CAST")
                 val failure =
                     authStateResult as PersistenceResult.Failure<GooglePersistenceErrorType>
-                Log.w(
-                    TAG,
+                Timber.w(
                     "Could not retrieve AuthState for signOut, proceeding with local clear: ${failure.errorType} - ${failure.message}"
                 )
                 null
@@ -385,10 +373,10 @@ class GoogleAuthManager @Inject constructor(
 
         if (authState?.refreshToken != null) {
             try {
-                Log.d(TAG, "Attempting to revoke token for $accountId")
+                Timber.d("Attempting to revoke token for $accountId")
                 appAuthHelperService.revokeToken(authState.refreshToken!!) 
             } catch (e: Exception) {
-                Log.w(TAG, "Token revocation failed for $accountId", e)
+                Timber.w(e, "Token revocation failed for $accountId")
             }
         }
 
@@ -399,7 +387,7 @@ class GoogleAuthManager @Inject constructor(
 
         when (val opResult = clearTokenResult) {
             is PersistenceResult.Success -> {
-                Log.d(TAG, "Tokens cleared successfully for $accountId")
+                Timber.d("Tokens cleared successfully for $accountId")
                 if (activeGoogleAccountHolder.activeAccountId.value == accountId) {
                     activeGoogleAccountHolder.setActiveAccountId(null)
                 }
@@ -416,20 +404,20 @@ class GoogleAuthManager @Inject constructor(
             }
         }
     }.flowOn(ioDispatcher).catch { e ->
-        Log.e(TAG, "Error in signOut flow for $accountId", e)
+        Timber.e(e, "Error in signOut flow for $accountId")
         emit(GoogleSignOutResult.Error("Sign out failed: ${e.message}", e))
     }
 
     // Step 2.9: Implement GoogleAuthManager.getFreshAccessToken(accountId: String): GoogleGetTokenResult (Suspend Function)
     suspend fun getFreshAccessToken(accountId: String): GoogleGetTokenResult {
         return withContext(ioDispatcher) {
-            Log.d(TAG, "Attempting to get fresh access token for account: $accountId")
+            Timber.d("Attempting to get fresh access token for account: $accountId")
             val authStateResult = tokenPersistenceService.getAuthState(accountId)
 
             val currentAuthState: AuthState = when (val result = authStateResult) {
                 is PersistenceResult.Success -> {
                     result.data ?: run {
-                        Log.e(TAG, "No AuthState found for account $accountId during token fetch.")
+                        Timber.e("No AuthState found for account $accountId during token fetch.")
                         return@withContext GoogleGetTokenResult.Error("No AuthState for account $accountId")
                     }
                 }
@@ -437,10 +425,9 @@ class GoogleAuthManager @Inject constructor(
                 is PersistenceResult.Failure<*> -> {
                     @Suppress("UNCHECKED_CAST")
                     val failure = result as PersistenceResult.Failure<GooglePersistenceErrorType>
-                    Log.e(
-                        TAG,
-                        "Failed to get AuthState for $accountId: ${failure.errorType}",
-                        failure.cause
+                    Timber.e(
+                        failure.cause,
+                        "Failed to get AuthState for $accountId: ${failure.errorType}"
                     )
                     return@withContext mapPersistenceErrorToGetTokenError(
                         failure,
@@ -449,50 +436,41 @@ class GoogleAuthManager @Inject constructor(
                 }
             }
 
-            Timber.tag(TAG).d(
+            Timber.d(
                 "getFreshAccessToken - AccountID: $accountId - Retrieved AuthState ID: ${
                     System.identityHashCode(currentAuthState)
                 }"
             )
-            Timber.tag(TAG)
-                .d("getFreshAccessToken - AccountID: $accountId - Retrieved AuthState JSON: ${currentAuthState.jsonSerializeString()}")
-            Timber.tag(TAG)
-                .d("getFreshAccessToken - AccountID: $accountId - Retrieved AuthState Config JSON: ${currentAuthState.authorizationServiceConfiguration?.toJsonString()}")
-            Timber.tag(TAG)
-                .d("getFreshAccessToken - AccountID: $accountId - Retrieved AuthState Last Auth Resp Config JSON: ${currentAuthState.lastAuthorizationResponse?.request?.configuration?.toJsonString()}")
-            Timber.tag(TAG)
-                .d("getFreshAccessToken - AccountID: $accountId - Retrieved AuthState Refresh Token Present: ${currentAuthState.refreshToken != null}")
+            Timber.d("getFreshAccessToken - AccountID: $accountId - Retrieved AuthState JSON: ${currentAuthState.jsonSerializeString()}")
+            Timber.d("getFreshAccessToken - AccountID: $accountId - Retrieved AuthState Config JSON: ${currentAuthState.authorizationServiceConfiguration?.toJsonString()}")
+            Timber.d("getFreshAccessToken - AccountID: $accountId - Retrieved AuthState Last Auth Resp Config JSON: ${currentAuthState.lastAuthorizationResponse?.request?.configuration?.toJsonString()}")
+            Timber.d("getFreshAccessToken - AccountID: $accountId - Retrieved AuthState Refresh Token Present: ${currentAuthState.refreshToken != null}")
 
-            Log.i(
-                TAG,
+            Timber.i(
                 "Access token needs refresh for account $accountId (or assumed to by compiler warning)."
             )
-            Timber.tag(TAG).d(
+            Timber.d(
                 "getFreshAccessToken - AccountID: $accountId - AuthState ID before refresh call: ${
                     System.identityHashCode(currentAuthState)
                 }"
             )
-            Timber.tag(TAG)
-                .d("getFreshAccessToken - AccountID: $accountId - AuthState Config JSON before refresh call: ${currentAuthState.authorizationServiceConfiguration?.toJsonString()}")
+            Timber.d("getFreshAccessToken - AccountID: $accountId - AuthState Config JSON before refresh call: ${currentAuthState.authorizationServiceConfiguration?.toJsonString()}")
             try {
                 val refreshedTokenResponse =
                     appAuthHelperService.refreshAccessToken(currentAuthState)
-                Log.d(TAG, "Token refreshed successfully for $accountId.")
+                Timber.d("Token refreshed successfully for $accountId.")
                 currentAuthState.update(refreshedTokenResponse, null) // Update in place
-                Timber.tag(TAG)
-                    .d("getFreshAccessToken - AccountID: $accountId - AuthState after refresh update, Config JSON: ${currentAuthState.authorizationServiceConfiguration?.toJsonString()}")
-                Timber.tag(TAG)
-                    .d("getFreshAccessToken - AccountID: $accountId - AuthState after refresh update, JSON: ${currentAuthState.jsonSerializeString()}")
+                Timber.d("getFreshAccessToken - AccountID: $accountId - AuthState after refresh update, Config JSON: ${currentAuthState.authorizationServiceConfiguration?.toJsonString()}")
+                Timber.d("getFreshAccessToken - AccountID: $accountId - AuthState after refresh update, JSON: ${currentAuthState.jsonSerializeString()}")
                 val updatedAuthState = currentAuthState // Use the modified currentAuthState
                 when (val updateResult =
                     tokenPersistenceService.updateAuthState(accountId, updatedAuthState)) {
                     is PersistenceResult.Success -> {
-                        Log.d(TAG, "Updated AuthState persisted for $accountId.")
+                        Timber.d("Updated AuthState persisted for $accountId.")
                         refreshedTokenResponse.accessToken?.let {
                             return@withContext GoogleGetTokenResult.Success(it)
                         } ?: run {
-                            Log.e(
-                                TAG,
+                            Timber.e(
                                 "Refreshed token response has null access token for $accountId."
                             )
                             return@withContext GoogleGetTokenResult.Error("Refreshed token is null for $accountId.")
@@ -503,10 +481,9 @@ class GoogleAuthManager @Inject constructor(
                         @Suppress("UNCHECKED_CAST")
                         val failure =
                             updateResult as PersistenceResult.Failure<GooglePersistenceErrorType>
-                        Log.e(
-                            TAG,
-                            "Failed to persist updated AuthState for $accountId: ${failure.errorType}",
-                            failure.cause
+                        Timber.e(
+                            failure.cause,
+                            "Failed to persist updated AuthState for $accountId: ${failure.errorType}"
                         )
                         return@withContext mapPersistenceErrorToGetTokenError(
                             failure,
@@ -515,14 +492,12 @@ class GoogleAuthManager @Inject constructor(
                     }
                 }
             } catch (e: AuthorizationException) {
-                Log.e(
-                    TAG,
-                    "AuthorizationException during token refresh for $accountId: ${e.type} - ${e.errorDescription}",
-                    e
+                Timber.e(
+                    e,
+                    "AuthorizationException during token refresh for $accountId: ${e.type} - ${e.errorDescription}"
                 )
                 if (e.type == AuthorizationException.TYPE_OAUTH_TOKEN_ERROR && e.error == "invalid_grant") {
-                    Log.w(
-                        TAG,
+                    Timber.w(
                         "Token refresh failed with invalid_grant for $accountId. Clearing tokens and requiring re-auth."
                     )
                     val clearResult = tokenPersistenceService.clearTokens(
@@ -533,10 +508,9 @@ class GoogleAuthManager @Inject constructor(
                         @Suppress("UNCHECKED_CAST")
                         val failure =
                             clearResult as PersistenceResult.Failure<GooglePersistenceErrorType>
-                        Log.w(
-                            TAG,
-                            "Failed to clear tokens after invalid_grant for $accountId: ${failure.errorType}",
-                            failure.cause
+                        Timber.w(
+                            failure.cause,
+                            "Failed to clear tokens after invalid_grant for $accountId: ${failure.errorType}"
                         )
                     }
                     return@withContext GoogleGetTokenResult.NeedsReauthentication(accountId)
@@ -546,7 +520,7 @@ class GoogleAuthManager @Inject constructor(
                     exception = e
                 )
             } catch (e: Exception) {
-                Log.e(TAG, "Exception during token refresh for $accountId", e)
+                Timber.e(e, "Exception during token refresh for $accountId")
                 return@withContext GoogleGetTokenResult.Error(
                     "Token refresh failed for $accountId: ${e.message}",
                     exception = e
@@ -569,12 +543,12 @@ class GoogleAuthManager @Inject constructor(
      */
     suspend fun requestReauthentication(accountId: String): PersistenceResult<Unit> {
         return withContext(ioDispatcher) {
-            Log.w(TAG, "Requesting re-authentication for account: $accountId by clearing tokens.")
+            Timber.w("Requesting re-authentication for account: $accountId by clearing tokens.")
             val clearResult =
                 tokenPersistenceService.clearTokens(accountId, removeAccountFromManagerFlag = false)
             when (clearResult) {
                 is PersistenceResult.Success -> {
-                    Log.i(TAG, "Tokens cleared for $accountId to force re-authentication.")
+                    Timber.i("Tokens cleared for $accountId to force re-authentication.")
                     PersistenceResult.Success(Unit)
                 }
 
@@ -582,10 +556,9 @@ class GoogleAuthManager @Inject constructor(
                     @Suppress("UNCHECKED_CAST")
                     val failure =
                         clearResult as PersistenceResult.Failure<GooglePersistenceErrorType>
-                    Log.e(
-                        TAG,
-                        "Failed to clear tokens for $accountId during re-authentication request: ${failure.errorType}",
-                        failure.cause
+                    Timber.e(
+                        failure.cause,
+                        "Failed to clear tokens for $accountId during re-authentication request: ${failure.errorType}"
                     )
                     PersistenceResult.Failure(failure.errorType, failure.message, failure.cause)
                 }

@@ -1,17 +1,16 @@
 package net.melisma.backend_google.auth
 
-import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import javax.inject.Inject
 import javax.inject.Singleton
+import timber.log.Timber
 
 @Singleton
 class ActiveGoogleAccountHolder @Inject constructor() {
-    private val TAG = "ActiveGoogleHolder"
 
     init {
-        Log.d(TAG, "ActiveGoogleAccountHolder: Initialized")
+        Timber.d("ActiveGoogleAccountHolder: Initialized")
     }
 
     // This should be updated when the user selects an account or after a successful sign-in.
@@ -21,8 +20,7 @@ class ActiveGoogleAccountHolder @Inject constructor() {
     val activeAccountId: StateFlow<String?> = _activeAccountId
 
     fun setActiveAccountId(accountId: String?) {
-        Log.d(
-            TAG,
+        Timber.d(
             "ActiveGoogleAccountHolder: setActiveAccountId called with accountId=${accountId?.take(5)}..."
         )
         val oldAccountId = _activeAccountId.value
@@ -30,15 +28,14 @@ class ActiveGoogleAccountHolder @Inject constructor() {
 
         if (oldAccountId != accountId) {
             if (accountId == null) {
-                Log.i(TAG, "ActiveGoogleAccountHolder: Active Google account cleared")
+                Timber.i("ActiveGoogleAccountHolder: Active Google account cleared")
             } else {
-                Log.i(
-                    TAG,
+                Timber.i(
                     "ActiveGoogleAccountHolder: Active Google account ID set to: ${accountId.take(5)}..."
                 )
             }
         } else {
-            Log.d(TAG, "ActiveGoogleAccountHolder: Active account unchanged")
+            Timber.d("ActiveGoogleAccountHolder: Active account unchanged")
         }
         // TODO: Persist this accountId to SharedPreferences if you want it to
         // survive app restarts as the "last used" Google account.
@@ -46,8 +43,7 @@ class ActiveGoogleAccountHolder @Inject constructor() {
 
     fun getActiveAccountIdValue(): String? {
         val accountId = _activeAccountId.value
-        Log.d(
-            TAG,
+        Timber.d(
             "ActiveGoogleAccountHolder: getActiveAccountIdValue returning: ${accountId?.take(5)}..."
         )
         return accountId

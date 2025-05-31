@@ -39,6 +39,9 @@ dependencies {
     // Project Modules
     api(project(":core-data")) // 'api' so downstream modules (:app) can see :core-data types if use cases expose them directly
 
+    // Logging
+    implementation("com.jakewharton.timber:timber:5.0.1")
+
     // Testing (Optional for now, but good to set up)
     // testImplementation("junit:junit:4.13.2")
     // testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")

@@ -1,7 +1,6 @@
 package net.melisma.data.repository
 
 import android.app.Activity
-import android.util.Log
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -54,8 +53,6 @@ class DefaultFolderRepository @Inject constructor(
     private val folderDao: FolderDao
 ) : FolderRepository {
 
-    private val TAG = "DefaultFolderRepo"
-
     // This will hold the combined state from DB and ongoing sync operations.
     private val _folderStates = MutableStateFlow<Map<String, FolderFetchState>>(emptyMap())
 
@@ -63,7 +60,7 @@ class DefaultFolderRepository @Inject constructor(
     private val syncJobs = ConcurrentHashMap<String, Job>()
 
     init {
-        Log.d(TAG, "Initializing DefaultFolderRepository with DB support.")
+        Timber.d("Initializing DefaultFolderRepository with DB support.")
         observeDatabaseChanges()
     }
 
@@ -83,10 +80,9 @@ class DefaultFolderRepository @Inject constructor(
                                         FolderFetchState.Success(folderEntities.map { it.toDomainModel() })
                                     }
                                     .catch { e ->
-                                        Log.e(
-                                            TAG,
-                                            "Error observing folders for account $accountId from DB",
-                                            e
+                                        Timber.e(
+                                            e,
+                                            "Error observing folders for account $accountId from DB"
                                         )
                                         // Emit previous state or an error state if critical
                                         // For now, if DB fails, it's a significant issue, reflect error.
@@ -125,10 +121,9 @@ class DefaultFolderRepository @Inject constructor(
                     }
                 }
                 .catch { e ->
-                    Log.e(
-                        TAG,
-                        "Error in observeDatabaseChanges flatMapLatest/combine",
-                        e
+                    Timber.e(
+                        e,
+                        "Error in observeDatabaseChanges flatMapLatest/combine"
                     )
                 }
                 .launchIn(this) // Launch in the externalScope's coroutine context
@@ -140,13 +135,10 @@ class DefaultFolderRepository @Inject constructor(
 
     override suspend fun manageObservedAccounts(accounts: List<Account>) {
         withContext(ioDispatcher) {
-            Timber.tag(TAG)
-                .i("manageObservedAccounts called with ${accounts.size} accounts. Usernames: ${accounts.joinToString { it.username }}.")
+            Timber.i("manageObservedAccounts called with ${accounts.size} accounts. Usernames: ${accounts.joinToString { it.username }}.")
             val currentDbAccountEntities = accountDao.getAllAccounts().first() // Get current state
-            Timber.tag(TAG)
-                .d("manageObservedAccounts: API accounts: ${accounts.joinToString { it.id + ":" + it.username }}")
-            Timber.tag(TAG)
-                .d("manageObservedAccounts: Current DB accounts before any upsert: ${currentDbAccountEntities.joinToString { it.id + ":" + it.username }}")
+            Timber.d("manageObservedAccounts: API accounts: ${accounts.joinToString { it.id + ":" + it.username }}")
+            Timber.d("manageObservedAccounts: Current DB accounts before any upsert: ${currentDbAccountEntities.joinToString { it.id + ":" + it.username }}")
 
             val currentDbAccountIds = currentDbAccountEntities.map { it.id }.toSet()
             val newApiAccountIds = accounts.map { it.id }.toSet()
@@ -154,7 +146,7 @@ class DefaultFolderRepository @Inject constructor(
             // Accounts to remove from DB
             val removedAccountIds = currentDbAccountIds - newApiAccountIds
             removedAccountIds.forEach { accountId ->
-                Log.i(TAG, "Removing account $accountId from DB and cancelling its syncs.")
+                Timber.i("Removing account $accountId from DB and cancelling its syncs.")
                 syncJobs[accountId]?.cancel(CancellationException("Account removed"))
                 syncJobs.remove(accountId)
                 folderDao.deleteAllFoldersForAccount(accountId) // Clears folders
@@ -164,10 +156,9 @@ class DefaultFolderRepository @Inject constructor(
 
             accounts.map { it.toEntity() }
             // accountDao.insertOrUpdateAccounts(accountEntitiesToUpsert) // DefaultAccountRepository handles account upserts
-            // Log.i(TAG, "Upserted ${accountEntitiesToUpsert.size} accounts into DB.")
+            // Timber.i("Upserted ${accountEntitiesToUpsert.size} accounts into DB.")
             // Timber.i(TAG, "Upserted ${accountEntitiesToUpsert.size} accounts into DB. Account IDs: ${accountEntitiesToUpsert.joinToString { it.id }}. This will trigger AccountDao observers.")
-            Timber.tag(TAG)
-                .d("manageObservedAccounts: Account upsert/delete operations are handled by DefaultAccountRepository. This repository will now proceed to check if folder syncs are needed for the observed accounts.")
+            Timber.d("manageObservedAccounts: Account upsert/delete operations are handled by DefaultAccountRepository. This repository will now proceed to check if folder syncs are needed for the observed accounts.")
 
             // For new or existing accounts, trigger an initial sync if no data or upon request
             // This logic might need refinement based on "initial sync" requirements vs. regular refresh
@@ -179,8 +170,7 @@ class DefaultFolderRepository @Inject constructor(
                         (currentState is FolderFetchState.Success && currentState.folders.isEmpty())
 
                 if (needsSync) {
-                    Log.d(
-                        TAG,
+                    Timber.d(
                         "manageObservedAccounts: Account ${account.username} needs initial folder sync. Current state: $currentState"
                     )
                     // Use externalScope for sync jobs that shouldn't be tied to a ViewModel lifecycle
@@ -211,8 +201,7 @@ class DefaultFolderRepository @Inject constructor(
             // Check needsReauthentication flag from DB first
             val accountEntity = accountDao.getAccountById(accountId).first()
             if (accountEntity?.needsReauthentication == true) {
-                Log.w(
-                    TAG,
+                Timber.w(
                     "Account $accountId marked for re-authentication. Skipping folder sync for $reasonSuffix."
                 )
                 _folderStates.update { currentStates ->
@@ -225,8 +214,7 @@ class DefaultFolderRepository @Inject constructor(
             }
 
             if (!forceRefresh && _folderStates.value[accountId] is FolderFetchState.Success && (_folderStates.value[accountId] as FolderFetchState.Success).folders.isNotEmpty()) {
-                Log.i(
-                    TAG,
+                Timber.i(
                     "Folders for account $accountId already loaded and forceRefresh is false. Skipping sync for $reasonSuffix."
                 )
                 // Ensure the job is removed if we're not actually running it to completion
@@ -235,8 +223,7 @@ class DefaultFolderRepository @Inject constructor(
             }
 
 
-            Log.i(
-                TAG,
+            Timber.i(
                 "Starting folder sync for $accountId ($providerType) - $reasonSuffix. Force refresh: $forceRefresh. Current coroutine active: $isActive"
             )
             _folderStates.update { currentStates ->
@@ -250,7 +237,7 @@ class DefaultFolderRepository @Inject constructor(
                 val errorMapper = errorMappers[providerType]
 
                 if (service == null || errorMapper == null) {
-                    Log.e(TAG, "No MailApiService or ErrorMapper for provider: $providerType")
+                    Timber.e("No MailApiService or ErrorMapper for provider: $providerType")
                     _folderStates.update { currentStates ->
                         currentStates + (accountId to FolderFetchState.Error("Unsupported account type: $providerType"))
                     }
@@ -262,8 +249,7 @@ class DefaultFolderRepository @Inject constructor(
 
                 remoteFoldersResult.fold(
                     onSuccess = { folderList ->
-                        Log.i(
-                            TAG,
+                        Timber.i(
                             "Successfully fetched ${folderList.size} folders for $accountId from API."
                         )
                         val folderEntities = folderList.map { it.toEntity(accountId) }
@@ -278,17 +264,15 @@ class DefaultFolderRepository @Inject constructor(
                         // _folderStates.update { currentStates ->
                         //    currentStates + (accountId to FolderFetchState.Success(folderList))
                         // }
-                        Log.d(
-                            TAG,
+                        Timber.d(
                             "Folders for $accountId saved to DB. State will update via DB observation."
                         )
                     },
                     onFailure = { exception ->
                         val errorDetails = errorMapper.mapExceptionToErrorDetails(exception)
-                        Log.e(
-                            TAG,
-                            "Error syncing folders for $accountId: ${errorDetails.message}",
-                            exception
+                        Timber.e(
+                            exception,
+                            "Error syncing folders for $accountId: ${errorDetails.message}"
                         )
 
                         // Check if the exception is NeedsReauthenticationException specifically
@@ -306,15 +290,14 @@ class DefaultFolderRepository @Inject constructor(
                     }
                 )
             } catch (e: CancellationException) {
-                Log.i(TAG, "Folder sync for $accountId cancelled ($reasonSuffix): ${e.message}")
+                Timber.i("Folder sync for $accountId cancelled ($reasonSuffix): ${e.message}")
                 // Don't update state to error if it's a legitimate cancellation
                 // (e.g. account removed, new sync started)
                 // The state will be handled by the cancelling action or new sync.
             } catch (e: Exception) { // Catch-all for other unexpected errors
-                Log.e(
-                    TAG,
-                    "Unexpected exception during folder sync for $accountId ($reasonSuffix)",
-                    e
+                Timber.e(
+                    e,
+                    "Unexpected exception during folder sync for $accountId ($reasonSuffix)"
                 )
                 val errorDetails = errorMappers[providerType]?.mapExceptionToErrorDetails(e)
                     ?: net.melisma.core_data.model.ErrorDetails("Unknown error during folder sync.")
@@ -328,8 +311,7 @@ class DefaultFolderRepository @Inject constructor(
                 if (syncJobs[accountId] == coroutineContext[Job]) {
                     syncJobs.remove(accountId)
                 }
-                Log.d(
-                    TAG,
+                Timber.d(
                     "Folder sync job ended for $accountId. Reason: $reasonSuffix. Remaining jobs: ${syncJobs.size}"
                 )
             }
@@ -340,12 +322,12 @@ class DefaultFolderRepository @Inject constructor(
     override suspend fun refreshFoldersForAccount(accountId: String, activity: Activity?) {
         val accountEntity = accountDao.getAccountById(accountId).first() // Get from DB
         if (accountEntity == null) {
-            Log.w(TAG, "Account $accountId not found in DB for refresh.")
+            Timber.w("Account $accountId not found in DB for refresh.")
             _folderStates.update { it + (accountId to FolderFetchState.Error("Account not found")) }
             return
         }
         val account = accountEntity.toDomainAccount()
-        Log.i(TAG, "refreshFoldersForAccount called for ${account.username}")
+        Timber.i("refreshFoldersForAccount called for ${account.username}")
         refreshFoldersForAccountInternal(
             account,
             activity,
@@ -357,10 +339,10 @@ class DefaultFolderRepository @Inject constructor(
     // refreshAllFolders needs to be adapted if it's still used.
     // It would iterate over accounts from accountDao and call refreshFoldersForAccountInternal.
     override suspend fun refreshAllFolders(activity: Activity?) {
-        Log.i(TAG, "refreshAllFolders called.")
+        Timber.i("refreshAllFolders called.")
         val allAccountEntities = accountDao.getAllAccounts().first()
         if (allAccountEntities.isEmpty()) {
-            Log.i(TAG, "No accounts in DB to refresh.")
+            Timber.i("No accounts in DB to refresh.")
             return
         }
         allAccountEntities.forEach { accountEntity ->
@@ -375,8 +357,7 @@ class DefaultFolderRepository @Inject constructor(
                     reasonSuffix = "global refreshAllFolders"
                 )
             } else {
-                Log.w(
-                    TAG,
+                Timber.w(
                     "refreshAllFolders: Skipping ${account.username} as provider $providerType is not supported."
                 )
                 _folderStates.update { currentMap ->
@@ -389,24 +370,21 @@ class DefaultFolderRepository @Inject constructor(
 
     // --- Stub implementations for other FolderRepository methods ---
     override suspend fun syncFolderContents(accountId: String, folderId: String): Result<Unit> {
-        Log.d(
-            TAG,
+        Timber.d(
             "syncFolderContents called for accountId: $accountId, folderId: $folderId (NOT IMPLEMENTED WITH DB)"
         )
         return Result.failure(NotImplementedError("syncFolderContents not implemented with DB"))
     }
 
     override fun getThreadsInFolder(accountId: String, folderId: String): Flow<List<MailThread>> {
-        Log.d(
-            TAG,
+        Timber.d(
             "getThreadsInFolder called for accountId: $accountId, folderId: $folderId (NOT IMPLEMENTED WITH DB)"
         )
         return flowOf(emptyList())
     }
 
     override fun getMessagesInFolder(accountId: String, folderId: String): Flow<List<Message>> {
-        Log.d(
-            TAG,
+        Timber.d(
             "getMessagesInFolder called for accountId: $accountId, folderId: $folderId (NOT IMPLEMENTED WITH DB)"
         )
         return flowOf(emptyList())

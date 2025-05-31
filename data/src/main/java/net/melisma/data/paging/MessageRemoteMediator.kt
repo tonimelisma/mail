@@ -1,6 +1,5 @@
 package net.melisma.data.paging
 
-import android.util.Log
 import androidx.paging.ExperimentalPagingApi
 import androidx.paging.LoadType
 import androidx.paging.PagingState
@@ -15,6 +14,7 @@ import net.melisma.core_db.AppDatabase
 import net.melisma.core_db.entity.MessageEntity
 import net.melisma.data.mapper.toEntity
 import java.io.IOException
+import timber.log.Timber
 
 // Define a simple class to hold API response for paged messages
 data class PagedMessageResponse(
@@ -42,7 +42,6 @@ class MessageRemoteMediator(
 ) : RemoteMediator<Int, MessageEntity>() {
 
     private val messageDao = database.messageDao()
-    private val TAG = "MessageRemoteMediator"
 
     // Define a page size for fetching messages during REFRESH.
     // This should be large enough to get a good initial set, but not excessive.
@@ -51,8 +50,7 @@ class MessageRemoteMediator(
 
     override suspend fun initialize(): InitializeAction {
         // LAUNCH_INITIAL_REFRESH will call load() with LoadType.REFRESH upon initialization of PagingData.
-        Log.d(
-            TAG,
+        Timber.d(
             "initialize() called for $accountId/$folderId. Returning LAUNCH_INITIAL_REFRESH."
         )
         return InitializeAction.LAUNCH_INITIAL_REFRESH
@@ -62,13 +60,11 @@ class MessageRemoteMediator(
         loadType: LoadType,
         state: PagingState<Int, MessageEntity>
     ): MediatorResult {
-        Log.i(
-            TAG,
+        Timber.i(
             "load() called. LoadType: $loadType, Account: $accountId, Folder: $folderId, PageSize: ${state.config.pageSize}, Prefetch: ${state.config.prefetchDistance}, InitialSize: ${state.config.initialLoadSize}"
         )
         onSyncStateChanged(MessageSyncState.Syncing(accountId, folderId))
-        // Log.d(
-        //     TAG,
+        // Timber.d(
         //     "load() called. LoadType: $loadType, Account: $accountId, Folder: $folderId, PageSize: ${state.config.pageSize}"
         // )
 
@@ -76,8 +72,7 @@ class MessageRemoteMediator(
             when (loadType) {
                 LoadType.REFRESH -> {
                     // Fetch from network
-                    Log.i(
-                        TAG,
+                    Timber.i(
                         "REFRESH for $accountId/$folderId: Fetching messages from network. API page size: $REFRESH_PAGE_SIZE"
                     )
                     val apiResponse = withContext(ioDispatcher) {
@@ -90,30 +85,26 @@ class MessageRemoteMediator(
 
                     if (apiResponse.isSuccess) {
                         val messagesFromApi = apiResponse.getOrThrow()
-                        Log.i(
-                            TAG,
+                        Timber.i(
                             "REFRESH for $accountId/$folderId: Fetched ${messagesFromApi.size} messages from API."
                         )
 
                         val dbLogPrefix = "REFRESH DB for $accountId/$folderId:"
                         database.withTransaction {
-                            Log.d(
-                                TAG,
+                            Timber.d(
                                 "$dbLogPrefix Clearing old messages and inserting ${messagesFromApi.size} new ones."
                             )
                             // It's important that this deletion is specific to the accountId and folderId
                             // messageDao.deleteMessagesForFolder(accountId, folderId) // Old approach
                             val messageEntities =
                                 messagesFromApi.map { it.toEntity(accountId, folderId) }
-                            Log.d(TAG, "$dbLogPrefix Upserting ${messageEntities.size} messages.")
-                            messageDao.insertOrUpdateMessages(messageEntities) // New approach: Upsert
-                            Log.d(TAG, "$dbLogPrefix Database transaction completed.")
+                            messageDao.insertOrUpdateMessages(messageEntities)
+                            Timber.d("$dbLogPrefix Database transaction completed.")
                         }
                         // Since the API doesn't support true pagination with next/prev keys,
                         // after a refresh, we assume we have all we can get via this mediator for APPEND/PREPEND.
                         val endOfPaginationReached = true
-                        Log.i(
-                            TAG,
+                        Timber.i(
                             "REFRESH for $accountId/$folderId: Success. endOfPaginationReached=$endOfPaginationReached. Notifying SyncSuccess."
                         )
                         onSyncStateChanged(MessageSyncState.SyncSuccess(accountId, folderId))
@@ -121,10 +112,9 @@ class MessageRemoteMediator(
                     } else {
                         val exception = apiResponse.exceptionOrNull()
                             ?: IOException("Unknown API error on REFRESH for $accountId/$folderId")
-                        Log.e(
-                            TAG,
-                            "REFRESH for $accountId/$folderId: API call failed: ${exception.message}",
-                            exception
+                        Timber.e(
+                            exception,
+                            "REFRESH for $accountId/$folderId: API call failed: ${exception.message}"
                         )
                         onSyncStateChanged(
                             MessageSyncState.SyncError(
@@ -139,8 +129,7 @@ class MessageRemoteMediator(
 
                 LoadType.PREPEND -> {
                     // Prepending not supported with the current API structure
-                    Log.i(
-                        TAG,
+                    Timber.i(
                         "PREPEND for $accountId/$folderId: Not supported, returning success with endOfPaginationReached = true. Notifying SyncSuccess (as no error occurred)."
                     )
                     onSyncStateChanged(
@@ -155,8 +144,7 @@ class MessageRemoteMediator(
                 LoadType.APPEND -> {
                     // Appending from network not supported with the current API structure via RemoteMediator
                     // The PagingSource from DAO handles serving already fetched data.
-                    Log.i(
-                        TAG,
+                    Timber.i(
                         "APPEND for $accountId/$folderId: Not supported by RemoteMediator, returning success with endOfPaginationReached = true. Notifying SyncSuccess."
                     )
                     onSyncStateChanged(
@@ -169,10 +157,9 @@ class MessageRemoteMediator(
                 }
             }
         } catch (e: IOException) {
-            Log.e(
-                TAG,
-                "IOException during load ($loadType for $accountId/$folderId): ${e.message}",
-                e
+            Timber.e(
+                e,
+                "IOException during load ($loadType for $accountId/$folderId): ${e.message}"
             )
             onSyncStateChanged(
                 MessageSyncState.SyncError(
@@ -183,10 +170,9 @@ class MessageRemoteMediator(
             )
             return MediatorResult.Error(e)
         } catch (e: Exception) {
-            Log.e(
-                TAG,
-                "Generic exception during load ($loadType for $accountId/$folderId): ${e.message}",
-                e
+            Timber.e(
+                e,
+                "Generic exception during load ($loadType for $accountId/$folderId): ${e.message}"
             )
             onSyncStateChanged(
                 MessageSyncState.SyncError(

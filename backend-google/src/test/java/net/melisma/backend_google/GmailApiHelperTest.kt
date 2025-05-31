@@ -1,7 +1,6 @@
 package net.melisma.backend_google
 
 // import net.melisma.core_data.errors.MappedErrorDetails // Commented out
-import android.util.Log
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.MockRequestHandleScope
@@ -34,6 +33,7 @@ import org.junit.Before
 import org.junit.BeforeClass
 import org.junit.Test
 import java.io.IOException
+import timber.log.Timber
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class GmailApiHelperTest {
@@ -183,20 +183,16 @@ class GmailApiHelperTest {
         @BeforeClass
         @JvmStatic
         fun beforeClass() {
-            mockkStatic(Log::class)
-            every { Log.v(any(), any()) } returns 0
-            every { Log.d(any(), any()) } returns 0
-            every { Log.i(any(), any<String>()) } returns 0
-            every { Log.w(any(), any<String>()) } returns 0
-            every { Log.w(any(), any<String>(), any()) } returns 0
-            every { Log.e(any(), any<String>()) } returns 0
-            every { Log.e(any(), any<String>(), any()) } returns 0
+            mockkStatic(Timber::class)
+            // Assuming Timber is set up to not actually log during tests or uses a TestTree.
+            // If not, you might need to provide a specific TestTree.
+            // every { Timber.v(any(), any()) } returns Unit // etc. for other levels if needed
         }
 
         @AfterClass
         @JvmStatic
         fun afterClass() {
-            unmockkStatic(Log::class)
+            unmockkStatic(Timber::class)
         }
     }
 

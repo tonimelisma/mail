@@ -1,6 +1,5 @@
 package net.melisma.mail.ui
 
-import android.util.Log
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -19,6 +18,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import net.melisma.core_data.model.Message
+import timber.log.Timber
 
 // Composable for a single item in the message list
 @Composable
@@ -26,8 +26,7 @@ fun MessageListItem(
     message: Message,
     onClick: () -> Unit
 ) {
-    Log.d(
-        "MessageListItemUI",
+    Timber.d(
         "Displaying Message ID: ${message.id}, Subject: '${message.subject}', Sender: '${message.senderName ?: message.senderAddress}'"
     )
     Column(
