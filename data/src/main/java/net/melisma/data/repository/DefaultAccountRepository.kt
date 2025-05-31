@@ -666,12 +666,7 @@ class DefaultAccountRepository @Inject constructor(
 
             val errorTypeVal = failure.errorType // Explicitly store to help linter
 
-            @Suppress("SimplifyBooleanExpression") // Try different suppression key
-            val errorCode = if (errorTypeVal != null && errorTypeVal is Enum<*>) {
-                (errorTypeVal as Enum<*>).name
-            } else {
-                errorTypeVal?.toString() ?: "DB_SAVE_ERROR"
-            }
+            val errorCode = (errorTypeVal as Enum<*>).name
 
             val errorDetails = ErrorDetails(
                 message = failure.message ?: "Failed to save account.",
