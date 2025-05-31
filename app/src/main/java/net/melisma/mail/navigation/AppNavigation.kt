@@ -11,6 +11,7 @@ import net.melisma.mail.MainViewModel
 import net.melisma.mail.ui.MainAppScreen
 import net.melisma.mail.ui.messagedetail.MessageDetailScreen
 import net.melisma.mail.ui.settings.SettingsScreen
+import net.melisma.mail.ui.threaddetail.ThreadDetailScreen
 
 @Composable
 fun MailAppNavigationGraph(
@@ -45,6 +46,17 @@ fun MailAppNavigationGraph(
         ) {
             // ViewModel will pick up args from SavedStateHandle
             MessageDetailScreen(navController = navController)
+        }
+
+        composable(
+            route = AppRoutes.THREAD_DETAIL,
+            arguments = listOf(
+                navArgument(AppRoutes.ARG_ACCOUNT_ID) { type = NavType.StringType },
+                navArgument(AppRoutes.ARG_THREAD_ID) { type = NavType.StringType }
+            )
+        ) {
+            // ViewModel will pick up args from SavedStateHandle
+            ThreadDetailScreen(navController = navController)
         }
     }
 } 

@@ -115,4 +115,17 @@
     <string name="loading_more_messages">Loading more messages...</string>
     <string name="error_loading_more_failed">Failed to load more: %1$s</string>
 
+    <string name="error_moving_message">Error moving message</string>
+    <string name="error_moving_thread">Error moving thread</string>
+
+    <string name="title_thread_detail_fallback">Thread Details</string>
+    <string name="error_loading_thread_details_title">Error Loading Thread</string>
+    <string name="thread_empty_title">Thread Empty</string>
+    <string name="thread_empty_message">This thread contains no messages.</string>
+
+    <string name="pref_title_developer_options">Developer Options</string>
+
+    <string name="action_load_full_message">Load full message</string>
+    <string name="error_loading_message_body">Error loading message body: %1$s</string>
+
 </resources>

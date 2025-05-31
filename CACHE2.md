@@ -1,7 +1,7 @@
 # **Melisma Mail - Caching & Offline-First Implementation Guide**
 
-Version: 1.9 (Reflects Delete Message Implementation - 2024-07-30)
-Date: 2024-07-30
+Version: 2.0 (Gmail-style Thread View & Repository Refinements - 2024-07-31)
+Date: 2024-07-31
 
 ## **0. Vision & Introduction**
 
@@ -11,12 +11,12 @@ application data. The UI reads exclusively from the database, ensuring a respons
 experience, even when offline. Network operations are treated as synchronization tasks that update
 this local database.
 
-## **I. Current Codebase State (As of Analysis on 2024-07-30)**
+## **I. Current Codebase State (As of Analysis on 2024-07-31)**
 
 This section reflects the validated state of the codebase after direct inspection and recent
 changes, including the refactor of DAO and Repository methods to use `suspend` functions and `Flow`
-for asynchronous data streams, moving away from direct blocking calls, and the implementation of
-message deletion.
+for asynchronous data streams, moving away from direct blocking calls, the implementation of
+message deletion, and the introduction of the Gmail-style thread view.
 
 ### **A. Core Caching & SSoT Foundation:**
 
@@ -65,6 +65,14 @@ message deletion.
           new `suspend fun` DAO methods (`messageDao.getMessageByIdSuspend`,
           `messageBodyDao.getMessageBodyByIdSuspend`) and `accountRepository.getAccountByIdSuspend`.
           It applies `.flowOn(ioDispatcher)`.
+          **Refined Logic (2024-07-31):** `getMessageWithBody` has been significantly enhanced.
+          It now handles cases where a `MessageEntity` might not yet exist in the local database
+          (e.g., for messages first discovered via a thread API call). If `MessageEntity` is null,
+          the method fetches the full message content from the API and sends the API-derived domain
+          `Message` (with body) downstream. Crucially, `MessageBodyEntity` is only persisted to the
+          database if its corresponding `MessageEntity` already exists, preventing FOREIGN KEY
+          constraint errors. If `MessageEntity` exists but lacks a body, the body is fetched,
+          `MessageBodyEntity` is saved, and the `MessageEntity` (e.g., snippet) is updated.
         * `markMessageRead` updates `MessageEntity.isRead`, sets `needsSync = true` in DAO, and
           enqueues `SyncMessageStateWorker`.
         * `starMessage` updates `MessageEntity.isStarred`, sets `needsSync = true` in DAO, and
@@ -113,7 +121,7 @@ message deletion.
           using `combine` and `stateIn`, reflecting `needsReauthentication` from `AccountDao` and
           MSAL state.
 
-### **C. Implemented Core Offline/Caching Features:**
+### **C. Implemented Core Offline/Caching Features & UI Data Handling:**
 
 * **WorkManager for "True Offline" Sync (Mark Read/Star/Delete):**
     * `SyncMessageStateWorker.kt` exists:
@@ -129,7 +137,22 @@ message deletion.
     * `MessageBodyDao.kt` exists and is provided via Hilt DI (with `suspend` methods).
     * `AppDatabase.kt` includes `MessageBodyEntity` and `MIGRATION_5_6`.
     * `DefaultMessageRepository.getMessageDetails` fetches and saves message bodies using suspend
-      functions.
+      functions (see detailed logic in I.A).
+
+* **Gmail-style Thread View (Progressive Body Loading) (Implemented 2024-07-31):**
+    * The `ThreadDetailScreen` now displays all messages belonging to a thread sequentially in a
+      single, scrollable view.
+    * It uses a `LazyColumn` where each item is a `FullMessageDisplayUnit` composable.
+    * Each `FullMessageDisplayUnit` is responsible for rendering the complete content of a single
+      message, including headers and the HTML body in an `AndroidView` (WebView).
+    * Individual message bodies are loaded progressively and automatically upon display (via
+      `isExpandedInitially = true` passed to `FullMessageDisplayUnit`).
+    * State management for body loading is handled by `BodyLoadingState` (NotLoadedYet, Loading,
+      Loaded, Error) within a `ThreadMessageItem` wrapper class, managed by `ThreadDetailViewModel`.
+      This view model uses `MessageRepository.getMessageDetails` (via `getMessageWithBody`) to fetch
+      each body.
+    * This replaces the previous navigation pattern where clicking a thread item showed a list of
+      message snippets, and each snippet then navigated to a separate `MessageDetailScreen`.
 
 ### **D. Remaining Unimplemented Core Offline/Caching Features:**
 
@@ -144,7 +167,7 @@ message deletion.
     * No `MessageFtsEntity` or FTS setup in Room.
     * `DefaultMessageRepository.searchMessages` is not implemented for local search.
 
-## **II. Unified List of Technical Debt and Other Challenges (Verified 2024-07-30)**
+## **II. Unified List of Technical Debt and Other Challenges (Verified 2024-07-31)**
 
 1. **API and Data Model Limitations (DESIGN/IMPLEMENTATION ISSUES):**
     * **API-Model Discrepancies:** Potential for incomplete cached data if `MailApiService` doesn't
@@ -158,8 +181,13 @@ message deletion.
     * **Error Handling in Mappers (Date Parsing):** `MessageMappers.kt` date parsing defaults might
       need careful UI handling for invalid dates.
     * **`DefaultMessageRepository.kt` `getMessageWithBody` Robustness:** While refactored to use
-      suspend functions, the logic for handling network errors during body fetch vs. local cache
-      needs ongoing validation.
+      suspend functions and handle missing entities for body fetching (see I.A), the interaction
+      between API-sourced messages (e.g., in threads, before they are fully persisted with a
+      `folderId` by the main sync mechanism) and the `MessageEntity`/`MessageBodyEntity` caching
+      strategy is a complex area. The current solution works by not persisting `MessageBodyEntity`
+      if its parent `MessageEntity` is absent, relying on the in-memory API-fetched body for
+      immediate UI display.
+      The eventual persistence of these entities is handled by folder synchronization.
 
 3. **Offline Functionality Gaps (UNIMPLEMENTED FEATURES):**
     * **WorkManager for "True Offline" (`SyncMessageStateWorker.kt`):**
@@ -185,8 +213,14 @@ message deletion.
      A deprecated call `WebView.settings.setInitialScale()` was present and causing build
      failures on newer API levels. This was removed on 2024-07-30; `loadWithOverviewMode` and
      `useWideViewPort` are used instead.
+   * **WebView Performance in Thread View (NEW - 2024-07-31):** The Gmail-style thread view renders
+     multiple `WebView` instances within a `LazyColumn` (via `FullMessageDisplayUnit`). This
+     approach needs to be monitored for performance, memory usage, and potential jank,
+     especially with very long threads or messages with complex HTML. Future optimizations might
+     include more aggressive `WebView` recycling/pausing, or alternative rendering for simple
+     plain-text parts.
 
-## **III. Unified List of Work That Is Still To Be Done to Achieve the Vision (Verified 2024-07-30)
+## **III. Unified List of Work That Is Still To Be Done to Achieve the Vision (Verified 2024-07-31)
 **
 
 This list outlines the necessary steps to realize the full offline-first caching vision.
@@ -220,7 +254,7 @@ This list outlines the necessary steps to realize the full offline-first caching
 5. **Refine On-Demand Message Body Fetching (Medium Priority):**
     * In `DefaultMessageRepository.getMessageWithBody`:
         * **Error Handling:** If network fetch for body fails, ensure `send(initialDomainMessage)` (
-          the cached version) is robust. Log error appropriately.
+          the cached version) is robust. Log error appropriately. (Current logic attempts this).
         * **Stale Body Re-fetch Strategy:** Implement logic to decide when to re-fetch a body (e.g.,
           timestamp-based, user-triggered).
 
@@ -240,7 +274,7 @@ This list outlines the necessary steps to realize the full offline-first caching
     * **Smart Folder Sync Strategy.**
     * **Conflict Resolution.**
 
-## **IV. Soft Spots, Unknowns, and Research Needs (Post Code Review - 2024-07-30)**
+## **IV. Soft Spots, Unknowns, and Research Needs (Post Code Review - 2024-07-31)**
 
 * **Soft Spots:**
     * **Paging/RemoteMediator Error Handling:** Robustness of error handling and user feedback for
@@ -251,6 +285,8 @@ This list outlines the necessary steps to realize the full offline-first caching
       sequential execution.
     * **Database Transaction Integrity:** Verification of transaction usage for all multi-step DAO
       operations (seems okay for implemented features).
+  * **Performance and resource management of multiple WebViews in `ThreadDetailScreen`'
+    s `LazyColumn` (NEW - 2024-07-31).**
 
 * **Unknowns (Focus on areas not deeply inspected recently):**
     * Detailed implementation nuances of `MicrosoftTokenPersistenceService.kt` and
@@ -266,6 +302,10 @@ This list outlines the necessary steps to realize the full offline-first caching
       and network error mapping for all API calls.
     * **Database Performance with FTS:** For large mailboxes, investigate potential performance
       implications of FTS5.
+  * **Best practices and advanced techniques for optimizing multiple `WebView` instances within a
+    Jetpack Compose `LazyColumn` (NEW - 2024-07-31),** including state management, resource pooling,
+    and lifecycle handling for WebViews.
 
-This rewritten `CACHE2.md` should now accurately reflect the project's state post-refactoring and
-delete implementation, providing an updated roadmap. 
+This rewritten `CACHE2.md` should now accurately reflect the project's state post-refactoring,
+delete implementation, and the introduction of the Gmail-style thread view, providing an updated
+roadmap. 

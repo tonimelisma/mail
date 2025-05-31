@@ -298,11 +298,13 @@ fun MainAppScreen(
                                                 if (accountIdToUse != null) {
                                                     Log.d(
                                                         TAG_COMPOSABLE,
-                                                        "Thread clicked: $threadId from account $accountIdToUse"
+                                                        "Thread clicked: $threadId from account $accountIdToUse. Navigating..."
                                                     )
-                                                    showToast(
-                                                        context,
-                                                        "Thread view not yet implemented."
+                                                    navController.navigate(
+                                                        AppRoutes.threadDetailPath(
+                                                            accountId = accountIdToUse,
+                                                            threadId = threadId
+                                                        )
                                                     )
                                                 } else {
                                                     Log.e(
