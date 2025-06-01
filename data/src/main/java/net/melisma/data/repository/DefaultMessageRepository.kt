@@ -312,28 +312,30 @@ class DefaultMessageRepository @Inject constructor(
         messageId: String,
         accountId: String
     ): Flow<Message?> {
-        Timber.d("getMessageDetails: accountId=$accountId, messageId=$messageId")
+        Timber.d("RepoDBG: getMessageDetails called. AccountId: $accountId, MessageId: $messageId")
         return getMessageWithBody(accountId, messageId)
     }
 
     private fun getMessageWithBody(accountId: String, messageId: String): Flow<Message?> =
         channelFlow {
-            Timber.d("getMessageWithBody called for account $accountId, message $messageId")
+            Timber.d("RepoDBG: getMessageWithBody started. AccountId: $accountId, MessageId: $messageId")
 
             // Step 1: Initial DB Load and Emit
             var existingMessageEntity = messageDao.getMessageByIdSuspend(messageId)
             var existingBodyEntity = messageBodyDao.getMessageBodyByIdSuspend(messageId)
+            Timber.d("RepoDBG: Initial DB load - MessageEntity found: ${existingMessageEntity != null}, BodyEntity found: ${existingBodyEntity != null}, BodyEntity content blank: ${existingBodyEntity?.content.isNullOrBlank()}")
 
             var messageToSend: Message? = existingMessageEntity?.toDomainModel()?.copy(
                 body = existingBodyEntity?.content,
                 bodyContentType = existingBodyEntity?.contentType
             )
+            Timber.d("RepoDBG: Emitting from cache - Message ID: ${messageToSend?.id}, Subject: '${messageToSend?.subject}', Body is blank: ${messageToSend?.body.isNullOrBlank()}, BodyContentType: ${messageToSend?.bodyContentType}")
             send(messageToSend) // Emit cached state immediately
 
             // Step 2: Prepare for Network Fetch (if account/service available)
             val account = accountRepository.getAccountByIdSuspend(accountId)
             if (account == null) {
-                Timber.e("Account not found for ID: $accountId. Cannot fetch message content for $messageId.")
+                Timber.e("RepoDBG: Account not found for ID: $accountId. Cannot fetch message content for $messageId.")
                 close() // Close the flow if account is not found
                 return@channelFlow
             }
@@ -341,21 +343,24 @@ class DefaultMessageRepository @Inject constructor(
             val providerType = account.providerType.uppercase()
             val apiService = mailApiServices[providerType]
             val errorMapper = errorMappers[providerType]
+            Timber.d("RepoDBG: Using ApiService: ${apiService?.javaClass?.simpleName} for provider: $providerType")
 
             if (apiService == null || errorMapper == null) {
-                Timber.e("No API service or error mapper for provider: $providerType for $messageId. Cannot fetch from network.")
+                Timber.e("RepoDBG: No API service or error mapper for provider: $providerType for $messageId. Cannot fetch from network.")
                 close() // Close the flow if API service is not found
                 return@channelFlow
             }
 
             // Step 3: Perform Network Fetch
-            Timber.d("Attempting network fetch for message $messageId (either cache miss or for potential update).")
+            Timber.d("RepoDBG: Attempting network fetch for message $messageId via apiService.getMessageContent.")
             try {
                 val result = apiService.getMessageContent(messageId)
+                Timber.d("RepoDBG: Network fetch result for $messageId - Success: ${result.isSuccess}, Exception: ${result.exceptionOrNull()?.message}")
+
                 if (result.isSuccess) {
                     val fetchedMessageFromApi = result.getOrThrow()
                     Timber.d(
-                        "Successfully fetched message $messageId from API. Body: ${fetchedMessageFromApi.body != null}, ContentType: ${fetchedMessageFromApi.bodyContentType}"
+                        "RepoDBG: Successfully fetched message $messageId from API. API_Message_ID: ${fetchedMessageFromApi.id}, API_Subject: '${fetchedMessageFromApi.subject}', API_BodyIsBlank: ${fetchedMessageFromApi.body.isNullOrBlank()}, API_BodyContentType: ${fetchedMessageFromApi.bodyContentType}, API_BodyPreviewIsBlank: ${fetchedMessageFromApi.bodyPreview.isNullOrBlank()}"
                     )
 
                     if (fetchedMessageFromApi.body != null && fetchedMessageFromApi.bodyContentType != null) {
@@ -368,11 +373,11 @@ class DefaultMessageRepository @Inject constructor(
                                 lastFetchedTimestamp = System.currentTimeMillis()
                             )
                             Timber.d(
-                                "Content to be saved in newBodyEntity for $messageId: '${
+                                "RepoDBG: Saving to DB - NewBodyEntity for $messageId - ContentType: ${newBodyEntity.contentType}, ContentIsBlank: ${newBodyEntity.content.isNullOrBlank()}, ContentPreview (first 100): '${
                                     newBodyEntity.content?.take(
                                         100
                                     )
-                                }...' (Length: ${newBodyEntity.content?.length})"
+                                }...'"
                             )
 
                             val messageEntityToSave = existingMessageEntity.copy(
@@ -387,82 +392,82 @@ class DefaultMessageRepository @Inject constructor(
                             )
 
                             appDatabase.withTransaction {
-                                Timber.d("TRANSACTION START: Attempting to save body for $messageId. Content length: ${newBodyEntity.content?.length}")
+                                Timber.d("TRANSACTION START: Saving message entity for $messageId first, then body. Content length for body: ${newBodyEntity.content?.length}")
+                                // Save MessageEntity first to handle potential cascades before body insert
+                                messageDao.insertOrUpdateMessages(listOf(messageEntityToSave))
+                                Timber.d("TRANSACTION MID: Message entity allegedly saved for $messageId.")
+
+                                // Then save MessageBodyEntity
                                 messageBodyDao.insertOrUpdateMessageBody(newBodyEntity)
                                 Timber.d("TRANSACTION MID: Body allegedly saved for $messageId.")
+
                                 val bodyJustSavedInTx =
                                     messageBodyDao.getMessageBodyByIdSuspend(messageId)
+                                val messageStillExistsInTx =
+                                    messageDao.getMessageByIdSuspend(messageId)
                                 Timber.d(
-                                    "TRANSACTION MID: Directly queried body content *within TX* for $messageId: '${
+                                    "TRANSACTION END: Operations complete for $messageId. Message in DB: ${messageStillExistsInTx != null}, Body in DB: ${bodyJustSavedInTx != null}, Body content snippet (first 100): '${
                                         bodyJustSavedInTx?.content?.take(
                                             100
                                         )
                                     }...' (Length: ${bodyJustSavedInTx?.content?.length})"
                                 )
-
-                                messageDao.insertOrUpdateMessages(listOf(messageEntityToSave))
-                                Timber.d("TRANSACTION END: Message entity also saved for $messageId.")
                             }
-                            Timber.d("Saved/Updated message entity and body in DB for $messageId (transaction committed)")
+                            Timber.d("RepoDBG: Saved/Updated message entity and body in DB for $messageId (transaction committed)")
 
                             // Immediate check after transaction
                             val directlyQueriedBodyAfterSave =
                                 messageBodyDao.getMessageBodyByIdSuspend(messageId)
                             Timber.d(
-                                "Directly queried body content *after TX commit* for $messageId: '${
+                                "RepoDBG: DB check after save for $messageId - BodyEntity found: ${directlyQueriedBodyAfterSave != null}, ContentIsBlank: ${directlyQueriedBodyAfterSave?.content.isNullOrBlank()}, ContentPreview (first 100): '${
                                     directlyQueriedBodyAfterSave?.content?.take(
                                         100
                                     )
-                                }...' (Length: ${directlyQueriedBodyAfterSave?.content?.length})"
+                                }...'"
                             )
 
                             // Re-fetch from DB to ensure SSoT for the emission
                             val updatedMessageEntity = messageDao.getMessageByIdSuspend(messageId)
                             val updatedBodyEntity = messageBodyDao.getMessageBodyByIdSuspend(messageId)
 
-                            Timber.d("Re-fetched for emit: updatedMessageEntity present: ${updatedMessageEntity != null}, messageId: ${updatedMessageEntity?.messageId}")
-                            Timber.d("Re-fetched for emit: updatedBodyEntity present: ${updatedBodyEntity != null}, body content present: ${!updatedBodyEntity?.content.isNullOrBlank()}, body messageId: ${updatedBodyEntity?.messageId}")
-                            // START: Added intensive logging for final emission data
-                            Timber.d("FINAL EMIT PREP for $messageId: updatedMessageEntity = $updatedMessageEntity")
-                            Timber.d("FINAL EMIT PREP for $messageId: updatedBodyEntity = $updatedBodyEntity")
-                            Timber.d(
-                                "FINAL EMIT PREP for $messageId: updatedBodyEntity.content (first 100) = ${
-                                    updatedBodyEntity?.content?.take(
-                                        100
-                                    )
-                                }"
-                            )
-                            Timber.d("FINAL EMIT PREP for $messageId: updatedBodyEntity.contentType = ${updatedBodyEntity?.contentType}")
-                            // END: Added intensive logging for final emission data
+                            Timber.d("RepoDBG: Re-fetched for emit - UpdatedMessageEntity found: ${updatedMessageEntity != null}, UpdatedBodyEntity found: ${updatedBodyEntity != null}, UpdatedBodyContentIsBlank: ${updatedBodyEntity?.content.isNullOrBlank()}")
                             
                             messageToSend = updatedMessageEntity?.toDomainModel()?.copy(
                                 body = updatedBodyEntity?.content,
                                 bodyContentType = updatedBodyEntity?.contentType
                             )
 
-                            Timber.d("Re-fetched for emit: messageToSend body empty: ${messageToSend?.body.isNullOrBlank()}, contentType: ${messageToSend?.bodyContentType}")
+                            Timber.d("RepoDBG: Emitting updated from DB - Message ID: ${messageToSend?.id}, Subject: '${messageToSend?.subject}', BodyIsBlank: ${messageToSend?.body.isNullOrBlank()}, BodyContentType: ${messageToSend?.bodyContentType}")
                             send(messageToSend) // Send the updated message from DB
                         } else {
                             // Message was not in DB (cache miss). Send API-fetched message directly.
                             // Body will not be persisted as we lack folderId for MessageEntity.
-                            Timber.w("Message $messageId not found in local DB. Sending API-fetched content. Body will not be persisted without folder context.")
+                            Timber.w("RepoDBG: Message $messageId not found in local DB (cache miss). Sending API-fetched content. Body will not be persisted without folder context.")
                             messageToSend = fetchedMessageFromApi // This has the body from API directly
+                            Timber.d("RepoDBG: Emitting direct from API (cache miss) - Message ID: ${messageToSend?.id}, Subject: '${messageToSend?.subject}', BodyIsBlank: ${messageToSend?.body.isNullOrBlank()}, BodyContentType: ${messageToSend?.bodyContentType}")
                             send(messageToSend)
                         }
                     } else {
-                        Timber.w("API fetch for $messageId succeeded but body or contentType was null/empty. No update to emit beyond cached.")
+                        Timber.w("RepoDBG: API fetch for $messageId succeeded BUT body or contentType was null/empty. No update to emit beyond cached. API_BodyIsBlank: ${fetchedMessageFromApi.body.isNullOrBlank()}, API_BodyContentType: ${fetchedMessageFromApi.bodyContentType}")
                     }
                 } else { // apiService.getMessageContent failed
                     val exception = result.exceptionOrNull()
                     val errorMessage = errorMapper.mapExceptionToErrorDetails(
                         exception ?: Throwable("Unknown error fetching message content from API for $messageId")
                     ).message
-                    Timber.e(exception, "Error fetching message content for $messageId from API: $errorMessage")
+                    Timber.e(
+                        exception,
+                        "RepoDBG: Error fetching message content for $messageId from API: $errorMessage"
+                    )
                 }
             } catch (e: Exception) {
                 if (e is CancellationException) throw e // Propagate cancellation
-                Timber.e(e, "Exception during network fetch process for $messageId: ${e.message}")
+                Timber.e(
+                    e,
+                    "RepoDBG: Exception during network fetch process for $messageId: ${e.message}"
+                )
             } finally {
+                Timber.d("RepoDBG: getMessageWithBody for $messageId finished. Closing flow.")
                 close() // Close the flow after network attempt (success or failure)
             }
         }.flowOn(ioDispatcher)

@@ -11,7 +11,8 @@ import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.launch
 import net.melisma.domain.data.GetMessageDetailsUseCase
-import net.melisma.mail.navigation.AppRoutes // Assuming AppRoutes will be created here
+import net.melisma.mail.navigation.AppRoutes
+import timber.log.Timber
 import javax.inject.Inject
 
 @HiltViewModel
@@ -26,25 +27,37 @@ class MessageDetailViewModel @Inject constructor(
     init {
         val accountId: String? = savedStateHandle[AppRoutes.ARG_ACCOUNT_ID]
         val messageId: String? = savedStateHandle[AppRoutes.ARG_MESSAGE_ID]
+        Timber.d("ViewModelDBG: MessageDetailViewModel init. AccountId: $accountId, MessageId: $messageId")
 
         if (accountId != null && messageId != null) {
             viewModelScope.launch {
+                Timber.d("ViewModelDBG: Launching coroutine to call getMessageDetailsUseCase for $messageId")
                 getMessageDetailsUseCase(messageId, accountId)
-                    .onStart { _uiState.value = MessageDetailUIState.Loading }
+                    .onStart {
+                        Timber.d("ViewModelDBG: UseCase Flow started for $messageId. Emitting Loading state.")
+                        _uiState.value = MessageDetailUIState.Loading
+                    }
                     .catch { exception ->
+                        Timber.e(
+                            exception,
+                            "ViewModelDBG: UseCase Flow caught error for $messageId. Emitting Error state."
+                        )
                         _uiState.value = MessageDetailUIState.Error(
                             exception.message ?: "An unknown error occurred"
                         )
                     }
                     .collect { message ->
                         if (message != null) {
+                            Timber.d("ViewModelDBG: UseCase Flow collected message for $messageId. Subject: '${message.subject}', BodyIsBlank: ${message.body.isNullOrBlank()}, BodyContentType: ${message.bodyContentType}. Emitting Success state.")
                             _uiState.value = MessageDetailUIState.Success(message)
                         } else {
+                            Timber.d("ViewModelDBG: UseCase Flow collected NULL message for $messageId. Emitting Error state - Message not found.")
                             _uiState.value = MessageDetailUIState.Error("Message not found")
                         }
                     }
             }
         } else {
+            Timber.w("ViewModelDBG: Account ID or Message ID is missing. AccountId: $accountId, MessageId: $messageId. Emitting Error state.")
             _uiState.value = MessageDetailUIState.Error("Account ID or Message ID is missing")
         }
     }

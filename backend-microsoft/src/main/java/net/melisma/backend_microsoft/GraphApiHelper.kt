@@ -23,9 +23,9 @@ import net.melisma.core_data.datasource.MailApiService
 import net.melisma.core_data.model.MailFolder
 import net.melisma.core_data.model.Message
 import net.melisma.core_data.model.WellKnownFolderType
+import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
-import timber.log.Timber
 
 @Serializable
 private data class GraphCollection<T>(
@@ -267,14 +267,72 @@ class GraphApiHelper @Inject constructor(
         maxResults: Int
     ): Result<List<Message>> {
         Timber.d(
-            "GraphApiHelper: getMessagesForFolder called for folderId: $folderId with selectFields: $selectFields, maxResults: $maxResults"
+            "MSGraphDBG: getMessagesForFolder called for folderId: $folderId with selectFields: $selectFields, maxResults: $maxResults"
         )
+
+        val finalSelectFields = mutableSetOf<String>()
+
+        // Add core Graph API fields required for mapping to our Message model and for list views.
+        // These include direct properties and complex types that might be expanded by the API.
+        finalSelectFields.addAll(
+            listOf(
+                "id",
+                "conversationId",
+                "subject",
+                "bodyPreview",
+                "hasAttachments",
+                "receivedDateTime",
+                "sentDateTime",
+                "isRead",
+                "flag", // 'flag' is used for isStarred
+                "sender",
+                "from",
+                "toRecipients",
+                "ccRecipients",
+                "bccRecipients", // Complex types
+                "parentFolderId"
+                // "body" is intentionally omitted for list views due to its size.
+            )
+        )
+
+        // Process the input `selectFields` to ensure only valid Graph fields are added
+        // and to map any internal aliases to their correct Graph counterparts.
+        selectFields.forEach { requestedField ->
+            when (requestedField.lowercase()) {
+                "threadid" -> finalSelectFields.add("conversationId") // Map app's 'threadId' to Graph's 'conversationId'
+                "snippet" -> finalSelectFields.add("bodyPreview")     // Map app's 'snippet' to Graph's 'bodyPreview'
+                // senderName, senderAddress, etc., are derived from complex types like 'sender', 'from', 'toRecipients',
+                // which are already included in finalSelectFields. No separate top-level select needed for these.
+                "timestamp" -> { // 'timestamp' is ambiguous for Graph; ensure both date fields are considered.
+                    finalSelectFields.add("receivedDateTime")
+                    finalSelectFields.add("sentDateTime")
+                }
+
+                "senttimestamp" -> finalSelectFields.add("sentDateTime")
+                "isstarred" -> finalSelectFields.add("flag") // 'isStarred' is mapped from the 'flag' complex type.
+
+                // Add other known valid top-level Graph message properties if requested.
+                // This list can be expanded as needed based on the Message resource properties.
+                // https://learn.microsoft.com/en-us/graph/api/resources/message?view=graph-rest-1.0
+                "importance", "categories", "inferenceclassification",
+                "internetmessageid", "isdeliveryreceiptrequested",
+                "isreadreceiptrequested", "replyto", "weblink" -> {
+                    finalSelectFields.add(requestedField.lowercase())
+                }
+                // Silently ignore other fields not explicitly handled or not part of the base set,
+                // to prevent passing invalid fields to the Graph API.
+            }
+        }
+
+        val actualSelectFieldsJoined = finalSelectFields.distinct().joinToString(",")
+        Timber.d("MSGraphDBG: Actual selectFields for Graph API (joined): $actualSelectFieldsJoined")
+
         return try {
-            Timber.d("Fetching messages for folder: $folderId")
+            Timber.d("MSGraphDBG: Fetching messages for folder: $folderId")
             val response: HttpResponse =
                 httpClient.get("$MS_GRAPH_ROOT_ENDPOINT/me/mailFolders/$folderId/messages") {
                     url {
-                        parameters.append("\$select", selectFields.joinToString(","))
+                        parameters.append("\$select", actualSelectFieldsJoined)
                         parameters.append("\$top", maxResults.toString())
                         parameters.append("\$orderby", "receivedDateTime desc")
                     }
@@ -284,26 +342,26 @@ class GraphApiHelper @Inject constructor(
             if (response.status.isSuccess()) {
                 val graphMessages = response.body<GraphCollection<GraphMessage>>().value
                 Timber.d(
-                    "GraphApiHelper: Fetched ${graphMessages.size} GraphMessages for folder $folderId."
+                    "MSGraphDBG: Fetched ${graphMessages.size} GraphMessages for folder $folderId."
                 )
                 if (graphMessages.isNotEmpty()) {
                     Timber.d(
-                        "GraphApiHelper: First 3 GraphMessages (or fewer) for folder $folderId: " +
+                        "MSGraphDBG: First 3 GraphMessages (or fewer) for folder $folderId: " +
                                 graphMessages.take(3)
                                     .joinToString { "MsgID: ${it.id}, ConvID: ${it.conversationId}" })
                 }
                 val messages = graphMessages.mapNotNull { mapGraphMessageToMessage(it) }
-                Timber.d("Successfully fetched ${messages.size} messages for folder $folderId.")
+                Timber.d("MSGraphDBG: Successfully fetched ${messages.size} messages for folder $folderId.")
                 Result.success(messages)
             } else {
                 val errorBody = response.bodyAsText()
                 Timber.e(
-                    "Error fetching messages for $folderId: ${response.status} - Error details in API response."
+                    "MSGraphDBG: Error fetching messages for $folderId: ${response.status} - Error details in API response."
                 )
                 Result.failure(errorMapper.mapHttpError(response.status.value, errorBody))
             }
         } catch (e: Exception) {
-            Timber.e(e, "Exception fetching messages for folder $folderId")
+            Timber.e(e, "MSGraphDBG: Exception fetching messages for folder $folderId")
             Result.failure(errorMapper.mapExceptionToError(e))
         }
     }
@@ -592,39 +650,63 @@ class GraphApiHelper @Inject constructor(
     }
 
     override suspend fun getMessageContent(messageId: String): Result<Message> {
-        Timber.d("getMessageContent: Fetching full content for messageId $messageId")
+        Timber.d("MSGraphDBG: getMessageContent called for messageId: $messageId")
         return try {
+            val selectParameters =
+                "id,conversationId,receivedDateTime,sentDateTime,subject,bodyPreview,sender,from,isRead,body"
+            val requestUrl = "$MS_GRAPH_ROOT_ENDPOINT/me/messages/$messageId"
+            Timber.d("MSGraphDBG: Requesting URL: $requestUrl with \$select: $selectParameters")
+
             val response: HttpResponse =
-                httpClient.get("$MS_GRAPH_ROOT_ENDPOINT/me/messages/$messageId") {
+                httpClient.get(requestUrl) {
                     url {
-                        // Select all fields typically needed for a Message, PLUS the body
                         parameters.append(
                             "\$select",
-                            "id,conversationId,receivedDateTime,sentDateTime,subject,bodyPreview,sender,from,isRead,body"
+                            selectParameters
                         )
                     }
                     accept(ContentType.Application.Json)
                 }
 
-            if (!response.status.isSuccess()) {
-                val errorBody = response.bodyAsText()
+            val responseStatus = response.status
+            val responseBodyText = response.bodyAsText()
+            Timber.d("MSGraphDBG: Response Status: $responseStatus")
+            Timber.d("MSGraphDBG: Response Body Raw: $responseBodyText")
+
+            if (!responseStatus.isSuccess()) {
                 Timber.e(
-                    "Error fetching message content for $messageId: ${response.status} - $errorBody"
+                    "MSGraphDBG: Error fetching message content for $messageId: $responseStatus - $responseBodyText"
                 )
-                return Result.failure(errorMapper.mapHttpError(response.status.value, errorBody))
+                return Result.failure(
+                    errorMapper.mapHttpError(
+                        responseStatus.value,
+                        responseBodyText
+                    )
+                )
             }
 
-            val graphMessage = response.body<GraphMessage>()
+            // Deserialize using Ktor's ContentNegotiation. The bodyAsText() was for logging.
+            // Re-evaluate response.body<GraphMessage>() after logging the raw text.
+            // For robust parsing after logging, we should ideally use the Json instance configured in Ktor.
+            // However, Ktor client should have already parsed it if ContentNegotiation is set up.
+            // Let's assume the raw text needs to be parsed by an explicit Json instance if we go this route.
+            // The error indicates `httpClient.engine.config.json` is not the way.
+            // The simplest way is to let Ktor handle it with response.body<>() and log GraphMessage after.
+
+            val graphMessage = response.body<GraphMessage>() // Use Ktor's deserialization
+
+            Timber.d("MSGraphDBG: Received GraphMessage - ID: ${graphMessage.id}, Subject: '${graphMessage.subject}', HasBodyObject: ${graphMessage.body != null}, BodyContentType: ${graphMessage.body?.contentType}, BodyContentIsBlank: ${graphMessage.body?.content.isNullOrBlank()}, BodyPreviewIsBlank: ${graphMessage.bodyPreview.isNullOrBlank()}")
+
             val message =
-                mapGraphMessageToMessage(graphMessage) // mapGraphMessageToMessage should now populate body and bodyContentType
+                mapGraphMessageToMessage(graphMessage)
 
             Timber.i(
-                "Successfully fetched and mapped content for message $messageId. Content type: ${message.bodyContentType}"
+                "MSGraphDBG: Successfully mapped content for message ${message.id}. Mapped BodyIsBlank: ${message.body.isNullOrBlank()}, Mapped ContentType: ${message.bodyContentType}, Mapped PreviewIsBlank: ${message.bodyPreview.isNullOrBlank()}"
             )
             Result.success(message)
 
         } catch (e: Exception) {
-            Timber.e(e, "Exception in getMessageContent for $messageId")
+            Timber.e(e, "MSGraphDBG: Exception in getMessageContent for $messageId")
             Result.failure(errorMapper.mapExceptionToError(e))
         }
     }
@@ -1038,7 +1120,7 @@ class GraphApiHelper @Inject constructor(
             senderName = graphMessage.from?.emailAddress?.name,
             senderAddress = graphMessage.from?.emailAddress?.address,
             bodyPreview = graphMessage.bodyPreview,
-            isRead = graphMessage.isRead ?: false,
+            isRead = graphMessage.isRead,
             recipientNames = graphMessage.toRecipients?.map { it.emailAddress?.name ?: "" }
                 ?: emptyList(),
             recipientAddresses = graphMessage.toRecipients?.map { it.emailAddress?.address ?: "" }

@@ -13,8 +13,8 @@ import net.melisma.core_data.model.MessageSyncState
 import net.melisma.core_db.AppDatabase
 import net.melisma.core_db.entity.MessageEntity
 import net.melisma.data.mapper.toEntity
-import java.io.IOException
 import timber.log.Timber
+import java.io.IOException
 
 // Define a simple class to hold API response for paged messages
 data class PagedMessageResponse(
@@ -49,21 +49,23 @@ class MessageRemoteMediator(
     private val REFRESH_PAGE_SIZE = 100
 
     override suspend fun initialize(): InitializeAction {
-        val messageCount = withContext(ioDispatcher) {
-            messageDao.getMessagesCountForFolder(accountId, folderId)
-        }
+        // val messageCount = withContext(ioDispatcher) {
+        //     messageDao.getMessagesCountForFolder(accountId, folderId)
+        // }
 
-        return if (messageCount == 0) {
-            Timber.d(
-                "initialize() for $accountId/$folderId: No messages cached (count is $messageCount). Returning LAUNCH_INITIAL_REFRESH."
-            )
-            InitializeAction.LAUNCH_INITIAL_REFRESH
-        } else {
-            Timber.d(
-                "initialize() for $accountId/$folderId: Messages found in cache (count is $messageCount). Returning SKIP_INITIAL_REFRESH."
-            )
-            InitializeAction.SKIP_INITIAL_REFRESH
-        }
+        // return if (messageCount == 0) {
+        //     Timber.d(
+        //         "initialize() for $accountId/$folderId: No messages cached (count is $messageCount). Returning LAUNCH_INITIAL_REFRESH."
+        //     )
+        //     InitializeAction.LAUNCH_INITIAL_REFRESH
+        // } else {
+        //     Timber.d(
+        //         "initialize() for $accountId/$folderId: Messages found in cache (count is $messageCount). Returning SKIP_INITIAL_REFRESH."
+        //     )
+        //     InitializeAction.SKIP_INITIAL_REFRESH
+        // }
+        Timber.d("initialize() for $accountId/$folderId: Always returning LAUNCH_INITIAL_REFRESH to ensure cache is cleared and fresh data is loaded.")
+        return InitializeAction.LAUNCH_INITIAL_REFRESH
     }
 
     override suspend fun load(
@@ -102,10 +104,10 @@ class MessageRemoteMediator(
                         val dbLogPrefix = "REFRESH DB for $accountId/$folderId:"
                         database.withTransaction {
                             Timber.d(
-                                "$dbLogPrefix Clearing old messages and inserting ${messagesFromApi.size} new ones."
+                                "$dbLogPrefix Clearing old messages for $accountId/$folderId before inserting ${messagesFromApi.size} new ones."
                             )
                             // It's important that this deletion is specific to the accountId and folderId
-                            // messageDao.deleteMessagesForFolder(accountId, folderId) // Old approach
+                            messageDao.deleteMessagesForFolder(accountId, folderId)
                             val messageEntities =
                                 messagesFromApi.map { it.toEntity(accountId, folderId) }
                             messageDao.insertOrUpdateMessages(messageEntities)

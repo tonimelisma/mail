@@ -1,8 +1,9 @@
 package net.melisma.domain.data
 
 import kotlinx.coroutines.flow.Flow
-import net.melisma.core_data.model.Message // Assuming Message contains all details
+import net.melisma.core_data.model.Message
 import net.melisma.core_data.repository.MessageRepository
+import timber.log.Timber
 import javax.inject.Inject
 
 class GetMessageDetailsUseCase @Inject constructor(
@@ -16,7 +17,8 @@ class GetMessageDetailsUseCase @Inject constructor(
         messageId: String,
         accountId: String
     ): Flow<Message?> { // Added suspend, Return Flow<Message?> to handle not found or errors gracefully
-        // This method (getMessageDetails) needs to be added to MessageRepository
+        Timber.d("UseCaseDBG: GetMessageDetailsUseCase invoked. MessageId: $messageId, AccountId: $accountId")
+        Timber.d("UseCaseDBG: Calling messageRepository.getMessageDetails...")
         return messageRepository.getMessageDetails(messageId, accountId)
     }
 } 

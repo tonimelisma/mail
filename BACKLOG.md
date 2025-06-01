@@ -128,9 +128,7 @@
 
 * **Requirement 8.1 (Calendar Integration):** As a user, I want to quickly create calendar events
   from email content. **(Pending)**
-* **Requirement 8.2 (Task Integration):** As a user, I want to create tasks based on email content.
-  **(Pending)**
-* **Requirement 8.3 (Contact Integration):** As a user, I want to easily save email senders as
+* **Requirement 8.2 (Contact Integration):** As a user, I want to easily save email senders as
   device contacts. **(Pending)**
 
 ---
