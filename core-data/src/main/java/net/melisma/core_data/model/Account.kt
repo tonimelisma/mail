@@ -11,7 +11,8 @@ package net.melisma.core_data.model
  */
 data class Account(
     val id: String,
-    val username: String,
+    val displayName: String?,
+    val emailAddress: String,
     val providerType: String,
     val needsReauthentication: Boolean = false
 ) {

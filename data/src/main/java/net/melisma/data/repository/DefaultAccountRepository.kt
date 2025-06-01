@@ -95,7 +95,7 @@ class DefaultAccountRepository @Inject constructor(
             .distinctUntilChanged() // Only proceed if the list of accounts has actually changed
             .onEach { accounts ->
                 Timber.tag(TAG)
-                    .d("DAO emitted DISTINCT accounts list (count: ${accounts.size}). Usernames: ${accounts.joinToString { it.username }}. Current _overallApplicationAuthState: ${_overallApplicationAuthState.value}. About to update auth state.")
+                    .d("DAO emitted DISTINCT accounts list (count: ${accounts.size}). Emails: ${accounts.joinToString { it.emailAddress }}. Current _overallApplicationAuthState: ${_overallApplicationAuthState.value}. About to update auth state.")
                 val newAuthState = if (accounts.isEmpty()) {
                     OverallApplicationAuthState.NO_ACCOUNTS_CONFIGURED
                 } else {
@@ -118,7 +118,7 @@ class DefaultAccountRepository @Inject constructor(
                     accounts.firstOrNull { it.providerType == Account.PROVIDER_TYPE_GOOGLE && !it.needsReauthentication }
                         ?.let { googleAccount ->
                             Timber.tag(TAG)
-                                .i("Init: Setting active Google account from DAO: ${googleAccount.username} (ID: ${googleAccount.id})")
+                                .i("Init: Setting active Google account from DAO: ${googleAccount.emailAddress} (ID: ${googleAccount.id})")
                             activeGoogleAccountHolder.setActiveAccountId(googleAccount.id)
                         }
                 } else {
@@ -134,7 +134,7 @@ class DefaultAccountRepository @Inject constructor(
                         accounts.firstOrNull { it.providerType == Account.PROVIDER_TYPE_GOOGLE && !it.needsReauthentication }
                             ?.let {
                                 Timber.tag(TAG)
-                                    .i("Init: Setting new active Google account from DAO: ${it.username} (ID: ${it.id})")
+                                    .i("Init: Setting new active Google account from DAO: ${it.emailAddress} (ID: ${it.id})")
                                 activeGoogleAccountHolder.setActiveAccountId(it.id)
                             }
                     }
@@ -147,7 +147,7 @@ class DefaultAccountRepository @Inject constructor(
                     accounts.firstOrNull { it.providerType == Account.PROVIDER_TYPE_MS && !it.needsReauthentication }
                         ?.let { msAccount ->
                             Timber.tag(TAG)
-                                .i("Init: Setting active Microsoft account from DAO: ${msAccount.username} (ID: ${msAccount.id})")
+                                .i("Init: Setting active Microsoft account from DAO: ${msAccount.emailAddress} (ID: ${msAccount.id})")
                             activeMicrosoftAccountHolder.setActiveMicrosoftAccountId(msAccount.id)
                         }
                 } else {
@@ -161,7 +161,7 @@ class DefaultAccountRepository @Inject constructor(
                         accounts.firstOrNull { it.providerType == Account.PROVIDER_TYPE_MS && !it.needsReauthentication }
                             ?.let {
                                 Timber.tag(TAG)
-                                    .i("Init: Setting new active Microsoft account from DAO: ${it.username} (ID: ${it.id})")
+                                    .i("Init: Setting new active Microsoft account from DAO: ${it.emailAddress} (ID: ${it.id})")
                                 activeMicrosoftAccountHolder.setActiveMicrosoftAccountId(it.id)
                             }
                     }
@@ -183,10 +183,13 @@ class DefaultAccountRepository @Inject constructor(
     ): Account {
         Timber.tag(TAG)
             .d("mapGoogleUserToGenericAccount called for Google User ID: ${googleUserId.take(5)}..., Email: $email")
-        val accountUsername = displayName ?: email ?: "Google User (${googleUserId.take(6)}...)"
+        // Ensure emailAddress is non-null. If Google can provide a null email, this needs robust handling.
+        // For now, assume 'email' from Google sign-in is typically non-null.
+        val actualEmailAddress = email ?: throw IllegalArgumentException("Email cannot be null for Account")
         return Account(
             id = googleUserId,
-            username = accountUsername,
+            displayName = displayName,
+            emailAddress = actualEmailAddress,
             providerType = Account.PROVIDER_TYPE_GOOGLE // Assuming Account.PROVIDER_TYPE_GOOGLE exists
         )
     }
@@ -195,10 +198,12 @@ class DefaultAccountRepository @Inject constructor(
     private fun mapManagedGoogleAccountToGenericAccount(managedAccount: ManagedGoogleAccount): Account {
         Timber.tag(TAG)
             .d("Mapping ManagedGoogleAccount to Account: ID ${managedAccount.accountId}, Email ${managedAccount.email}")
+        // Ensure emailAddress is non-null.
+        val emailAddress = managedAccount.email ?: throw IllegalArgumentException("Email cannot be null for ManagedGoogleAccount to Account mapping")
         return Account(
             id = managedAccount.accountId,
-            username = managedAccount.displayName ?: managedAccount.email
-            ?: "Google User (${managedAccount.accountId.take(6)}...)",
+            displayName = managedAccount.displayName,
+            emailAddress = emailAddress,
             providerType = Account.PROVIDER_TYPE_GOOGLE,
             needsReauthentication = false // New accounts from successful sign-in are not pending re-auth
         )
@@ -219,12 +224,14 @@ class DefaultAccountRepository @Inject constructor(
 
     override fun getAccounts(): Flow<List<Account>> {
         Timber.tag(TAG).d("getAccounts() called, fetching from AccountDao.")
+        // TODO: P1_SYNC - Request sync from SyncEngine if accounts list is stale or empty and should not be.
         return accountDao.getAllAccounts().map { entities ->
             entities.map { it.toDomainAccount() }
         }.distinctUntilChanged()
     }
 
     override fun getAccountById(accountId: String): Flow<Account?> {
+        // TODO: P1_SYNC - Request sync from SyncEngine if account data is missing or stale.
         return accountDao.getAccountById(accountId).map { entity ->
             entity?.toDomainAccount()
         }
@@ -278,13 +285,13 @@ class DefaultAccountRepository @Inject constructor(
                     .transform { result -> // Changed from direct return to transform
                         if (result is GenericAuthResult.Success) {
                             Timber.tag(TAG)
-                                .i("Microsoft sign-in successful for: ${result.account.username}, saving to DB.")
+                                .i("Microsoft sign-in successful for: ${result.account.emailAddress}, saving to DB.")
                             val saveOpResult = saveAndSetAccountActive(
                                 result.account, // The account from Microsoft
                                 Account.PROVIDER_TYPE_MS
                             )
                             if (saveOpResult is GenericAuthResult.Success) {
-                                _accountActionMessage.tryEmit("Signed in as ${saveOpResult.account.username}")
+                                _accountActionMessage.tryEmit("Signed in as ${saveOpResult.account.displayName ?: saveOpResult.account.emailAddress}")
                                 emit(saveOpResult) // Emit the success with potentially updated account from DB
                             } else if (saveOpResult is GenericAuthResult.Error) {
                                 _accountActionMessage.tryEmit("Microsoft sign-in error during DB save: ${saveOpResult.details.message}")
@@ -340,7 +347,7 @@ class DefaultAccountRepository @Inject constructor(
 
     override fun signOut(account: Account): Flow<GenericSignOutResult> {
         Timber.tag(TAG)
-            .i("signOut called for account: ${account.username} (Provider: ${account.providerType})")
+            .i("signOut called for account: ${account.emailAddress} (Provider: ${account.providerType})")
         _accountActionMessage.tryEmit(null)
         return when (account.providerType.uppercase()) {
             Account.PROVIDER_TYPE_MS -> {
@@ -348,7 +355,7 @@ class DefaultAccountRepository @Inject constructor(
                     .transform { result ->
                         if (result is GenericSignOutResult.Success) {
                             Timber.tag(TAG)
-                                .i("Microsoft sign-out successful for account: ${account.username}. Removing from DB.")
+                                .i("Microsoft sign-out successful for account: ${account.emailAddress}. Removing from DB.")
                             try {
                                 accountDao.deleteAccount(account.id)
                                 if (activeMicrosoftAccountHolder.getActiveMicrosoftAccountIdValue() == account.id) {
@@ -356,13 +363,13 @@ class DefaultAccountRepository @Inject constructor(
                                     Timber.tag(TAG)
                                         .d("Cleared active Microsoft account ID after sign-out and DB delete.")
                                 }
-                                _accountActionMessage.tryEmit("Signed out ${account.username}")
+                                _accountActionMessage.tryEmit("Signed out ${account.displayName ?: account.emailAddress}")
                                 emit(GenericSignOutResult.Success)
                             } catch (e: Exception) {
                                 Timber.tag(TAG)
                                     .e(
                                         e,
-                                        "DAO error deleting Microsoft account ${account.username} after sign-out."
+                                        "DAO error deleting Microsoft account ${account.emailAddress} after sign-out."
                                     )
                                 val errorDetails = ErrorDetails(
                                     message = "Failed to remove account from local database: ${e.message}",
@@ -374,7 +381,7 @@ class DefaultAccountRepository @Inject constructor(
                                 // Let's emit the original success from MSAL, but log the DAO error.
                                 // Or, we could emit an error that wraps this.
                                 // Deciding to emit an error if DAO operation fails to make it visible.
-                                _accountActionMessage.tryEmit("Signed out ${account.username}, but failed to clear all local data.")
+                                _accountActionMessage.tryEmit("Signed out ${account.displayName ?: account.emailAddress}, but failed to clear all local data.")
                                 emit(GenericSignOutResult.Error(errorDetails)) // Emit error if DAO fails
                             }
                         } else {
@@ -392,15 +399,15 @@ class DefaultAccountRepository @Inject constructor(
                         when (signOutResult) {
                             is GoogleSignOutResult.Success -> {
                                 Timber.tag(TAG)
-                                    .i("Google sign-out successful for account: ${account.username}")
+                                    .i("Google sign-out successful for account: ${account.emailAddress}")
                                 accountDao.deleteAccount(account.id)
-                                Timber.tag(TAG).i("Account ${account.username} removed from DB.")
+                                Timber.tag(TAG).i("Account ${account.emailAddress} removed from DB.")
                                 if (activeGoogleAccountHolder.getActiveAccountIdValue() == account.id) {
                                     activeGoogleAccountHolder.setActiveAccountId(null) // Clear active account
                                     Timber.tag(TAG).d("Cleared active Google account ID.")
                                 }
                                 emit(GenericSignOutResult.Success)
-                                _accountActionMessage.tryEmit("Signed out ${account.username}")
+                                _accountActionMessage.tryEmit("Signed out ${account.displayName ?: account.emailAddress}")
                             }
 
                             is GoogleSignOutResult.Error -> {
@@ -424,18 +431,18 @@ class DefaultAccountRepository @Inject constructor(
                                 )
                                 accountDao.deleteAccount(account.id) // Still attempt local cleanup
                                 Timber.tag(TAG)
-                                    .w("Account ${account.username} removed from DB despite sign-out error.")
+                                    .w("Account ${account.emailAddress} removed from DB despite sign-out error.")
                                 if (activeGoogleAccountHolder.getActiveAccountIdValue() == account.id) {
                                     activeGoogleAccountHolder.setActiveAccountId(null)
                                 }
                                 emit(GenericSignOutResult.Error(errorDetails))
-                                _accountActionMessage.tryEmit("Sign out error for ${account.username}: ${errorDetails.message}")
+                                _accountActionMessage.tryEmit("Sign out error for ${account.displayName ?: account.emailAddress}: ${errorDetails.message}")
                             }
                         }
                     }
                 } catch (e: Exception) {
                     Timber.tag(TAG)
-                        .e(e, "Exception during Google sign-out flow for ${account.username}")
+                        .e(e, "Exception during Google sign-out flow for ${account.emailAddress}")
                     val errorMapper = getErrorMapperForProvider(Account.PROVIDER_TYPE_GOOGLE)
                     val errorDetails = errorMapper?.mapExceptionToErrorDetails(e)
                         ?: ErrorDetails(
@@ -496,14 +503,14 @@ class DefaultAccountRepository @Inject constructor(
                             val genericAccount =
                                 mapManagedGoogleAccountToGenericAccount(googleResult.managedAccount)
                             Timber.tag(TAG)
-                                .i("Google Auth (handleResult) successful for: ${genericAccount.username}, saving to DB.")
+                                .i("Google Auth (handleResult) successful for: ${genericAccount.emailAddress}, saving to DB.")
                             val saveOpResult = saveAndSetAccountActive(
                                 genericAccount,
                                 Account.PROVIDER_TYPE_GOOGLE
                             )
                             googleAuthResultChannel.send(saveOpResult)
                             if (saveOpResult is GenericAuthResult.Success) {
-                                _accountActionMessage.tryEmit("Signed in as ${saveOpResult.account.username}")
+                                _accountActionMessage.tryEmit("Signed in as ${saveOpResult.account.displayName ?: saveOpResult.account.emailAddress}")
                             } else if (saveOpResult is GenericAuthResult.Error) {
                                 _accountActionMessage.tryEmit("Google sign-in error: ${saveOpResult.details.message}")
                             }
@@ -640,17 +647,17 @@ class DefaultAccountRepository @Inject constructor(
                 accountDao.insertOrUpdateAccount(account.toEntity())
                 PersistenceResult.Success(Unit)
             } catch (e: Exception) {
-                Timber.tag(TAG).e(e, "DAO error saving account ${account.username}.")
+                Timber.tag(TAG).e(e, "DAO error saving account ${account.emailAddress}.")
                 PersistenceResult.Failure(
                     errorType = GooglePersistenceErrorType.STORAGE_FAILED, // Or a more generic DB error type
-                    message = e.message ?: "Failed to save account ${account.username} to DB.",
+                    message = e.message ?: "Failed to save account ${account.emailAddress} to DB.",
                     cause = e
                 )
             }
 
         return if (saveResult is PersistenceResult.Success<Unit>) { // Specify type for Success
             Timber.tag(TAG)
-                .i("Account ${account.username} ($providerType) saved to DB successfully.")
+                .i("Account ${account.emailAddress} ($providerType) saved to DB successfully.")
             if (providerType == Account.PROVIDER_TYPE_GOOGLE) {
                 activeGoogleAccountHolder.setActiveAccountId(account.id)
             }
@@ -661,7 +668,7 @@ class DefaultAccountRepository @Inject constructor(
                 saveResult as PersistenceResult.Failure<*> // Use wildcard. Cast is needed for type inference of properties.
             Timber.tag(TAG).e(
                 failure.cause,
-                "Failed to save $providerType account ${account.username} to DB: ${failure.message}"
+                "Failed to save $providerType account ${account.emailAddress} to DB: ${failure.message}"
             )
 
             val errorTypeVal = failure.errorType // Explicitly store to help linter

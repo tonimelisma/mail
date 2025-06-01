@@ -94,7 +94,11 @@ class MainViewModel @Inject constructor(
     private val messageRepository: MessageRepository,
     private val threadRepository: ThreadRepository,
     private val userPreferencesRepository: UserPreferencesRepository
+    // TODO: P1_SYNC - Inject SyncEngine once it's properly provided by Hilt
+    // private val syncEngine: net.melisma.data.sync.SyncEngine // Assuming SyncEngine path
 ) : ViewModel() {
+    // TODO: P1_SYNC - UI State Management: Refine UI states based on sync progress/errors from SyncEngine later.
+    // e.g., add specific isLoadingFolders, isLoadingMessages, folderSyncError, messageSyncError fields.
 
     private val _uiState = MutableStateFlow(MainScreenState())
     val uiState: StateFlow<MainScreenState> = _uiState.asStateFlow()
@@ -165,10 +169,23 @@ class MainViewModel @Inject constructor(
                 val previousSelectedAccountId = _uiState.value.selectedFolderAccountId
 
                 Timber.d(
-                    "AccountRepo Accounts list changed. New: ${newAccountList.size} (${newAccountList.joinToString { it.username }}), Previous: ${previousAccountIds.size}. Selected Acc ID: $previousSelectedAccountId. Selected Folder: ${_uiState.value.selectedFolder?.displayName}"
+                    "AccountRepo Accounts list changed. New: ${newAccountList.size} (${newAccountList.joinToString { it.emailAddress }}), Previous: ${previousAccountIds.size}. Selected Acc ID: $previousSelectedAccountId. Selected Folder: ${_uiState.value.selectedFolder?.displayName}"
                 )
 
-                folderRepository.manageObservedAccounts(newAccountList)
+                folderRepository.manageObservedAccounts(newAccountList) // This repository method should internally use SyncEngine to sync folder lists if they are missing/stale for any account in newAccountList.
+
+                // TODO: P1_SYNC - Rudimentary check: if newAccountList is empty, trigger a sync for accounts.
+                // This might be better handled by a dedicated "initial sync" logic or staleness check.
+                if (newAccountList.isEmpty()) {
+                    Timber.d("Account list is empty. Conceptually triggering account metadata sync if not already in progress.")
+                    // defaultAccountRepository.requestFullAccountSync() // Hypothetical method that uses SyncEngine
+                    // Conceptual direct call: syncEngine.syncAllAccountsMetadata() // This method would be on SyncEngine
+                }
+                // TODO: P1_SYNC - Implement more robust staleness check before triggering sync for existing accounts' folders.
+                // For example, iterate newAccountList and for each account, if its folder list is missing from
+                // uiState.foldersByAccountId or is in an error state, call:
+                // syncEngine.syncFolders(account.id)
+                // This can be done here or within folderRepository.manageObservedAccounts.
 
                 val newAccountIds = newAccountList.map { it.id }.toSet()
                 val removedAccountIds = previousAccountIds - newAccountIds
@@ -338,10 +355,10 @@ class MainViewModel @Inject constructor(
                             }
 
                             is GenericAuthResult.Success -> {
-                                Timber.d("Sign-in successful: ${result.account.username}")
+                                Timber.d("Sign-in successful: ${result.account.emailAddress}")
                                 currentState.copy(
                                     isLoadingAccountAction = false, // Set false on terminal success
-                                    toastMessage = "Signed in as ${result.account.username}"
+                                    toastMessage = "Signed in as ${result.account.displayName ?: result.account.emailAddress}"
                                 )
                             }
 
@@ -378,7 +395,7 @@ class MainViewModel @Inject constructor(
     }
 
     fun signOut(account: Account) {
-        Timber.d("signOut called for account: ${account.username}")
+        Timber.d("signOut called for account: ${account.emailAddress}")
         viewModelScope.launch {
             _uiState.update { it.copy(isLoadingAccountAction = true) } // Set true at start of action
             defaultAccountRepository.signOut(account)
@@ -386,26 +403,26 @@ class MainViewModel @Inject constructor(
                     _uiState.update { currentState ->
                         when (result) {
                             is GenericSignOutResult.Loading -> {
-                                Timber.d("Sign-out process loading for ${account.username}...")
+                                Timber.d("Sign-out process loading for ${account.emailAddress}...")
                                 currentState.copy(isLoadingAccountAction = true) // Remain true
                             }
 
                             is GenericSignOutResult.Success -> {
-                                Timber.d("Sign-out successful for ${account.username}")
+                                Timber.d("Sign-out successful for ${account.emailAddress}")
                                 currentState.copy(
                                     isLoadingAccountAction = false, // Set false on terminal success
-                                    toastMessage = "Signed out ${account.username}"
+                                    toastMessage = "Signed out ${account.displayName ?: account.emailAddress}"
                                 )
                             }
 
                             is GenericSignOutResult.Error -> {
                                 Timber.w(
                                     result.details.cause,
-                                    "Sign-out error for ${account.username}: ${result.details.message} (Code: ${result.details.code})"
+                                    "Sign-out error for ${account.emailAddress}: ${result.details.message} (Code: ${result.details.code})"
                                 )
                                 currentState.copy(
                                     isLoadingAccountAction = false, // Set false on terminal error
-                                    toastMessage = "Sign-out error for ${account.username}: ${result.details.message}"
+                                    toastMessage = "Sign-out error for ${account.displayName ?: account.emailAddress}: ${result.details.message}"
                                 )
                             }
                         }
@@ -444,7 +461,7 @@ class MainViewModel @Inject constructor(
         Timber.d("selectDefaultFolderIfNeeded: Checking. Current selected: ${currentState.selectedFolder?.displayName}, Accounts: ${currentState.accounts.size}, Folders Loading: ${currentState.isAnyFolderLoading}")
 
         if (currentState.selectedFolder == null && currentState.accounts.isNotEmpty() && !currentState.isAnyFolderLoading) {
-            Timber.d("Attempting default folder selection for user: ${currentState.accounts.firstOrNull()?.username}")
+            Timber.d("Attempting default folder selection for user: ${currentState.accounts.firstOrNull()?.emailAddress}")
 
             val accountToUseForDefault = currentState.accounts.firstOrNull { acc ->
                 val folderState = currentState.foldersByAccountId[acc.id]
@@ -461,17 +478,17 @@ class MainViewModel @Inject constructor(
                     )
                 }
                 if (inboxFolder != null) {
-                    Timber.i("Found Inbox in account ${accountToUseForDefault.username}. Selecting it.")
+                    Timber.i("Found Inbox in account ${accountToUseForDefault.emailAddress}. Selecting it.")
                     selectFolder(
                         inboxFolder,
                         accountToUseForDefault
                     ) // This will call the main selectFolder
                 } else {
-                    Timber.w("No Inbox folder found in account ${accountToUseForDefault.username}. Folders: ${folderState.folders.joinToString { it.displayName }}. Will not select a default automatically here.")
+                    Timber.w("No Inbox folder found in account ${accountToUseForDefault.emailAddress}. Folders: ${folderState.folders.joinToString { it.displayName }}. Will not select a default automatically here.")
                     // Optionally, select the first folder if no Inbox:
                     // val firstFolder = folderState.folders.firstOrNull()
                     // if (firstFolder != null) {
-                    //     Timber.i("No Inbox, selecting first folder by default: '${firstFolder.displayName}' for ${accountToUseForDefault.username}")
+                    //     Timber.i("No Inbox, selecting first folder by default: '${firstFolder.displayName}' for ${accountToUseForDefault.emailAddress}")
                     //     selectFolder(firstFolder, accountToUseForDefault)
                     // }
                 }
@@ -486,7 +503,7 @@ class MainViewModel @Inject constructor(
     fun selectFolder(folder: MailFolder, account: Account) {
         val newAccountId = account.id
         val newFolderId = folder.id
-        Timber.i("selectFolder CALLED for: Folder '${folder.displayName}' (ID: $newFolderId), Account '${account.username}' (ID: $newAccountId). Current ViewMode: ${_uiState.value.currentViewMode}")
+        Timber.i("selectFolder CALLED for: Folder '${folder.displayName}' (ID: $newFolderId), Account '${account.emailAddress}' (ID: $newAccountId). Current ViewMode: ${_uiState.value.currentViewMode}")
 
         val previousAccountId = _uiState.value.selectedFolderAccountId
         val previousFolderId = _uiState.value.selectedFolder?.id
@@ -551,8 +568,21 @@ class MainViewModel @Inject constructor(
     }
 
     fun refreshAllFolders(activity: Activity?) {
-        Timber.d("Requesting refresh for ALL folders via FolderRepository...")
-        viewModelScope.launch { folderRepository.refreshAllFolders(activity) }
+        Timber.d("Requesting refresh for ALL folders.")
+        // TODO: P1_SYNC - Iterate through accounts and trigger sync via SyncEngine for each account's folders.
+        // If folderRepository.refreshAllFolders is NOT updated to use SyncEngine, this VM logic should change.
+        // For now, assume folderRepository.refreshAllFolders will be (or is) updated.
+        viewModelScope.launch {
+            _uiState.value.accounts.forEach { acc ->
+                Timber.d("Conceptual: syncEngine.syncFolders(${acc.id}) for account ${acc.emailAddress} as part of refreshAllFolders.")
+                // folderRepository.requestFoldersSync(acc.id) // Ideal future method in repo that uses SyncEngine
+            }
+            // If the repository method `refreshAllFolders` is kept and internally calls SyncEngine for each account,
+            // then the direct loop above might be redundant and the single call below is fine.
+            // This depends on how `folderRepository.refreshAllFolders` is refactored.
+            // For now, keeping the call to the repository, assuming it will be made SyncEngine-aware.
+            folderRepository.refreshAllFolders(activity)
+        }
     }
 
     fun refreshCurrentView(activity: Activity?) {
@@ -636,9 +666,14 @@ class MainViewModel @Inject constructor(
 
     fun refreshFoldersForAccount(accountId: String, activity: Activity? = null) {
         Timber.d("Explicitly refreshing folders for account: $accountId")
-        _uiState.update { it.copy(isLoadingAccountAction = true) }
+        _uiState.update { it.copy(isLoadingAccountAction = true) } // This state might need to be more granular for folder loading
+        // TODO: P1_SYNC - This should trigger folder sync for the given accountId via SyncEngine.
+        // The folderRepository.refreshFoldersForAccount method itself will be updated to use SyncEngine.
         viewModelScope.launch {
             try {
+                // Conceptual: syncEngine.syncFolders(accountId)
+                Timber.d("Conceptual: syncEngine.syncFolders($accountId) for specific account refresh.")
+                // Assuming folderRepository.refreshFoldersForAccount will be updated to use SyncEngine:
                 folderRepository.refreshFoldersForAccount(accountId, activity)
             } catch (e: Exception) {
                 Timber.e(e, "Error refreshing folders for account $accountId")
@@ -733,10 +768,10 @@ class MainViewModel @Inject constructor(
                             }
 
                             is GenericAuthResult.Success -> {
-                                Timber.i("MSAL Sign-in success for ${result.account.username}")
+                                Timber.i("MSAL Sign-in success for ${result.account.emailAddress}")
                                 currentState.copy(
                                     isLoadingAccountAction = false,
-                                    toastMessage = "Signed in as ${result.account.username}"
+                                    toastMessage = "Signed in as ${result.account.displayName ?: result.account.emailAddress}"
                                     // Potentially navigate or refresh accounts list
                                 )
                             }
@@ -844,7 +879,7 @@ class MainViewModel @Inject constructor(
     }
 
     fun onFolderSelected(account: Account, folder: MailFolder) {
-        Timber.d("Folder selected: ${folder.displayName} in account ${account.username}")
+        Timber.d("Folder selected: ${folder.displayName} in account ${account.emailAddress}")
         _uiState.update {
             it.copy(
                 selectedFolderAccountId = account.id,

@@ -79,7 +79,9 @@ class DefaultMessageRepository @Inject constructor(
     private val messageBodyDao: MessageBodyDao,
     private val attachmentDao: AttachmentDao,
     private val appDatabase: AppDatabase,
-    private val workManager: WorkManager
+    private val workManager: WorkManager // Keep for now, though SyncEngine will use it
+    // TODO: P2_WRITE - Inject SyncEngine
+    // private val syncEngine: net.melisma.data.sync.SyncEngine
 ) : MessageRepository {
 
     private val TAG = "DefaultMessageRepo"
@@ -99,6 +101,7 @@ class DefaultMessageRepository @Inject constructor(
         folderId: String
     ): Flow<List<Message>> {
         Timber.d("observeMessagesForFolder: accountId=$accountId, folderId=$folderId")
+        // TODO: P1_SYNC - Request sync from SyncEngine if message list is stale or empty for this folder.
         return messageDao.getMessagesForFolder(accountId, folderId)
             .map { entities -> entities.map { it.toDomainModel() } }
     }
@@ -333,144 +336,20 @@ class DefaultMessageRepository @Inject constructor(
             Timber.d("RepoDBG: Emitting from cache - Message ID: ${messageToSend?.id}, Subject: '${messageToSend?.subject}', Body is blank: ${messageToSend?.body.isNullOrBlank()}, BodyContentType: ${messageToSend?.bodyContentType}")
             send(messageToSend) // Emit cached state immediately
 
-            // Step 2: Prepare for Network Fetch (if account/service available)
-            val account = accountRepository.getAccountByIdSuspend(accountId)
-            if (account == null) {
-                Timber.e("RepoDBG: Account not found for ID: $accountId. Cannot fetch message content for $messageId.")
-                close() // Close the flow if account is not found
-                return@channelFlow
-            }
+            // TODO: P1_SYNC - Request message body fetch from SyncEngine if existingBodyEntity is null or content is empty.
+            // The SyncEngine will fetch the body, save it to messageBodyDao,
+            // which should then trigger this Flow to re-emit if it's observing messageBodyDao.
+            // For now, this flow only emits what's currently in the DB.
 
-            val providerType = account.providerType.uppercase()
-            val apiService = mailApiServices[providerType]
-            val errorMapper = errorMappers[providerType]
-            Timber.d("RepoDBG: Using ApiService: ${apiService?.javaClass?.simpleName} for provider: $providerType")
+            // Step 2 & 3 (Network Fetch and subsequent DB save/emit) are removed from this read Flow.
+            // The flow will emit the initial DB state and then complete.
+            // If the data changes in DB due to external sync, a new collection of this Flow will see it.
+            // If this needs to be a long-lived flow that updates when body is fetched,
+            // it should be messageDao.getMessageById(messageId).combine(messageBodyDao.getMessageBodyById(messageId))
+            // For now, per instructions, it's a one-shot read from DB then complete.
 
-            if (apiService == null || errorMapper == null) {
-                Timber.e("RepoDBG: No API service or error mapper for provider: $providerType for $messageId. Cannot fetch from network.")
-                close() // Close the flow if API service is not found
-                return@channelFlow
-            }
-
-            // Step 3: Perform Network Fetch
-            Timber.d("RepoDBG: Attempting network fetch for message $messageId via apiService.getMessageContent.")
-            try {
-                val result = apiService.getMessageContent(messageId)
-                Timber.d("RepoDBG: Network fetch result for $messageId - Success: ${result.isSuccess}, Exception: ${result.exceptionOrNull()?.message}")
-
-                if (result.isSuccess) {
-                    val fetchedMessageFromApi = result.getOrThrow()
-                    Timber.d(
-                        "RepoDBG: Successfully fetched message $messageId from API. API_Message_ID: ${fetchedMessageFromApi.id}, API_Subject: '${fetchedMessageFromApi.subject}', API_BodyIsBlank: ${fetchedMessageFromApi.body.isNullOrBlank()}, API_BodyContentType: ${fetchedMessageFromApi.bodyContentType}, API_BodyPreviewIsBlank: ${fetchedMessageFromApi.bodyPreview.isNullOrBlank()}"
-                    )
-
-                    if (fetchedMessageFromApi.body != null && fetchedMessageFromApi.bodyContentType != null) {
-                        if (existingMessageEntity != null) {
-                            // We have a new body, update DB and emit for existing message
-                            val newBodyEntity = MessageBodyEntity(
-                                messageId = messageId,
-                                content = fetchedMessageFromApi.body!!,
-                                contentType = fetchedMessageFromApi.bodyContentType!!,
-                                lastFetchedTimestamp = System.currentTimeMillis()
-                            )
-                            Timber.d(
-                                "RepoDBG: Saving to DB - NewBodyEntity for $messageId - ContentType: ${newBodyEntity.contentType}, ContentIsBlank: ${newBodyEntity.content.isNullOrBlank()}, ContentPreview (first 100): '${
-                                    newBodyEntity.content?.take(
-                                        100
-                                    )
-                                }...'"
-                            )
-
-                            val messageEntityToSave = existingMessageEntity.copy(
-                                snippet = fetchedMessageFromApi.bodyPreview ?: existingMessageEntity.snippet,
-                                subject = fetchedMessageFromApi.subject ?: existingMessageEntity.subject,
-                                senderName = fetchedMessageFromApi.senderName ?: existingMessageEntity.senderName,
-                                senderAddress = fetchedMessageFromApi.senderAddress ?: existingMessageEntity.senderAddress,
-                                recipientNames = fetchedMessageFromApi.recipientNames ?: existingMessageEntity.recipientNames,
-                                recipientAddresses = fetchedMessageFromApi.recipientAddresses ?: existingMessageEntity.recipientAddresses,
-                                timestamp = fetchedMessageFromApi.timestamp.takeIf { it != 0L } ?: existingMessageEntity.timestamp,
-                                isRead = fetchedMessageFromApi.isRead
-                            )
-
-                            appDatabase.withTransaction {
-                                Timber.d("TRANSACTION START: Saving message entity for $messageId first, then body. Content length for body: ${newBodyEntity.content?.length}")
-                                // Save MessageEntity first to handle potential cascades before body insert
-                                messageDao.insertOrUpdateMessages(listOf(messageEntityToSave))
-                                Timber.d("TRANSACTION MID: Message entity allegedly saved for $messageId.")
-
-                                // Then save MessageBodyEntity
-                                messageBodyDao.insertOrUpdateMessageBody(newBodyEntity)
-                                Timber.d("TRANSACTION MID: Body allegedly saved for $messageId.")
-
-                                val bodyJustSavedInTx =
-                                    messageBodyDao.getMessageBodyByIdSuspend(messageId)
-                                val messageStillExistsInTx =
-                                    messageDao.getMessageByIdSuspend(messageId)
-                                Timber.d(
-                                    "TRANSACTION END: Operations complete for $messageId. Message in DB: ${messageStillExistsInTx != null}, Body in DB: ${bodyJustSavedInTx != null}, Body content snippet (first 100): '${
-                                        bodyJustSavedInTx?.content?.take(
-                                            100
-                                        )
-                                    }...' (Length: ${bodyJustSavedInTx?.content?.length})"
-                                )
-                            }
-                            Timber.d("RepoDBG: Saved/Updated message entity and body in DB for $messageId (transaction committed)")
-
-                            // Immediate check after transaction
-                            val directlyQueriedBodyAfterSave =
-                                messageBodyDao.getMessageBodyByIdSuspend(messageId)
-                            Timber.d(
-                                "RepoDBG: DB check after save for $messageId - BodyEntity found: ${directlyQueriedBodyAfterSave != null}, ContentIsBlank: ${directlyQueriedBodyAfterSave?.content.isNullOrBlank()}, ContentPreview (first 100): '${
-                                    directlyQueriedBodyAfterSave?.content?.take(
-                                        100
-                                    )
-                                }...'"
-                            )
-
-                            // Re-fetch from DB to ensure SSoT for the emission
-                            val updatedMessageEntity = messageDao.getMessageByIdSuspend(messageId)
-                            val updatedBodyEntity = messageBodyDao.getMessageBodyByIdSuspend(messageId)
-
-                            Timber.d("RepoDBG: Re-fetched for emit - UpdatedMessageEntity found: ${updatedMessageEntity != null}, UpdatedBodyEntity found: ${updatedBodyEntity != null}, UpdatedBodyContentIsBlank: ${updatedBodyEntity?.content.isNullOrBlank()}")
-                            
-                            messageToSend = updatedMessageEntity?.toDomainModel()?.copy(
-                                body = updatedBodyEntity?.content,
-                                bodyContentType = updatedBodyEntity?.contentType
-                            )
-
-                            Timber.d("RepoDBG: Emitting updated from DB - Message ID: ${messageToSend?.id}, Subject: '${messageToSend?.subject}', BodyIsBlank: ${messageToSend?.body.isNullOrBlank()}, BodyContentType: ${messageToSend?.bodyContentType}")
-                            send(messageToSend) // Send the updated message from DB
-                        } else {
-                            // Message was not in DB (cache miss). Send API-fetched message directly.
-                            // Body will not be persisted as we lack folderId for MessageEntity.
-                            Timber.w("RepoDBG: Message $messageId not found in local DB (cache miss). Sending API-fetched content. Body will not be persisted without folder context.")
-                            messageToSend = fetchedMessageFromApi // This has the body from API directly
-                            Timber.d("RepoDBG: Emitting direct from API (cache miss) - Message ID: ${messageToSend?.id}, Subject: '${messageToSend?.subject}', BodyIsBlank: ${messageToSend?.body.isNullOrBlank()}, BodyContentType: ${messageToSend?.bodyContentType}")
-                            send(messageToSend)
-                        }
-                    } else {
-                        Timber.w("RepoDBG: API fetch for $messageId succeeded BUT body or contentType was null/empty. No update to emit beyond cached. API_BodyIsBlank: ${fetchedMessageFromApi.body.isNullOrBlank()}, API_BodyContentType: ${fetchedMessageFromApi.bodyContentType}")
-                    }
-                } else { // apiService.getMessageContent failed
-                    val exception = result.exceptionOrNull()
-                    val errorMessage = errorMapper.mapExceptionToErrorDetails(
-                        exception ?: Throwable("Unknown error fetching message content from API for $messageId")
-                    ).message
-                    Timber.e(
-                        exception,
-                        "RepoDBG: Error fetching message content for $messageId from API: $errorMessage"
-                    )
-                }
-            } catch (e: Exception) {
-                if (e is CancellationException) throw e // Propagate cancellation
-                Timber.e(
-                    e,
-                    "RepoDBG: Exception during network fetch process for $messageId: ${e.message}"
-                )
-            } finally {
-                Timber.d("RepoDBG: getMessageWithBody for $messageId finished. Closing flow.")
-                close() // Close the flow after network attempt (success or failure)
-            }
+            Timber.d("RepoDBG: getMessageWithBody for $messageId finished. Emitted cached content. Closing flow.")
+            close() // Close the flow after emitting cached content.
         }.flowOn(ioDispatcher)
 
     override suspend fun markMessageRead(
@@ -483,12 +362,19 @@ class DefaultMessageRepository @Inject constructor(
             appDatabase.withTransaction {
                 messageDao.updateReadState(messageId, isRead, syncStatus = SyncStatus.PENDING_UPLOAD)
             }
-            Timber.i("Optimistically marked message $messageId as isRead=$isRead, needsSync=true")
-            enqueueSyncMessageStateWorker(
+            Timber.i("Optimistically marked message $messageId as isRead=$isRead, syncStatus=PENDING_UPLOAD")
+            // TODO: P2_WRITE - Replace with SyncEngine call
+            // syncEngine.enqueueActionUploadWorker(
+            //     accountId = account.id,
+            //     entityId = messageId,
+            //     actionType = ActionUploadWorker.ACTION_MARK_MESSAGE_READ,
+            //     payload = workDataOf("IS_READ" to isRead)
+            // )
+            enqueueActionUploadWorker(
                 accountId = account.id,
-                messageId = messageId,
-                operationType = SyncMessageStateWorker.OP_MARK_READ,
-                isRead = isRead
+                entityId = messageId,
+                actionType = ActionUploadWorker.ACTION_MARK_MESSAGE_READ,
+                additionalPayload = mapOf("IS_READ" to isRead)
             )
             Result.success(Unit)
         } catch (e: Exception) {
@@ -509,12 +395,19 @@ class DefaultMessageRepository @Inject constructor(
             appDatabase.withTransaction {
                 messageDao.updateStarredState(messageId, isStarred, syncStatus = SyncStatus.PENDING_UPLOAD)
             }
-            Timber.i("Optimistically starred message $messageId as isStarred=$isStarred, status PENDING_UPLOAD")
-            enqueueSyncMessageStateWorker(
+            Timber.i("Optimistically starred message $messageId as isStarred=$isStarred, syncStatus=PENDING_UPLOAD")
+            // TODO: P2_WRITE - Replace with SyncEngine call
+            // syncEngine.enqueueActionUploadWorker(
+            //     accountId = account.id,
+            //     entityId = messageId,
+            //     actionType = ActionUploadWorker.ACTION_STAR_MESSAGE,
+            //     payload = workDataOf("IS_STARRED" to isStarred)
+            // )
+            enqueueActionUploadWorker(
                 accountId = account.id,
-                messageId = messageId,
-                operationType = SyncMessageStateWorker.OP_STAR_MESSAGE,
-                isStarred = isStarred
+                entityId = messageId,
+                actionType = ActionUploadWorker.ACTION_STAR_MESSAGE,
+                additionalPayload = mapOf("IS_STARRED" to isStarred)
             )
             Result.success(Unit)
         } catch (e: Exception) {
@@ -538,12 +431,17 @@ class DefaultMessageRepository @Inject constructor(
                     syncStatus = SyncStatus.PENDING_UPLOAD
                 )
             }
-            Timber.i("Optimistically marked message $messageId as locally deleted, status PENDING_UPLOAD")
-
-            enqueueSyncMessageStateWorker(
+            Timber.i("Optimistically marked message $messageId as locally deleted, syncStatus=PENDING_UPLOAD")
+            // TODO: P2_WRITE - Replace with SyncEngine call
+            // syncEngine.enqueueActionUploadWorker(
+            //     accountId = account.id,
+            //     entityId = messageId,
+            //     actionType = ActionUploadWorker.ACTION_DELETE_MESSAGE
+            // )
+            enqueueActionUploadWorker(
                 accountId = account.id,
-                messageId = messageId,
-                operationType = SyncMessageStateWorker.OP_DELETE_MESSAGE
+                entityId = messageId,
+                actionType = ActionUploadWorker.ACTION_DELETE_MESSAGE
             )
             Result.success(Unit)
         } catch (e: Exception) {
@@ -589,15 +487,20 @@ class DefaultMessageRepository @Inject constructor(
                     syncStatus = SyncStatus.PENDING_UPLOAD
                 )
             }
-            Timber.i("Optimistically moved message $messageId to folder $newFolderId, status PENDING_UPLOAD")
+            Timber.i("Optimistically moved message $messageId to folder $newFolderId, syncStatus=PENDING_UPLOAD")
 
-            // Enqueue the worker to perform the actual API call
-            enqueueSyncMessageStateWorker(
+            // TODO: P2_WRITE - Replace with SyncEngine call
+            // syncEngine.enqueueActionUploadWorker(
+            //     accountId = account.id,
+            //     entityId = messageId,
+            //     actionType = ActionUploadWorker.ACTION_MOVE_MESSAGE,
+            //     payload = workDataOf("NEW_FOLDER_ID" to newFolderId, "OLD_FOLDER_ID" to oldFolderId)
+            // )
+            enqueueActionUploadWorker(
                 accountId = account.id,
-                messageId = messageId,
-                operationType = SyncMessageStateWorker.OP_MOVE_MESSAGE,
-                newFolderId = newFolderId,
-                oldFolderId = oldFolderId // Pass oldFolderId to the worker
+                entityId = messageId,
+                actionType = ActionUploadWorker.ACTION_MOVE_MESSAGE,
+                additionalPayload = mapOf("NEW_FOLDER_ID" to newFolderId, "OLD_FOLDER_ID" to oldFolderId)
             )
             Result.success(Unit)
         } catch (e: Exception) {
@@ -645,8 +548,8 @@ class DefaultMessageRepository @Inject constructor(
                         threadId = draft.originalMessageId, // For reply threading
                         subject = draft.subject,
                         snippet = draft.body?.take(150),
-                        senderName = account.username,
-                        senderAddress = account.username, // Corrected: Account.username is the email
+                        senderName = account.displayName ?: account.emailAddress,
+                        senderAddress = account.emailAddress,
                         recipientNames = draft.to, // Will be converted by TypeConverter
                         recipientAddresses = draft.to, // Will be converted by TypeConverter
                         timestamp = currentTime,
@@ -683,16 +586,22 @@ class DefaultMessageRepository @Inject constructor(
                     messageBodyDao.insertOrUpdateMessageBody(messageBody)
 
                     // Enqueue worker to send the message
-                    val draftJson = Json.encodeToString(draft)
-                    enqueueSyncMessageStateWorker(
+                    val draftJson = Json.encodeToString(draft) // This is the payload
+                    // TODO: P2_WRITE - Replace with SyncEngine call
+                    // syncEngine.enqueueActionUploadWorker(
+                    //     accountId = account.id,
+                    //     entityId = messageId,
+                    //     actionType = ActionUploadWorker.ACTION_SEND_MESSAGE,
+                    //     payload = workDataOf("DRAFT_JSON" to draftJson, "SENT_FOLDER_ID" to "SENT")
+                    // )
+                    enqueueActionUploadWorker(
                         accountId = account.id,
-                        messageId = messageId,
-                        operationType = SyncMessageStateWorker.OP_SEND_MESSAGE,
-                        draftData = draftJson,
-                        sentFolderId = "SENT" // Default sent folder
+                        entityId = messageId,
+                        actionType = ActionUploadWorker.ACTION_SEND_MESSAGE,
+                        additionalPayload = mapOf("DRAFT_JSON" to draftJson, "SENT_FOLDER_ID" to "SENT")
                     )
                 }
-                Log.d(TAG, "Message queued for sending with ID: $messageId")
+                Timber.d("$TAG: Message $messageId enqueued for sending via ActionUploadWorker.")
                 Result.success(messageId)
             } catch (e: Exception) {
                 Timber.e(e, "Failed to queue message for sending")
@@ -722,16 +631,15 @@ class DefaultMessageRepository @Inject constructor(
                         attachmentDao.getAttachmentsForMessageSuspend(messageId)
 
                     if (existingAttachments.isEmpty()) {
-                        // Fetch from API
-                        val account = accountRepository.getAccountByIdSuspend(accountId)
-                        if (account != null) {
-                            fetchAndStoreAttachments(account, messageId)
-                        }
+                        // TODO: P1_SYNC - Request attachment list sync from SyncEngine for message $messageId because local attachments are empty but message.hasAttachments is true.
+                        // The SyncEngine would call a method like internalFetchAndStoreAttachments(account, messageId).
+                        // For now, do not call fetchAndStoreAttachments(account, messageId) directly here.
+                        Timber.d("getMessageAttachments: Attachments potentially missing for $messageId. SyncEngine should handle fetching.")
                     }
                 }
 
                 // Return flow of attachments, mapped to domain model
-                localAttachments.map { attachmentEntities ->
+                localAttachments.map { attachmentEntities -> // This flow is from attachmentDao.getAttachmentsForMessage(messageId)
                     attachmentEntities.map { entity ->
                         Attachment(
                             id = entity.attachmentId,
@@ -744,8 +652,8 @@ class DefaultMessageRepository @Inject constructor(
                     }
                 }
             } catch (e: Exception) {
-                Timber.e(e, "Error getting message attachments")
-                flowOf(emptyList())
+                Timber.e(e, "Error getting message attachments for $messageId")
+                flowOf(emptyList()) // Return empty list on error
             }
         }
     }
@@ -892,8 +800,8 @@ class DefaultMessageRepository @Inject constructor(
                         threadId = draftDetails.originalMessageId,
                         subject = draftDetails.subject,
                         snippet = draftDetails.body?.take(150),
-                        senderName = account.username,
-                        senderAddress = account.username, // Corrected: Account.username is the email
+                        senderName = account.displayName ?: account.emailAddress,
+                        senderAddress = account.emailAddress,
                         recipientNames = draftDetails.to, // Assuming to, cc, bcc are List<String> of addresses
                         recipientAddresses = draftDetails.to,
                         timestamp = currentTime,
@@ -930,11 +838,18 @@ class DefaultMessageRepository @Inject constructor(
                     }
 
                     val draftJson = Json.encodeToString(draftDetails)
-                    enqueueSyncMessageStateWorker(
+                    // TODO: P2_WRITE - Replace with SyncEngine call
+                    // syncEngine.enqueueActionUploadWorker(
+                    //    accountId = account.id,
+                    //    entityId = draftId,
+                    //    actionType = ActionUploadWorker.ACTION_CREATE_DRAFT,
+                    //    payload = workDataOf("DRAFT_JSON" to draftJson)
+                    // )
+                    enqueueActionUploadWorker(
                         accountId = account.id,
-                        messageId = draftId,
-                        operationType = SyncMessageStateWorker.OP_CREATE_DRAFT,
-                        draftData = draftJson
+                        entityId = draftId,
+                        actionType = ActionUploadWorker.ACTION_CREATE_DRAFT,
+                        additionalPayload = mapOf("DRAFT_JSON" to draftJson)
                     )
                 }
 
@@ -1003,11 +918,18 @@ class DefaultMessageRepository @Inject constructor(
                     }
 
                     val draftJson = Json.encodeToString(draftDetails)
-                    enqueueSyncMessageStateWorker(
+                     // TODO: P2_WRITE - Replace with SyncEngine call
+                    // syncEngine.enqueueActionUploadWorker(
+                    //    accountId = account.id,
+                    //    entityId = messageId,
+                    //    actionType = ActionUploadWorker.ACTION_UPDATE_DRAFT,
+                    //    payload = workDataOf("DRAFT_JSON" to draftJson)
+                    // )
+                    enqueueActionUploadWorker(
                         accountId = account.id,
-                        messageId = messageId,
-                        operationType = SyncMessageStateWorker.OP_UPDATE_DRAFT,
-                        draftData = draftJson
+                        entityId = messageId,
+                        actionType = ActionUploadWorker.ACTION_UPDATE_DRAFT,
+                        additionalPayload = mapOf("DRAFT_JSON" to draftJson)
                     )
                 }
                 val updatedMessage = messageDao.getMessageByIdSuspend(messageId)?.toDomainModel()?.copy(
@@ -1134,14 +1056,20 @@ class DefaultMessageRepository @Inject constructor(
             }
 
             val draftJson = Json.encodeToString(reconstructedDraft)
-            enqueueSyncMessageStateWorker(
+            // TODO: P2_WRITE - Replace with SyncEngine call for ActionUploadWorker
+            // syncEngine.enqueueActionUploadWorker(
+            //    accountId = account.id,
+            //    entityId = messageId,
+            //    actionType = ActionUploadWorker.ACTION_SEND_MESSAGE, // Or a specific RETRY_SEND action type
+            //    payload = workDataOf("DRAFT_JSON" to draftJson, "SENT_FOLDER_ID" to "SENT")
+            // )
+             enqueueActionUploadWorker(
                 accountId = account.id,
-                messageId = messageId,
-                operationType = SyncMessageStateWorker.OP_SEND_MESSAGE,
-                draftData = draftJson,
-                sentFolderId = "SENT"
+                entityId = messageId,
+                actionType = ActionUploadWorker.ACTION_SEND_MESSAGE, // Could be a RETRY_SEND_MESSAGE
+                additionalPayload = mapOf("DRAFT_JSON" to draftJson, "SENT_FOLDER_ID" to "SENT")
             )
-            Timber.tag(TAG).i("retrySendMessage: Re-enqueued SyncMessageStateWorker for message $messageId")
+            Timber.tag(TAG).i("retrySendMessage: Re-enqueued ActionUploadWorker for message $messageId")
             Result.success(Unit)
         } catch (e: Exception) {
             Timber.tag(TAG).e(e, "retrySendMessage: Failed for message $messageId")
@@ -1149,79 +1077,46 @@ class DefaultMessageRepository @Inject constructor(
         }
     }
 
-    private fun enqueueSyncMessageStateWorker(
+    private fun enqueueActionUploadWorker(
         accountId: String,
-        messageId: String,
-        operationType: String,
-        isRead: Boolean? = null,
-        isStarred: Boolean? = null,
-        newFolderId: String? = null,
-        oldFolderId: String? = null,
-        draftData: String? = null,
-        sentFolderId: String? = null
+        entityId: String,
+        actionType: String,
+        additionalPayload: Map<String, Any?> = emptyMap()
     ) {
-        Timber.d("Enqueueing SyncMessageStateWorker: Acc=$accountId, Msg=$messageId, Op=$operationType, Read=$isRead, Starred=$isStarred, NewFId=$newFolderId, OldFId=$oldFolderId")
+        Timber.d("$TAG: Request to enqueue ActionUploadWorker: Acc=$accountId, Entity=$entityId, Action=$actionType, PayloadKeys=${additionalPayload.keys}")
+        // This method will conceptually call syncEngine.enqueueAction(...)
+        // For now, it will just log as SyncEngine is not injected.
+        // Example of how it would look with SyncEngine:
+        // syncEngine.enqueueMessageAction(accountId, entityId, actionType, additionalPayload)
+        Timber.i("$TAG: Conceptual: SyncEngine would be called here to enqueue ActionUploadWorker for $actionType on $entityId.")
 
-        val inputDataBuilder = Data.Builder()
-            .putString(SyncMessageStateWorker.KEY_ACCOUNT_ID, accountId)
-            .putString(SyncMessageStateWorker.KEY_MESSAGE_ID, messageId)
-            .putString(SyncMessageStateWorker.KEY_OPERATION_TYPE, operationType)
-
-        isRead?.let { inputDataBuilder.putBoolean(SyncMessageStateWorker.KEY_IS_READ, it) }
-        isStarred?.let { inputDataBuilder.putBoolean(SyncMessageStateWorker.KEY_IS_STARRED, it) }
-        newFolderId?.let {
-            inputDataBuilder.putString(
-                SyncMessageStateWorker.KEY_NEW_FOLDER_ID,
-                it
-            )
-        }
-        oldFolderId?.let {
-            inputDataBuilder.putString(
-                SyncMessageStateWorker.KEY_OLD_FOLDER_ID,
-                it
-            )
-        }
-        draftData?.let {
-            inputDataBuilder.putString(
-                SyncMessageStateWorker.KEY_DRAFT_DATA,
-                it
-            )
-        }
-        sentFolderId?.let {
-            inputDataBuilder.putString(
-                SyncMessageStateWorker.KEY_SENT_FOLDER_ID,
-                it
-            )
-        }
-
-        val workRequest = OneTimeWorkRequestBuilder<SyncMessageStateWorker>()
-            .setInputData(inputDataBuilder.build())
-            .addTag("SyncMessageState_${accountId}_${messageId}")
-            .build()
-
-        workManager.enqueue(workRequest)
-        Timber.i("SyncMessageStateWorker enqueued for message $messageId, operation $operationType.")
+        // Placeholder for direct WorkManager call IF SyncEngine is not used for this.
+        // However, SyncEngine should be the entry point.
+        // This direct call is temporary for testing worker creation if SyncEngine path is blocked.
+        // val workData = workDataOf(
+        //     ActionUploadWorker.KEY_ACCOUNT_ID to accountId,
+        //     ActionUploadWorker.KEY_ENTITY_ID to entityId,
+        //     ActionUploadWorker.KEY_ACTION_TYPE to actionType,
+        //     *additionalPayload.toList().toTypedArray() // Spread operator for map to varargs pairs
+        // )
+        // val workRequest = OneTimeWorkRequestBuilder<ActionUploadWorker>()
+        //     .setInputData(workData)
+        //     .addTag("${actionType}_${accountId}_${entityId}")
+        //     .build()
+        // workManager.enqueue(workRequest)
+        // Timber.i("$TAG: (Placeholder Direct Enqueue) ActionUploadWorker enqueued for $actionType on $entityId.")
     }
 
-    // Overloaded method that accepts Account
-    private fun enqueueSyncMessageStateWorker(
-        account: Account,
-        messageId: String,
-        operation: String,
-        draftData: String? = null,
-        sentFolderId: String? = null
-    ) {
-        enqueueSyncMessageStateWorker(
-            accountId = account.id,
-            messageId = messageId,
-            operationType = operation,
-            draftData = draftData,
-            sentFolderId = sentFolderId
-        )
-    }
 
     // Helper method to fetch and store attachments from API
     private suspend fun fetchAndStoreAttachments(account: Account, messageId: String) {
+        // This method is called by getMessageAttachments if local attachments are missing.
+        // In Phase 2, this direct fetch should be replaced by enqueuing a worker via SyncEngine.
+        // For now, it remains as a direct network call placeholder if getMessageAttachments logic still calls it.
+        // However, getMessageAttachments was already refactored in P1 to only use DAO and add a TODO for SyncEngine.
+        // So, this fetchAndStoreAttachments method might become dead code or be moved to a worker.
+        // For safety, if it's still called, it will perform its original function.
+        Timber.d("$TAG: fetchAndStoreAttachments for message $messageId. This should ideally be handled by a Sync Worker.")
         try {
             val providerType = account.providerType.uppercase()
             val mailApiService = mailApiServices[providerType]

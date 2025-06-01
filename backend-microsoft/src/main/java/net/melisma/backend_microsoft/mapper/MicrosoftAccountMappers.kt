@@ -23,9 +23,22 @@ fun IAccount.toDomainAccount(): Account {
     // val tidClaim = this.claims?.get("tid") as? String
     // val trulyUniqueIdentifier = if (oidClaim != null && tidClaim != null) "$oidClaim.$tidClaim" else this.id ?: ""
 
+    // Ensure emailAddress is non-null.
+    // IAccount.username is often the UserPrincipalName (UPN), which is typically an email.
+    // preferredUsername claim is also a good candidate for email.
+    val email = preferredUsername ?: this.username
+    if (email == null) {
+        // This case should be rare with MSAL accounts but needs handling if possible.
+        // Throwing an error or using a placeholder might be options.
+        // For now, let's assume 'this.username' (UPN) is reliably present if 'preferredUsername' is not.
+        // If 'this.username' can also be null, this mapping is problematic for non-nullable emailAddress.
+        throw IllegalStateException("Could not determine a valid email address for the Microsoft account: ${this.id}")
+    }
+
     return Account(
         id = accountId,
-        username = preferredUsername ?: displayNameFromClaims ?: this.username ?: "Unknown User",
+        displayName = displayNameFromClaims, // This can be null
+        emailAddress = email,
         providerType = Account.PROVIDER_TYPE_MS,
         // needsReauthentication: This is complex. IAccount itself doesn't directly state this.
         // It's usually determined by a failed token attempt (MsalUiRequiredException).

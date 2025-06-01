@@ -178,7 +178,7 @@ fun SettingsScreen(
                 items(state.accounts, key = { it.id }) { account ->
                     // Replacing AccountItem with a basic ListItem to resolve build error
                     ListItem(
-                        headlineContent = { Text(account.username) },
+                        headlineContent = { Text(account.displayName ?: account.emailAddress) },
                         supportingContent = {
                             Text(
                                 stringResource(
@@ -199,7 +199,7 @@ fun SettingsScreen(
                                     Icons.Filled.DeleteOutline,
                                     contentDescription = stringResource(
                                         R.string.remove_account_cd,
-                                        account.username
+                                        account.displayName ?: account.emailAddress
                                     ), // Using existing formatted string
                                     tint = MaterialTheme.colorScheme.error
                                 )
@@ -265,7 +265,7 @@ fun SettingsScreen(
                     Text(
                         stringResource(
                             R.string.remove_account_confirm_message,
-                            accountToRemove.username
+                            accountToRemove.displayName ?: accountToRemove.emailAddress
                         )
                     )
                 },

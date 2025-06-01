@@ -52,4 +52,10 @@ abstract class DataModule {
     @Binds
     @Singleton
     abstract fun bindThreadRepository(impl: DefaultThreadRepository): ThreadRepository
+
+    // TODO: P1_SYNC - Provide SyncEngine.
+    // SyncEngine is @Singleton and uses @Inject for its constructor,
+    // so Hilt will provide it automatically as long as its dependencies
+    // (WorkManager, DAOs, MailApiServiceSelector) are available in the graph.
+    // A MailApiServiceSelector might need its own provider if it's an interface or complex setup.
 }
