@@ -35,7 +35,7 @@ interface AttachmentDao {
         SET isDownloaded = :isDownloaded, 
             localFilePath = :localFilePath, 
             downloadTimestamp = :timestamp,
-            downloadError = :error
+            lastSyncError = :error
         WHERE attachmentId = :attachmentId
     """
     )

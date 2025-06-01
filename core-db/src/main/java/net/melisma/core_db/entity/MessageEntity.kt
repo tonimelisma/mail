@@ -4,6 +4,7 @@ import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import net.melisma.core_data.model.SyncStatus
 
 @Entity(
     tableName = "messages",
@@ -45,8 +46,8 @@ data class MessageEntity(
     val isStarred: Boolean, // Assuming this will be handled
     val hasAttachments: Boolean, // Assuming this will be handled
     val isLocallyDeleted: Boolean = false, // Added for optimistic deletion
-    val needsSync: Boolean = false,
-    val lastSyncError: String? = null,
+    // val needsSync: Boolean = false, // Replaced by syncStatus
+    val lastSyncError: String? = null, // Reused for sync metadata
     // Draft and Outbox support
     val isDraft: Boolean = false,
     val isOutbox: Boolean = false,
@@ -54,5 +55,13 @@ data class MessageEntity(
     val draftParentId: String? = null, // For reply/forward chains
     val sendAttempts: Int = 0,
     val lastSendError: String? = null,
-    val scheduledSendTime: Long? = null // For future: scheduled sending
+    val scheduledSendTime: Long? = null, // For future: scheduled sending
+
+    // Sync Metadata
+    val syncStatus: SyncStatus = SyncStatus.IDLE,
+    val lastSyncAttemptTimestamp: Long? = null,
+    val lastSuccessfulSyncTimestamp: Long? = null,
+    // lastSyncError is already present above
+    val isLocalOnly: Boolean = false,
+    val needsFullSync: Boolean = false
 ) 

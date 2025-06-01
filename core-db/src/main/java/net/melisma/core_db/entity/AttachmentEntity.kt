@@ -4,6 +4,7 @@ import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import net.melisma.core_data.model.SyncStatus
 
 @Entity(
     tableName = "attachments",
@@ -32,5 +33,12 @@ data class AttachmentEntity(
     val isDownloaded: Boolean = false,
     val localFilePath: String? = null,
     val downloadTimestamp: Long? = null,
-    val downloadError: String? = null
+
+    // Sync Metadata
+    val syncStatus: SyncStatus = SyncStatus.IDLE,
+    val lastSyncAttemptTimestamp: Long? = null,
+    val lastSuccessfulSyncTimestamp: Long? = null,
+    val lastSyncError: String? = null, // Unified error tracking field
+    val isLocalOnly: Boolean = false,
+    val needsFullSync: Boolean = false
 )

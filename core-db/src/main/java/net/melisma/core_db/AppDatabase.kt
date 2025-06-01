@@ -4,9 +4,11 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.TypeConverter
 import androidx.room.TypeConverters
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import net.melisma.core_data.model.SyncStatus
 import net.melisma.core_db.converter.StringListConverter
 import net.melisma.core_db.converter.WellKnownFolderTypeConverter
 import net.melisma.core_db.dao.AccountDao
@@ -20,6 +22,18 @@ import net.melisma.core_db.entity.FolderEntity
 import net.melisma.core_db.entity.MessageBodyEntity
 import net.melisma.core_db.entity.MessageEntity
 
+class SyncStatusConverter {
+    @TypeConverter
+    fun fromSyncStatus(status: SyncStatus?): String? {
+        return status?.name
+    }
+
+    @TypeConverter
+    fun toSyncStatus(status: String?): SyncStatus? {
+        return status?.let { SyncStatus.valueOf(it) }
+    }
+}
+
 @Database(
     entities = [
         AccountEntity::class, 
@@ -28,10 +42,10 @@ import net.melisma.core_db.entity.MessageEntity
         MessageBodyEntity::class, 
         AttachmentEntity::class
     ],
-    version = 8,
+    version = 9,
     exportSchema = false // Set to true for production apps for schema migration history
 )
-@TypeConverters(WellKnownFolderTypeConverter::class, StringListConverter::class)
+@TypeConverters(WellKnownFolderTypeConverter::class, StringListConverter::class, SyncStatusConverter::class)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun accountDao(): AccountDao
     abstract fun folderDao(): FolderDao
@@ -58,7 +72,8 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_4_5,
                         MIGRATION_5_6,
                         MIGRATION_6_7,
-                        MIGRATION_7_8
+                        MIGRATION_7_8,
+                        MIGRATION_8_9
                     )
                     .build()
                 INSTANCE = instance
@@ -178,6 +193,49 @@ abstract class AppDatabase : RoomDatabase() {
                 // Create indices for attachments table
                 db.execSQL("CREATE INDEX IF NOT EXISTS `index_attachments_messageId` ON `attachments` (`messageId`)")
                 db.execSQL("CREATE INDEX IF NOT EXISTS `index_attachments_attachmentId` ON `attachments` (`attachmentId`)")
+            }
+        }
+
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Add to accounts table
+                db.execSQL("ALTER TABLE `accounts` ADD COLUMN `syncStatus` TEXT NOT NULL DEFAULT \'\'\'IDLE\'\'\'")
+                db.execSQL("ALTER TABLE `accounts` ADD COLUMN `lastSyncAttemptTimestamp` INTEGER DEFAULT NULL")
+                db.execSQL("ALTER TABLE `accounts` ADD COLUMN `lastSuccessfulSyncTimestamp` INTEGER DEFAULT NULL")
+                db.execSQL("ALTER TABLE `accounts` ADD COLUMN `isLocalOnly` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `accounts` ADD COLUMN `needsFullSync` INTEGER NOT NULL DEFAULT 0")
+
+                // Add to folders table
+                db.execSQL("ALTER TABLE `folders` ADD COLUMN `syncStatus` TEXT NOT NULL DEFAULT \'\'\'IDLE\'\'\'")
+                db.execSQL("ALTER TABLE `folders` ADD COLUMN `lastSyncAttemptTimestamp` INTEGER DEFAULT NULL")
+                db.execSQL("ALTER TABLE `folders` ADD COLUMN `lastSuccessfulSyncTimestamp` INTEGER DEFAULT NULL")
+                db.execSQL("ALTER TABLE `folders` ADD COLUMN `lastSyncError` TEXT DEFAULT NULL")
+                db.execSQL("ALTER TABLE `folders` ADD COLUMN `isLocalOnly` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `folders` ADD COLUMN `needsFullSync` INTEGER NOT NULL DEFAULT 0")
+
+                // Add to messages table
+                db.execSQL("ALTER TABLE `messages` ADD COLUMN `syncStatus` TEXT NOT NULL DEFAULT \'\'\'IDLE\'\'\'")
+                db.execSQL("UPDATE `messages` SET `syncStatus` = \'\'\'PENDING_DOWNLOAD\'\'\' WHERE `needsSync` = 1")
+                db.execSQL("ALTER TABLE `messages` ADD COLUMN `lastSyncAttemptTimestamp` INTEGER DEFAULT NULL")
+                db.execSQL("ALTER TABLE `messages` ADD COLUMN `lastSuccessfulSyncTimestamp` INTEGER DEFAULT NULL")
+                db.execSQL("ALTER TABLE `messages` ADD COLUMN `isLocalOnly` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `messages` ADD COLUMN `needsFullSync` INTEGER NOT NULL DEFAULT 0")
+
+                // Add to message_bodies table
+                db.execSQL("ALTER TABLE `message_bodies` ADD COLUMN `syncStatus` TEXT NOT NULL DEFAULT \'\'\'IDLE\'\'\'")
+                db.execSQL("ALTER TABLE `message_bodies` ADD COLUMN `lastSyncAttemptTimestamp` INTEGER DEFAULT NULL")
+                db.execSQL("ALTER TABLE `message_bodies` ADD COLUMN `lastSuccessfulSyncTimestamp` INTEGER DEFAULT NULL")
+                db.execSQL("ALTER TABLE `message_bodies` ADD COLUMN `lastSyncError` TEXT DEFAULT NULL")
+                db.execSQL("ALTER TABLE `message_bodies` ADD COLUMN `isLocalOnly` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `message_bodies` ADD COLUMN `needsFullSync` INTEGER NOT NULL DEFAULT 0")
+
+                // Add to attachments table
+                db.execSQL("ALTER TABLE `attachments` ADD COLUMN `syncStatus` TEXT NOT NULL DEFAULT \'\'\'IDLE\'\'\'")
+                db.execSQL("ALTER TABLE `attachments` ADD COLUMN `lastSyncAttemptTimestamp` INTEGER DEFAULT NULL")
+                db.execSQL("ALTER TABLE `attachments` ADD COLUMN `lastSuccessfulSyncTimestamp` INTEGER DEFAULT NULL")
+                db.execSQL("ALTER TABLE `attachments` ADD COLUMN `lastSyncError` TEXT DEFAULT NULL")
+                db.execSQL("ALTER TABLE `attachments` ADD COLUMN `isLocalOnly` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `attachments` ADD COLUMN `needsFullSync` INTEGER NOT NULL DEFAULT 0")
             }
         }
     }

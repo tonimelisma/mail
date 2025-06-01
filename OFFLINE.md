@@ -41,7 +41,9 @@ synchronization occurring transparently in the background.
 * Hilt is used for dependency injection.
 * `MessageRemoteMediator` is used for paginated message lists in `DefaultMessageRepository`, which
   is a good foundation.
-* `SyncMessageStateWorker` exists for some offline actions in `DefaultMessageRepository`.
+* `SyncMessageStateWorker` exists for some offline actions in `DefaultMessageRepository` (updated
+  to use new sync fields during Phase 0.2, but still targeted for broader refactor/replacement in
+  Phase 2).
 * A known bug exists where `MessageBodyEntity.content` might not persist correctly after network
   fetch and save.
 
@@ -82,13 +84,22 @@ for synchronization.
       `core-db/src/main/java/net/melisma/core_db/dao/MessageBodyDao.kt`,
       `core-db/src/main/java/net/melisma/core_db/dao/MessageDao.kt`.
     * **Changes:**
-        * Thoroughly investigate and fix the bug in `DefaultMessageRepository.getMessageWithBody`
-          ensuring `MessageBodyEntity.content` is reliably saved to and retrieved from
-          `MessageBodyDao` after network fetches.
+        * **ADDRESSED:** Investigated and fixed a bug in `DefaultMessageRepository.getMessageWithBody`
+          where `MessageBodyEntity.content` was not reliably persisted.
+            * **Root Cause:** The `MessageEntity` was being saved with `OnConflictStrategy.REPLACE`
+              *after* the `MessageBodyEntity` was saved within the same transaction. Due to
+              `ForeignKey.CASCADE` on `MessageBodyEntity`'s relation to `MessageEntity`, the
+              "DELETE" part of the `REPLACE` operation on `MessageEntity` was cascading and
+              deleting the just-saved `MessageBodyEntity`.
+            * **Fix:** Reordered the operations within the database transaction in
+              `DefaultMessageRepository.getMessageWithBody` to save the `MessageEntity` *before*
+              saving the `MessageBodyEntity`. This ensures the parent entity is stable before
+              the child entity with the foreign key constraint is persisted, preventing the
+              unintended cascade deletion.
         * Verify transaction handling when saving `MessageEntity` and `MessageBodyEntity`.
     * **Assumptions:** The issue is likely within the transaction block or the interaction between
-      DAO updates and Flow emissions.
-    * **Risks:** If the bug is deeper than anticipated, it might delay subsequent phases.
+      DAO updates and Flow emissions. (This was confirmed)
+    * **Risks:** If the bug is deeper than anticipated, it might delay subsequent phases. (This was resolved)
 
 2. **Enhance Room Entities with Sync Metadata:**
     * **File(s):**
@@ -114,6 +125,29 @@ for synchronization.
     * **Assumptions:** These fields will cover most sync state tracking needs.
     * **Risks:** Migration errors if not carefully implemented. Overlooking a necessary state in
       `SyncStatus`.
+    * **Status: COMPLETED**
+
+3. **(Tech Debt / Future Enhancement) Refactor `Account` and `AccountEntity` for distinct `displayName` and `emailAddress`:**
+    * **File(s):**
+        * `core-data/src/main/java/net/melisma/core_data/model/Account.kt`
+        * `core-db/src/main/java/net/melisma/core_db/entity/AccountEntity.kt`
+        * `core-db/src/main/java/net/melisma/core_db/AppDatabase.kt` (for migration)
+        * `core-data/src/main/java/net/melisma/core_data/repository/AccountRepository.kt`
+        * `data/src/main/java/net/melisma/data/repository/DefaultAccountRepository.kt`
+        * `data/src/main/java/net/melisma/data/repository/DefaultMessageRepository.kt` (usage in `senderAddress`)
+        * Potentially other repositories, ViewModels, and UI components.
+    * **Changes:**
+        * Modify `Account` model and `AccountEntity` to have separate `displayName: String` and `emailAddress: String` fields.
+        * Replace the current `username: String` field, which serves a dual purpose.
+        * Update all usages of `account.username` to use either `account.displayName` or `account.emailAddress` as appropriate.
+        * Specifically, `MessageEntity.senderAddress` (and corresponding Message model field) should consistently store the email address.
+        * Implement the necessary Room Migration.
+    * **Reasoning:**
+        * Improves data clarity and integrity by explicitly separating the user's displayable name from their email identifier.
+        * Aligns with common data modeling practices for user accounts.
+        * Avoids ambiguity where `username` might currently store a non-email friendly name, leading to incorrect data in fields expecting an email address (e.g., `senderAddress`).
+    * **Risks:** This is a significant breaking change affecting multiple modules. Requires careful migration and thorough testing. May impact authentication flows if `username` was a key identifier for auth providers.
+    * **Status: PENDING**
 
 ### Phase 1: Decoupling Read Path & Initial Sync Workers
 
@@ -285,6 +319,15 @@ performance optimizations.
   for battery efficiency.
 * **Conflict Resolution (Advanced):** For drafts or other user-modifiable content, implement more
   sophisticated conflict resolution if simple "server wins" is not enough.
+
+## Cache Invalidation Note (Separate from Offline-First Plan)
+
+It's important to note a recent change made to address a bug with stale folder content (specifically, deleted messages still appearing).
+The `MessageRemoteMediator.initialize()` method was modified to *always* return `LAUNCH_INITIAL_REFRESH`.
+
+*   **Effect:** This forces a full network refresh and cache clear (specifically, `messageDao.deleteMessagesForFolder()`) for the selected folder every time it's opened.
+*   **Reasoning:** This was a direct fix to ensure data correctness and resolve the immediate bug of stale cached messages.
+*   **Deviation from Ideal Caching:** This approach prioritizes immediate data consistency over optimal caching performance (which would involve conditional refreshes based on staleness checks, delta tokens, etc.). While effective for the bug, it's a shortcut compared to the more nuanced caching strategies envisioned in a full offline-first architecture that would typically aim to avoid unnecessary network calls and cache clearing. This change was not part of the planned phases of the offline-first migration but a tactical fix for a pressing issue.
 
 ---
 

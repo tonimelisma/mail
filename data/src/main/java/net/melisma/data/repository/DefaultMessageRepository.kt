@@ -45,6 +45,7 @@ import net.melisma.core_data.model.MailFolder
 import net.melisma.core_data.model.Message
 import net.melisma.core_data.model.MessageDraft
 import net.melisma.core_data.model.MessageSyncState
+import net.melisma.core_data.model.SyncStatus
 import net.melisma.core_data.repository.AccountRepository
 import net.melisma.core_data.repository.MessageRepository
 import net.melisma.core_db.AppDatabase
@@ -480,7 +481,7 @@ class DefaultMessageRepository @Inject constructor(
         Timber.d("markMessageRead: msgId=$messageId, isRead=$isRead, account=${account.id}")
         try {
             appDatabase.withTransaction {
-                messageDao.updateReadState(messageId, isRead, needsSync = true)
+                messageDao.updateReadState(messageId, isRead, syncStatus = SyncStatus.PENDING_UPLOAD)
             }
             Timber.i("Optimistically marked message $messageId as isRead=$isRead, needsSync=true")
             enqueueSyncMessageStateWorker(
@@ -506,9 +507,9 @@ class DefaultMessageRepository @Inject constructor(
         Timber.d("starMessage: msgId=$messageId, isStarred=$isStarred, account=${account.id}")
         try {
             appDatabase.withTransaction {
-                messageDao.updateStarredState(messageId, isStarred, needsSync = true)
+                messageDao.updateStarredState(messageId, isStarred, syncStatus = SyncStatus.PENDING_UPLOAD)
             }
-            Timber.i("Optimistically starred message $messageId as isStarred=$isStarred, needsSync=true")
+            Timber.i("Optimistically starred message $messageId as isStarred=$isStarred, status PENDING_UPLOAD")
             enqueueSyncMessageStateWorker(
                 accountId = account.id,
                 messageId = messageId,
@@ -534,10 +535,10 @@ class DefaultMessageRepository @Inject constructor(
                 messageDao.markAsLocallyDeleted(
                     messageId = messageId,
                     isLocallyDeleted = true,
-                    needsSync = true
+                    syncStatus = SyncStatus.PENDING_UPLOAD
                 )
             }
-            Timber.i("Optimistically marked message $messageId as locally deleted, needsSync=true")
+            Timber.i("Optimistically marked message $messageId as locally deleted, status PENDING_UPLOAD")
 
             enqueueSyncMessageStateWorker(
                 accountId = account.id,
@@ -547,12 +548,13 @@ class DefaultMessageRepository @Inject constructor(
             Result.success(Unit)
         } catch (e: Exception) {
             Timber.e(e, "Error in deleteMessage for $messageId")
+            // Attempt to update sync error on the existing message if the optimistic delete failed before worker enqueue
             val currentMessage = messageDao.getMessageByIdSuspend(messageId)
-            if (currentMessage != null && !currentMessage.isLocallyDeleted) {
+            if (currentMessage != null && !currentMessage.isLocallyDeleted) { // Check if it wasn't marked as deleted
                 val errorMessage =
                     errorMappers[account.providerType.uppercase()]?.mapExceptionToErrorDetails(e)?.message
                         ?: e.message
-                messageDao.updateLastSyncError(messageId, "Optimistic delete failed: $errorMessage")
+                messageDao.updateLastSyncError(messageId, "Optimistic delete failed: $errorMessage") // This sets syncStatus to ERROR
             }
             Result.failure(Exception("Failed to mark message for deletion: ${e.message}", e))
         }
@@ -584,10 +586,10 @@ class DefaultMessageRepository @Inject constructor(
                 messageDao.updateMessageFolderAndSyncState(
                     messageId = messageId,
                     newFolderId = newFolderId,
-                    needsSync = true
+                    syncStatus = SyncStatus.PENDING_UPLOAD
                 )
             }
-            Timber.i("Optimistically moved message $messageId to folder $newFolderId, needsSync=true")
+            Timber.i("Optimistically moved message $messageId to folder $newFolderId, status PENDING_UPLOAD")
 
             // Enqueue the worker to perform the actual API call
             enqueueSyncMessageStateWorker(
@@ -595,21 +597,27 @@ class DefaultMessageRepository @Inject constructor(
                 messageId = messageId,
                 operationType = SyncMessageStateWorker.OP_MOVE_MESSAGE,
                 newFolderId = newFolderId,
-                oldFolderId = oldFolderId
+                oldFolderId = oldFolderId // Pass oldFolderId to the worker
             )
             Result.success(Unit)
         } catch (e: Exception) {
             Timber.e(e, "Error in moveMessage for $messageId to $newFolderId")
-            // If optimistic update failed, try to set sync error on the original record if it exists
-            // The local message's folderId might not have been updated yet if transaction failed.
+            // If optimistic update failed or worker enqueue failed, try to set sync error.
+            // The local message's folderId might not have been updated if transaction failed.
+            // It's also possible oldFolderId wasn't fetched if getMessageByIdSuspend failed.
             val messageForErrorUpdate = messageDao.getMessageByIdSuspend(messageId)
             if (messageForErrorUpdate != null) {
                 val errorMessage =
                     errorMappers[account.providerType.uppercase()]?.mapExceptionToErrorDetails(e)?.message
                         ?: e.message
-                messageDao.updateLastSyncError(
-                    messageId,
-                    "Optimistic move to $newFolderId failed: $errorMessage"
+                // If the folder was updated optimistically, revert or set error on new folderId.
+                // If not, set error on oldFolderId.
+                val folderIdForError = if (messageForErrorUpdate.folderId == newFolderId) newFolderId else oldFolderId ?: messageForErrorUpdate.folderId
+                messageDao.updateFolderIdSyncErrorAndStatus(
+                    messageId = messageId,
+                    folderId = folderIdForError,
+                    errorMessage = "Optimistic move to $newFolderId failed: $errorMessage".take(500),
+                    syncStatus = SyncStatus.ERROR
                 )
             }
             Result.failure(
@@ -638,7 +646,7 @@ class DefaultMessageRepository @Inject constructor(
                         subject = draft.subject,
                         snippet = draft.body?.take(150),
                         senderName = account.username,
-                        senderAddress = account.username,
+                        senderAddress = account.username, // Corrected: Account.username is the email
                         recipientNames = draft.to, // Will be converted by TypeConverter
                         recipientAddresses = draft.to, // Will be converted by TypeConverter
                         timestamp = currentTime,
@@ -646,11 +654,20 @@ class DefaultMessageRepository @Inject constructor(
                         isRead = true,
                         isStarred = false,
                         hasAttachments = draft.attachments.isNotEmpty(),
-                        isOutbox = true,
-                        isDraft = false,
+                        isLocallyDeleted = false,
+                        lastSyncError = null,
+                        isDraft = false, // No longer a draft
+                        isOutbox = true, // Now in outbox
                         draftType = draft.type.name,
                         draftParentId = draft.originalMessageId,
-                        needsSync = true
+                        sendAttempts = 0,
+                        lastSendError = null,
+                        scheduledSendTime = null,
+                        syncStatus = SyncStatus.PENDING_UPLOAD,
+                        lastSyncAttemptTimestamp = null,
+                        lastSuccessfulSyncTimestamp = null,
+                        isLocalOnly = true, // True for outbox messages until successfully sent
+                        needsFullSync = false
                     )
 
                     // Insert into database
@@ -668,9 +685,9 @@ class DefaultMessageRepository @Inject constructor(
                     // Enqueue worker to send the message
                     val draftJson = Json.encodeToString(draft)
                     enqueueSyncMessageStateWorker(
-                        account = account,
+                        accountId = account.id,
                         messageId = messageId,
-                        operation = SyncMessageStateWorker.OP_SEND_MESSAGE,
+                        operationType = SyncMessageStateWorker.OP_SEND_MESSAGE,
                         draftData = draftJson,
                         sentFolderId = "SENT" // Default sent folder
                     )
@@ -864,86 +881,78 @@ class DefaultMessageRepository @Inject constructor(
                     return@withContext Result.failure(IllegalArgumentException("Account not found"))
                 }
 
-                appDatabase.withTransaction {
-                    // Generate a unique draft ID
-                    val draftId = "draft_${System.currentTimeMillis()}_${accountId}"
-                    val currentTime = System.currentTimeMillis()
+                val draftId = "draft_${System.currentTimeMillis()}_${accountId}"
+                val currentTime = System.currentTimeMillis()
 
-                    // Create draft message entity
-                    val draftMessage = MessageEntity(
+                appDatabase.withTransaction {
+                    val draftMessageEntity = MessageEntity(
                         messageId = draftId,
                         accountId = accountId,
-                        folderId = "DRAFTS", // Special folder for drafts
+                        folderId = "DRAFTS", // Consider a constant or configurable default draft folder ID
                         threadId = draftDetails.originalMessageId,
                         subject = draftDetails.subject,
                         snippet = draftDetails.body?.take(150),
                         senderName = account.username,
-                        senderAddress = account.username,
-                        recipientNames = draftDetails.to,
+                        senderAddress = account.username, // Corrected: Account.username is the email
+                        recipientNames = draftDetails.to, // Assuming to, cc, bcc are List<String> of addresses
                         recipientAddresses = draftDetails.to,
                         timestamp = currentTime,
                         sentTimestamp = null,
-                        isRead = true,
+                        isRead = true, // Drafts are typically read by the sender
                         isStarred = false,
                         hasAttachments = draftDetails.attachments.isNotEmpty(),
+                        isLocallyDeleted = false,
+                        lastSyncError = null,
                         isDraft = true,
                         isOutbox = false,
                         draftType = draftDetails.type.name,
                         draftParentId = draftDetails.originalMessageId,
-                        needsSync = true
+                        sendAttempts = 0,
+                        lastSendError = null,
+                        scheduledSendTime = null,
+                        syncStatus = SyncStatus.PENDING_UPLOAD,
+                        lastSyncAttemptTimestamp = null,
+                        lastSuccessfulSyncTimestamp = null,
+                        isLocalOnly = false, // Assuming drafts are meant to be synced eventually
+                        needsFullSync = false
                     )
+                    messageDao.insertOrUpdateMessages(listOf(draftMessageEntity))
 
-                    // Insert into database
-                    messageDao.insertOrUpdateMessages(listOf(draftMessage))
+                    if (draftDetails.body != null) {
+                        val messageBody = MessageBodyEntity(
+                            messageId = draftId,
+                            contentType = "HTML", // Assuming HTML, make configurable if needed
+                            content = draftDetails.body,
+                            lastFetchedTimestamp = currentTime,
+                            syncStatus = SyncStatus.PENDING_UPLOAD // Body also needs upload
+                        )
+                        messageBodyDao.insertOrUpdateMessageBody(messageBody) // Corrected call
+                    }
 
-                    // Store message body
-                    val messageBody = MessageBodyEntity(
-                        messageId = draftId,
-                        contentType = "HTML",
-                        content = draftDetails.body,
-                        lastFetchedTimestamp = currentTime
-                    )
-                    messageBodyDao.insertOrUpdateMessageBody(messageBody)
-
-                    // Enqueue worker to sync with server
                     val draftJson = Json.encodeToString(draftDetails)
                     enqueueSyncMessageStateWorker(
-                        account = account,
+                        accountId = account.id,
                         messageId = draftId,
-                        operation = SyncMessageStateWorker.OP_CREATE_DRAFT,
+                        operationType = SyncMessageStateWorker.OP_CREATE_DRAFT,
                         draftData = draftJson
                     )
                 }
 
-                // Re-fetch the generated draftId within the transaction or pass it out if possible.
-                // For simplicity, we are not re-fetching here post-transaction to return the full Message object.
-                // The current return type is Result<Message>, so we construct it manually.
-                // A more robust approach might involve the worker returning the server-confirmed draft ID/details.
-                val draftId = "draft_${System.currentTimeMillis()}_${accountId}" // This ID is generated before transaction and might differ if logic changes
-                val currentTime = System.currentTimeMillis() // This timestamp also might differ
-
-                // Convert to domain model for return
-                val message = Message(
-                    id = draftId, // This ID might not be the one committed if transaction failed or ID generation changed
-                    threadId = draftDetails.originalMessageId,
-                    receivedDateTime = java.time.Instant.ofEpochMilli(currentTime).toString(),
-                    sentDateTime = null,
-                    subject = draftDetails.subject,
-                    senderName = account.username,
-                    senderAddress = account.username,
-                    bodyPreview = draftDetails.body?.take(150),
-                    isRead = true,
-                    recipientNames = draftDetails.to,
-                    recipientAddresses = draftDetails.to,
-                    isStarred = false,
-                    hasAttachments = draftDetails.attachments.isNotEmpty(),
-                    timestamp = currentTime
+                // Construct and return the domain model Message
+                // Fetching from DB after transaction would be more robust for SSoT
+                val createdMessage = messageDao.getMessageByIdSuspend(draftId)?.toDomainModel()?.copy(
+                    body = draftDetails.body, // Add body from input as it might not be in MessageEntity.toDomainModel()
+                    hasAttachments = draftDetails.attachments.isNotEmpty() // Explicitly set hasAttachments
                 )
-
-                Timber.d("Draft created with ID: $draftId")
-                Result.success(message)
+                if (createdMessage != null) {
+                    Timber.d("Draft created with ID: $draftId")
+                    Result.success(createdMessage)
+                } else {
+                    Timber.e("Failed to retrieve created draft $draftId from DB after transaction.")
+                    Result.failure(IllegalStateException("Failed to create draft locally"))
+                }
             } catch (e: Exception) {
-                Timber.e(e, "Failed to create draft message")
+                Timber.e(e, "Failed to create draft message for account $accountId")
                 Result.failure(e)
             }
         }
@@ -962,16 +971,14 @@ class DefaultMessageRepository @Inject constructor(
                     return@withContext Result.failure(IllegalArgumentException("Account not found"))
                 }
 
-                // Check if draft exists
                 val existingDraft = messageDao.getMessageByIdSuspend(messageId)
                 if (existingDraft == null || !existingDraft.isDraft) {
                     Timber.e("Draft message not found or not a draft: $messageId")
-                    return@withContext Result.failure(IllegalArgumentException("Draft not found"))
+                    return@withContext Result.failure(IllegalArgumentException("Draft not found or not a draft"))
                 }
                 val currentTime = System.currentTimeMillis()
 
                 appDatabase.withTransaction {
-                    // Update draft content in database
                     messageDao.updateDraftContent(
                         messageId = messageId,
                         subject = draftDetails.subject,
@@ -979,52 +986,43 @@ class DefaultMessageRepository @Inject constructor(
                         recipientNames = draftDetails.to,
                         recipientAddresses = draftDetails.to,
                         timestamp = currentTime,
-                        needsSync = true,
+                        syncStatus = SyncStatus.PENDING_UPLOAD,
                         draftType = draftDetails.type.name,
                         draftParentId = draftDetails.originalMessageId
                     )
 
-                    // Update message body
-                    val messageBody = MessageBodyEntity(
-                        messageId = messageId,
-                        contentType = "HTML",
-                        content = draftDetails.body,
-                        lastFetchedTimestamp = currentTime
-                    )
-                    messageBodyDao.insertOrUpdateMessageBody(messageBody)
+                    if (draftDetails.body != null) {
+                        val messageBody = MessageBodyEntity(
+                            messageId = messageId,
+                            contentType = "HTML",
+                            content = draftDetails.body,
+                            lastFetchedTimestamp = currentTime,
+                            syncStatus = SyncStatus.PENDING_UPLOAD // Body also needs upload
+                        )
+                        messageBodyDao.insertOrUpdateMessageBody(messageBody) // Corrected call
+                    }
 
-                    // Enqueue worker to sync with server
                     val draftJson = Json.encodeToString(draftDetails)
                     enqueueSyncMessageStateWorker(
-                        account = account,
+                        accountId = account.id,
                         messageId = messageId,
-                        operation = SyncMessageStateWorker.OP_UPDATE_DRAFT,
+                        operationType = SyncMessageStateWorker.OP_UPDATE_DRAFT,
                         draftData = draftJson
                     )
                 }
-
-                // Convert to domain model for return
-                val message = Message(
-                    id = messageId,
-                    threadId = draftDetails.originalMessageId,
-                    receivedDateTime = java.time.Instant.ofEpochMilli(currentTime).toString(),
-                    sentDateTime = null,
-                    subject = draftDetails.subject,
-                    senderName = account.username,
-                    senderAddress = account.username,
-                    bodyPreview = draftDetails.body?.take(150),
-                    isRead = true,
-                    recipientNames = draftDetails.to,
-                    recipientAddresses = draftDetails.to,
-                    isStarred = false,
-                    hasAttachments = draftDetails.attachments.isNotEmpty(),
-                    timestamp = currentTime
+                val updatedMessage = messageDao.getMessageByIdSuspend(messageId)?.toDomainModel()?.copy(
+                     body = draftDetails.body, // Add body from input
+                     hasAttachments = draftDetails.attachments.isNotEmpty() // Explicitly set hasAttachments
                 )
-
-                Timber.d("Draft updated: $messageId")
-                Result.success(message)
+                if (updatedMessage != null) {
+                    Timber.d("Draft updated: $messageId")
+                    Result.success(updatedMessage)
+                } else {
+                     Timber.e("Failed to retrieve updated draft $messageId from DB after transaction.")
+                     Result.failure(IllegalStateException("Failed to update draft locally"))
+                }
             } catch (e: Exception) {
-                Timber.e(e, "Failed to update draft message")
+                Timber.e(e, "Failed to update draft message $messageId")
                 Result.failure(e)
             }
         }
@@ -1124,29 +1122,24 @@ class DefaultMessageRepository @Inject constructor(
                 originalMessageId = messageEntity.draftParentId,
                 type = draftType,
                 to = messageEntity.recipientAddresses ?: emptyList(),
-                cc = emptyList(), // Assuming CC/BCC are not stored in MessageEntity directly like this
-                bcc = emptyList(), // Modify if your MessageEntity stores these
+                cc = emptyList(), 
+                bcc = emptyList(), 
                 subject = messageEntity.subject,
                 body = messageBodyEntity.content,
-                attachments = emptyList() // Placeholder: Attachment handling for resend needs clarification
-                                        // If attachments were uploaded to a server and IDs stored, those might be used.
-                                        // If they are local files, the paths would be needed.
-                                        // For now, assuming worker handles based on initial draft data or server state.
+                attachments = emptyList() 
             )
 
             appDatabase.withTransaction {
                 messageDao.prepareForRetry(messageId)
-                // Optionally, reset sendAttempts if desired, or let it increment naturally by the worker
-                // messageDao.resetSendAttempts(messageId) // Example: if you add such a DAO method
             }
 
             val draftJson = Json.encodeToString(reconstructedDraft)
             enqueueSyncMessageStateWorker(
-                account = account,
+                accountId = account.id,
                 messageId = messageId,
-                operation = SyncMessageStateWorker.OP_SEND_MESSAGE,
+                operationType = SyncMessageStateWorker.OP_SEND_MESSAGE,
                 draftData = draftJson,
-                sentFolderId = "SENT" // Default sent folder, ensure this matches logic in sendMessage
+                sentFolderId = "SENT"
             )
             Timber.tag(TAG).i("retrySendMessage: Re-enqueued SyncMessageStateWorker for message $messageId")
             Result.success(Unit)
@@ -1248,7 +1241,12 @@ class DefaultMessageRepository @Inject constructor(
                             isDownloaded = false,
                             localFilePath = null,
                             downloadTimestamp = null,
-                            downloadError = null
+                            lastSyncError = null, 
+                            syncStatus = SyncStatus.IDLE, 
+                            lastSyncAttemptTimestamp = null,
+                            lastSuccessfulSyncTimestamp = System.currentTimeMillis(),
+                            isLocalOnly = false, 
+                            needsFullSync = false
                         )
                     }
                     attachmentDao.insertAttachments(attachmentEntities)
@@ -1261,4 +1259,94 @@ class DefaultMessageRepository @Inject constructor(
             Timber.e(e, "Failed to fetch attachments for message $messageId")
         }
     }
+
+    // Method not in MessageRepository interface, commenting out for now.
+    /*
+    suspend fun updateMessageBody(
+        messageId: String,
+        body: String,
+        contentType: String
+    ): Result<Unit> = withContext(ioDispatcher) {
+        try {
+            val existingBody = messageBodyDao.getMessageBodyByIdSuspend(messageId)
+            val bodyEntity = MessageBodyEntity(
+                messageId = messageId,
+                content = body,
+                contentType = contentType,
+                lastFetchedTimestamp = System.currentTimeMillis(),
+                // Assuming saving a body means it needs upload if it's part of a draft or being sent
+                // If it's just caching a fetched body, status would be SYNCED.
+                // This method context suggests it might be user-generated content.
+                syncStatus = if (existingBody?.content == body) SyncStatus.SYNCED else SyncStatus.PENDING_UPLOAD,
+                lastSyncError = null // Clear previous errors on new update
+            )
+            messageBodyDao.insertOrUpdateMessageBody(bodyEntity)
+            Timber.d("Message body for $messageId updated locally.")
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Timber.e(e, "Error updating message body for $messageId locally")
+            Result.failure(Exception("Failed to update message body for $messageId: ${e.message}", e))
+        }
+    }
+    */
+
+    // Method not in MessageRepository interface, commenting out for now.
+    /*
+    suspend fun updateDraftState(messageId: String, isDraft: Boolean): Result<Unit> {
+        return try {
+            // If it's becoming a draft, it's PENDING_UPLOAD (or IDLE if just saving locally without immediate sync intention)
+            // If it's no longer a draft (isDraft = false), it implies it was sent, deleted, or moved to outbox.
+            // Those actions should set their own appropriate SyncStatus.
+            // For a generic updateDraftState, if isDraft becomes false, IDLE seems safest, assuming other flows handle sync for send/delete.
+            // If isDraft becomes true, PENDING_UPLOAD is a reasonable default for a save action.
+            val status = if (isDraft) SyncStatus.PENDING_UPLOAD else SyncStatus.IDLE
+            appDatabase.withTransaction {
+                messageDao.updateDraftState(messageId, isDraft, syncStatus = status)
+            }
+            Timber.d("Draft state for message $messageId updated to isDraft=$isDraft locally with status $status.")
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Timber.e(e, "Error updating draft state for message $messageId locally.")
+            Result.failure(e)
+        }
+    }
+    */
+
+    // Method not in MessageRepository interface, commenting out for now.
+    /*
+    suspend fun moveToOutbox(messageId: String): Result<Unit> {
+        return try {
+            appDatabase.withTransaction {
+                // The DAO moveToOutbox method defaults syncStatus to PENDING_UPLOAD, but we can be explicit.
+                messageDao.moveToOutbox(messageId = messageId, syncStatus = SyncStatus.PENDING_UPLOAD)
+            }
+            Timber.d("Message $messageId moved to outbox locally, status PENDING_UPLOAD.")
+            // Enqueue background work for sending from outbox
+            enqueueSyncMessageStateWork(messageId, SyncMessageStateWorker.OP_SEND_MESSAGE)
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Timber.e(e, "Error moving message $messageId to outbox locally.")
+            Result.failure(e)
+        }
+    }
+    */
+
+    // Method not in MessageRepository interface, commenting out for now.
+    /*
+    suspend fun sendQueuedMessages(accountId: String) {
+        // This method was mentioned in build errors as "overrides nothing".
+        // Its implementation needs review if it's to be kept.
+        // For now, commenting out to align with the MessageRepository interface.
+        Timber.d("sendQueuedMessages for account $accountId - Placeholder, needs proper implementation if kept and added to interface")
+        // Example: Fetch messages from outbox for the account
+        // val outboxMessages = messageDao.getOutboxForAccount(accountId).firstOrNull()
+        // outboxMessages?.forEach { messageEntity ->
+            // val account = accountRepository.getAccountByIdSuspend(accountId)
+            // if (account != null) {
+                // val draftDetails = MessageDraft( ... ) // Reconstruct draft from messageEntity
+                // sendMessage(draftDetails, account) // This would call the interface method
+            // }
+        // }
+    }
+    */
 }

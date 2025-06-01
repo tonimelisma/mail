@@ -15,6 +15,7 @@ import net.melisma.core_data.datasource.MailApiService
 import net.melisma.core_data.di.Dispatcher
 import net.melisma.core_data.di.MailDispatchers
 import net.melisma.core_data.errors.ErrorMapperService
+import net.melisma.core_data.model.SyncStatus
 import net.melisma.core_data.repository.AccountRepository
 import net.melisma.core_db.AppDatabase
 import net.melisma.core_db.dao.MessageDao
@@ -273,10 +274,8 @@ class SyncMessageStateWorker @AssistedInject constructor(
                 } else if (operationType == OP_MOVE_MESSAGE) {
                     val newFolderId = inputData.getString(KEY_NEW_FOLDER_ID)
                     if (newFolderId.isNullOrBlank()) {
-                        // This should ideally not happen if validated before API call
                         Timber.tag(TAG)
                             .e("New folder ID is blank in processApiResult for move operation. Message $messageId sync state might be inconsistent.")
-                        // Update error state to reflect this problem
                         messageDao.updateLastSyncError(
                             messageId,
                             "Move success, but new folder ID missing post-API call."
@@ -294,18 +293,18 @@ class SyncMessageStateWorker @AssistedInject constructor(
                         messageDao.markAsSent(messageId, sentFolderId, System.currentTimeMillis())
                     } else {
                         Timber.tag(TAG)
-                            .d("Marking message $messageId as sent (no sent folder specified).")
-                        messageDao.updateDraftState(messageId, isDraft = false, needsSync = false)
+                            .d("Marking message $messageId as sent (no sent folder specified). Clearing draft state and setting syncStatus to SYNCED.")
+                        messageDao.updateDraftState(messageId, isDraft = false, syncStatus = SyncStatus.SYNCED)
                         messageDao.clearSyncState(messageId)
                     }
                 } else if (operationType == OP_CREATE_DRAFT || operationType == OP_UPDATE_DRAFT) {
                     Timber.tag(TAG)
-                        .d("Draft operation successful for $messageId. Clearing sync state.")
+                        .d("Draft operation successful for $messageId. Clearing sync state (sets to SYNCED).")
                     messageDao.clearSyncState(messageId)
                 } else {
                     Timber.tag(TAG)
-                        .d("Clearing needsSync and lastSyncError for message $messageId.")
-                    messageDao.clearSyncState(messageId) // Resets needsSync and lastSyncError
+                        .d("Clearing sync state (sets to SYNCED) for message $messageId after successful operation: $operationType.")
+                    messageDao.clearSyncState(messageId)
                 }
             }
             return ListenableWorker.Result.success()
@@ -316,23 +315,20 @@ class SyncMessageStateWorker @AssistedInject constructor(
 
             Timber.tag(TAG)
                 .w("API call failed for $messageId, operation $operationType: $errorMessage")
-            // For delete operations, if the API fails, we do not want to clear isLocallyDeleted.
-            // We want to keep it marked for deletion attempt later. updateSyncErrorState will just set error and keep needsSync.
-            // For move operations, if API fails, we want to revert folderId to oldFolderId if possible.
+
             if (operationType == OP_MOVE_MESSAGE) {
                 val oldFolderId = inputData.getString(KEY_OLD_FOLDER_ID)
                 val newFolderId = inputData.getString(KEY_NEW_FOLDER_ID) // for error message
                 if (!oldFolderId.isNullOrBlank()) {
                     Timber.tag(TAG)
                         .w("Move operation failed for $messageId. Reverting folderId to $oldFolderId and setting error. Target was $newFolderId")
-                    messageDao.updateFolderIdSyncErrorAndNeedsSync(
+                    messageDao.updateFolderIdSyncErrorAndStatus(
                         messageId = messageId,
                         folderId = oldFolderId,
                         errorMessage = "API move to '$newFolderId' failed: $errorMessage".take(500),
-                        needsSync = true
+                        syncStatus = SyncStatus.ERROR
                     )
                 } else {
-                    // Fallback if oldFolderId is not available (should be rare)
                     Timber.tag(TAG)
                         .w("Move operation failed for $messageId. OldFolderId not available. Updating error on current (new) folderId $newFolderId")
                     messageDao.updateLastSyncError(
@@ -341,7 +337,6 @@ class SyncMessageStateWorker @AssistedInject constructor(
                     )
                 }
             } else {
-                // Existing logic for other operations (like delete)
                 val shouldClearLocalDeletionMarker =
                     false // For OP_DELETE_MESSAGE, a failure means we keep the marker
                 updateSyncErrorState(messageId, errorMessage, shouldClearLocalDeletionMarker)
@@ -368,13 +363,13 @@ class SyncMessageStateWorker @AssistedInject constructor(
                         messageDao.markAsLocallyDeleted(
                             messageId,
                             isLocallyDeleted = false,
-                            needsSync = true
-                        ) // Revert and keep needsSync for error
+                            syncStatus = SyncStatus.ERROR
+                        ) // Revert and set syncStatus to ERROR
                     }
                     messageDao.updateLastSyncError(
                         messageId,
                         errorMessage.take(500)
-                    ) // updateLastSyncError already sets needsSync = true
+                    ) // updateLastSyncError in DAO now sets syncStatus = 'ERROR'
                 }
             } else {
                 Timber.tag(TAG)

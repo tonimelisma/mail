@@ -8,6 +8,7 @@ import androidx.room.Query
 import androidx.room.Transaction
 import kotlinx.coroutines.flow.Flow
 import net.melisma.core_db.entity.MessageEntity
+import net.melisma.core_data.model.SyncStatus
 
 @Dao
 interface MessageDao {
@@ -32,23 +33,23 @@ interface MessageDao {
     @Query("SELECT COUNT(*) FROM messages WHERE accountId = :accountId AND folderId = :folderId")
     suspend fun getMessagesCountForFolder(accountId: String, folderId: String): Int
 
-    @Query("UPDATE messages SET folderId = :newFolderId, needsSync = :needsSync WHERE messageId = :messageId")
+    @Query("UPDATE messages SET folderId = :newFolderId, syncStatus = :syncStatus WHERE messageId = :messageId")
     suspend fun updateMessageFolderAndSyncState(
         messageId: String,
         newFolderId: String,
-        needsSync: Boolean
+        syncStatus: SyncStatus
     )
 
     // Used by worker after successful API move to update local folderId and clear sync flags
-    @Query("UPDATE messages SET folderId = :newFolderId, needsSync = 0, lastSyncError = NULL WHERE messageId = :messageId")
+    @Query("UPDATE messages SET folderId = :newFolderId, syncStatus = 'SYNCED', lastSyncError = NULL WHERE messageId = :messageId")
     suspend fun updateFolderIdAndClearSyncStateOnSuccess(messageId: String, newFolderId: String)
 
-    @Query("UPDATE messages SET folderId = :folderId, lastSyncError = :errorMessage, needsSync = :needsSync WHERE messageId = :messageId")
-    suspend fun updateFolderIdSyncErrorAndNeedsSync(
+    @Query("UPDATE messages SET folderId = :folderId, lastSyncError = :errorMessage, syncStatus = :syncStatus WHERE messageId = :messageId")
+    suspend fun updateFolderIdSyncErrorAndStatus(
         messageId: String,
         folderId: String,
         errorMessage: String,
-        needsSync: Boolean
+        syncStatus: SyncStatus
     )
 
     @Query("SELECT * FROM messages WHERE accountId = :accountId AND folderId = :folderId ORDER BY timestamp DESC")
@@ -68,52 +69,52 @@ interface MessageDao {
         insertOrUpdateMessages(messages)
     }
 
-    @Query("UPDATE messages SET needsSync = 0, lastSyncError = NULL WHERE messageId = :messageId")
+    @Query("UPDATE messages SET syncStatus = 'SYNCED', lastSyncError = NULL WHERE messageId = :messageId")
     suspend fun clearSyncState(messageId: String)
 
-    @Query("UPDATE messages SET needsSync = 0, lastSyncError = NULL, folderId = :newFolderId WHERE messageId = :messageId")
+    @Query("UPDATE messages SET syncStatus = 'SYNCED', lastSyncError = NULL, folderId = :newFolderId WHERE messageId = :messageId")
     suspend fun clearSyncStateAndSetFolder(messageId: String, newFolderId: String)
 
-    @Query("UPDATE messages SET lastSyncError = :errorMessage, needsSync = 1 WHERE messageId = :messageId") // Ensure needsSync is true if error occurs
+    @Query("UPDATE messages SET lastSyncError = :errorMessage, syncStatus = 'ERROR' WHERE messageId = :messageId")
     suspend fun updateLastSyncError(messageId: String, errorMessage: String)
 
-    @Query("UPDATE messages SET needsSync = :needsSync WHERE messageId = :messageId")
-    suspend fun setNeedsSync(messageId: String, needsSync: Boolean)
+    @Query("UPDATE messages SET syncStatus = :syncStatus WHERE messageId = :messageId")
+    suspend fun setSyncStatus(messageId: String, syncStatus: SyncStatus)
 
-    @Query("UPDATE messages SET isRead = :isRead, needsSync = :needsSync WHERE messageId = :messageId")
-    suspend fun updateReadState(messageId: String, isRead: Boolean, needsSync: Boolean)
+    @Query("UPDATE messages SET isRead = :isRead, syncStatus = :syncStatus WHERE messageId = :messageId")
+    suspend fun updateReadState(messageId: String, isRead: Boolean, syncStatus: SyncStatus)
 
-    @Query("UPDATE messages SET isStarred = :isStarred, needsSync = :needsSync WHERE messageId = :messageId")
-    suspend fun updateStarredState(messageId: String, isStarred: Boolean, needsSync: Boolean)
+    @Query("UPDATE messages SET isStarred = :isStarred, syncStatus = :syncStatus WHERE messageId = :messageId")
+    suspend fun updateStarredState(messageId: String, isStarred: Boolean, syncStatus: SyncStatus)
 
-    @Query("UPDATE messages SET isLocallyDeleted = :isLocallyDeleted, needsSync = :needsSync, lastSyncError = NULL WHERE messageId = :messageId")
+    @Query("UPDATE messages SET isLocallyDeleted = :isLocallyDeleted, syncStatus = :syncStatus, lastSyncError = NULL WHERE messageId = :messageId")
     suspend fun markAsLocallyDeleted(
         messageId: String,
         isLocallyDeleted: Boolean = true,
-        needsSync: Boolean = true
+        syncStatus: SyncStatus = SyncStatus.PENDING_UPLOAD
     )
 
     @Query("DELETE FROM messages WHERE messageId = :messageId")
     suspend fun deletePermanentlyById(messageId: String)
 
-    @Query("UPDATE messages SET folderId = :newFolderId, needsSync = :needsSync, lastSyncError = :lastSyncError WHERE messageId = :messageId")
+    @Query("UPDATE messages SET folderId = :newFolderId, syncStatus = :syncStatus, lastSyncError = :lastSyncError WHERE messageId = :messageId")
     suspend fun updateMessageFolderSyncStateAndError(
         messageId: String,
         newFolderId: String,
-        needsSync: Boolean,
+        syncStatus: SyncStatus,
         lastSyncError: String?
     )
 
     // For worker to update folderId and clear sync state on successful API move
-    @Query("UPDATE messages SET folderId = :newFolderId, needsSync = 0, lastSyncError = NULL WHERE messageId = :messageId")
+    @Query("UPDATE messages SET folderId = :newFolderId, syncStatus = 'SYNCED', lastSyncError = NULL WHERE messageId = :messageId")
     suspend fun updateFolderOnMoveSyncSuccess(messageId: String, newFolderId: String)
 
     // Draft operations
     @Query("SELECT * FROM messages WHERE accountId = :accountId AND isDraft = 1 ORDER BY timestamp DESC")
     fun getDraftsForAccount(accountId: String): Flow<List<MessageEntity>>
 
-    @Query("UPDATE messages SET isDraft = :isDraft, needsSync = :needsSync WHERE messageId = :messageId")
-    suspend fun updateDraftState(messageId: String, isDraft: Boolean, needsSync: Boolean)
+    @Query("UPDATE messages SET isDraft = :isDraft, syncStatus = :syncStatus WHERE messageId = :messageId")
+    suspend fun updateDraftState(messageId: String, isDraft: Boolean, syncStatus: SyncStatus)
 
     @Query(
         """
@@ -123,7 +124,7 @@ interface MessageDao {
             recipientNames = :recipientNames, 
             recipientAddresses = :recipientAddresses,
             timestamp = :timestamp,
-            needsSync = :needsSync,
+            syncStatus = :syncStatus,
             draftType = :draftType,
             draftParentId = :draftParentId
         WHERE messageId = :messageId
@@ -136,7 +137,7 @@ interface MessageDao {
         recipientNames: List<String>?,
         recipientAddresses: List<String>?,
         timestamp: Long,
-        needsSync: Boolean,
+        syncStatus: SyncStatus,
         draftType: String?,
         draftParentId: String?
     )
@@ -145,17 +146,17 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE accountId = :accountId AND isOutbox = 1 ORDER BY timestamp DESC")
     fun getOutboxForAccount(accountId: String): Flow<List<MessageEntity>>
 
-    @Query("UPDATE messages SET isOutbox = :isOutbox, isDraft = 0, needsSync = :needsSync WHERE messageId = :messageId")
-    suspend fun moveToOutbox(messageId: String, isOutbox: Boolean = true, needsSync: Boolean = true)
+    @Query("UPDATE messages SET isOutbox = :isOutbox, isDraft = 0, syncStatus = :syncStatus WHERE messageId = :messageId")
+    suspend fun moveToOutbox(messageId: String, isOutbox: Boolean = true, syncStatus: SyncStatus = SyncStatus.PENDING_UPLOAD)
 
-    @Query("UPDATE messages SET sendAttempts = sendAttempts + 1, lastSendError = :error WHERE messageId = :messageId")
+    @Query("UPDATE messages SET sendAttempts = sendAttempts + 1, lastSendError = :error, syncStatus = 'ERROR' WHERE messageId = :messageId")
     suspend fun incrementSendAttempts(messageId: String, error: String?)
 
     @Query(
         """
         UPDATE messages 
         SET isOutbox = 0, 
-            needsSync = 0, 
+            syncStatus = 'SYNCED', 
             lastSendError = NULL, 
             folderId = :sentFolderId,
             sentTimestamp = :sentTimestamp
@@ -164,12 +165,12 @@ interface MessageDao {
     )
     suspend fun markAsSent(messageId: String, sentFolderId: String, sentTimestamp: Long)
 
-    @Query("UPDATE messages SET lastSendError = :error, needsSync = 1 WHERE messageId = :messageId")
+    @Query("UPDATE messages SET lastSendError = :error, syncStatus = 'ERROR' WHERE messageId = :messageId")
     suspend fun updateSendError(messageId: String, error: String)
 
-    @Query("UPDATE messages SET lastSendError = NULL, needsSync = 1, sendAttempts = 0 WHERE messageId = :messageId")
+    @Query("UPDATE messages SET lastSendError = NULL, syncStatus = 'PENDING_UPLOAD', sendAttempts = 0 WHERE messageId = :messageId")
     suspend fun prepareForRetry(messageId: String)
 
-    @Query("SELECT * FROM messages WHERE needsSync = 1 AND (isDraft = 1 OR isOutbox = 1)")
+    @Query("SELECT * FROM messages WHERE (syncStatus = 'PENDING_UPLOAD' OR syncStatus = 'PENDING_DOWNLOAD' OR syncStatus = 'ERROR') AND (isDraft = 1 OR isOutbox = 1)")
     suspend fun getPendingSyncDraftsAndOutbox(): List<MessageEntity>
 } 
