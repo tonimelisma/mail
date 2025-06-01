@@ -110,7 +110,7 @@ class ThreadDetailViewModel @Inject constructor(
                             it.copy(threadMessages = it.threadMessages.mapIndexed { index, item ->
                                 if (index == messageIndex) item.copy(
                                     bodyState = BodyLoadingState.Error(
-                                        e.message ?: "Unknown error"
+                                        e.message ?: "Unknown error fetching body"
                                     )
                                 ) else item
                             })
@@ -118,27 +118,48 @@ class ThreadDetailViewModel @Inject constructor(
                     }
                 }
                 .collectLatest { messageWithBody: Message? ->
-                    if (messageWithBody?.body != null) {
-                        Timber.d("Successfully fetched body for message: $messageIdToLoad. Body not null.")
-                        _uiState.update {
-                            if (it is ThreadDetailUIState.Success) {
-                                it.copy(threadMessages = it.threadMessages.mapIndexed { index, item ->
-                                    if (index == messageIndex) item.copy(
-                                        bodyState = BodyLoadingState.Loaded(
-                                            messageWithBody.body ?: ""
-                                        )
-                                    ) else item
-                                })
-                            } else it
+                    // Check if the message object itself was retrieved
+                    if (messageWithBody != null) {
+                        // Now check if the body content is available
+                        if (!messageWithBody.body.isNullOrBlank()) {
+                            Timber.d("Successfully fetched body for message: $messageIdToLoad. Body present.")
+                            _uiState.update {
+                                if (it is ThreadDetailUIState.Success) {
+                                    it.copy(threadMessages = it.threadMessages.mapIndexed { index, item ->
+                                        if (index == messageIndex) item.copy(
+                                            bodyState = BodyLoadingState.Loaded(
+                                                messageWithBody.body
+                                                    ?: "" // Fallback to empty if somehow null
+                                            )
+                                        ) else item
+                                    })
+                                } else it
+                            }
+                        } else {
+                            // Body is null or blank, but message object exists.
+                            // This is the final emission from the repository's flow for this request.
+                            Timber.w("Message $messageIdToLoad object received from repository, but body is null/empty. Setting Error state for this message item.")
+                            _uiState.update { uiState ->
+                                if (uiState is ThreadDetailUIState.Success) {
+                                    uiState.copy(threadMessages = uiState.threadMessages.mapIndexed { idx, item ->
+                                        if (idx == messageIndex) item.copy(
+                                            bodyState = BodyLoadingState.Error(
+                                                "Body content was empty or null after all fetch attempts."
+                                            )
+                                        ) else item
+                                    })
+                                } else uiState
+                            }
                         }
                     } else {
-                        Timber.w("Fetched message $messageIdToLoad, but body is still null or empty.")
+                        // messageWithBody is null, this is a more definitive error from the repository's flow.
+                        Timber.w("Fetched message $messageIdToLoad, but the messageWithBody object itself is null from repository. Setting Error state.")
                         _uiState.update {
                             if (it is ThreadDetailUIState.Success) {
                                 it.copy(threadMessages = it.threadMessages.mapIndexed { index, item ->
                                     if (index == messageIndex) item.copy(
                                         bodyState = BodyLoadingState.Error(
-                                            "Body content was empty or null after fetch."
+                                            "Failed to retrieve message details."
                                         )
                                     ) else item
                                 })

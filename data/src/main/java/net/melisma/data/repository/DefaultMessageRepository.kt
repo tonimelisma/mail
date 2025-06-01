@@ -12,6 +12,7 @@ import androidx.room.withTransaction
 import androidx.work.Data
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -20,6 +21,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.flowOf
@@ -38,6 +40,7 @@ import net.melisma.core_data.di.MailDispatchers
 import net.melisma.core_data.errors.ErrorMapperService
 import net.melisma.core_data.model.Account
 import net.melisma.core_data.model.Attachment
+import net.melisma.core_data.model.DraftType
 import net.melisma.core_data.model.MailFolder
 import net.melisma.core_data.model.Message
 import net.melisma.core_data.model.MessageDraft
@@ -56,15 +59,12 @@ import net.melisma.data.mapper.toEntity
 import net.melisma.data.paging.MessageRemoteMediator
 import net.melisma.data.worker.SyncMessageStateWorker
 import timber.log.Timber
-import javax.inject.Inject
-import javax.inject.Singleton
-import kotlin.coroutines.cancellation.CancellationException
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
-import dagger.hilt.android.qualifiers.ApplicationContext
-import kotlinx.coroutines.flow.catch
-import net.melisma.core_data.model.DraftType
+import javax.inject.Inject
+import javax.inject.Singleton
+import kotlin.coroutines.cancellation.CancellationException
 
 @Singleton
 class DefaultMessageRepository @Inject constructor(
@@ -367,7 +367,13 @@ class DefaultMessageRepository @Inject constructor(
                                 contentType = fetchedMessageFromApi.bodyContentType!!,
                                 lastFetchedTimestamp = System.currentTimeMillis()
                             )
-                            messageBodyDao.insertOrUpdateMessageBody(newBodyEntity)
+                            Timber.d(
+                                "Content to be saved in newBodyEntity for $messageId: '${
+                                    newBodyEntity.content?.take(
+                                        100
+                                    )
+                                }...' (Length: ${newBodyEntity.content?.length})"
+                            )
 
                             val messageEntityToSave = existingMessageEntity.copy(
                                 snippet = fetchedMessageFromApi.bodyPreview ?: existingMessageEntity.snippet,
@@ -377,22 +383,64 @@ class DefaultMessageRepository @Inject constructor(
                                 recipientNames = fetchedMessageFromApi.recipientNames ?: existingMessageEntity.recipientNames,
                                 recipientAddresses = fetchedMessageFromApi.recipientAddresses ?: existingMessageEntity.recipientAddresses,
                                 timestamp = fetchedMessageFromApi.timestamp.takeIf { it != 0L } ?: existingMessageEntity.timestamp,
-                                isRead = fetchedMessageFromApi.isRead // API should be source of truth for read state if available
-                                // sentDateTime from API's Message is a String, MessageEntity expects Long.
-                                // This requires parsing similar to what was in the removed parseIso8601DateTimeToLong or in a mapper.
-                                // For now, not updating sentTimestamp here to avoid re-introducing parsing directly.
-                                // Mapper should handle this if API provides sentDateTime.
+                                isRead = fetchedMessageFromApi.isRead
                             )
-                            messageDao.insertOrUpdateMessages(listOf(messageEntityToSave))
-                            Timber.d("Saved/Updated message entity and body in DB for $messageId")
+
+                            appDatabase.withTransaction {
+                                Timber.d("TRANSACTION START: Attempting to save body for $messageId. Content length: ${newBodyEntity.content?.length}")
+                                messageBodyDao.insertOrUpdateMessageBody(newBodyEntity)
+                                Timber.d("TRANSACTION MID: Body allegedly saved for $messageId.")
+                                val bodyJustSavedInTx =
+                                    messageBodyDao.getMessageBodyByIdSuspend(messageId)
+                                Timber.d(
+                                    "TRANSACTION MID: Directly queried body content *within TX* for $messageId: '${
+                                        bodyJustSavedInTx?.content?.take(
+                                            100
+                                        )
+                                    }...' (Length: ${bodyJustSavedInTx?.content?.length})"
+                                )
+
+                                messageDao.insertOrUpdateMessages(listOf(messageEntityToSave))
+                                Timber.d("TRANSACTION END: Message entity also saved for $messageId.")
+                            }
+                            Timber.d("Saved/Updated message entity and body in DB for $messageId (transaction committed)")
+
+                            // Immediate check after transaction
+                            val directlyQueriedBodyAfterSave =
+                                messageBodyDao.getMessageBodyByIdSuspend(messageId)
+                            Timber.d(
+                                "Directly queried body content *after TX commit* for $messageId: '${
+                                    directlyQueriedBodyAfterSave?.content?.take(
+                                        100
+                                    )
+                                }...' (Length: ${directlyQueriedBodyAfterSave?.content?.length})"
+                            )
 
                             // Re-fetch from DB to ensure SSoT for the emission
                             val updatedMessageEntity = messageDao.getMessageByIdSuspend(messageId)
                             val updatedBodyEntity = messageBodyDao.getMessageBodyByIdSuspend(messageId)
+
+                            Timber.d("Re-fetched for emit: updatedMessageEntity present: ${updatedMessageEntity != null}, messageId: ${updatedMessageEntity?.messageId}")
+                            Timber.d("Re-fetched for emit: updatedBodyEntity present: ${updatedBodyEntity != null}, body content present: ${!updatedBodyEntity?.content.isNullOrBlank()}, body messageId: ${updatedBodyEntity?.messageId}")
+                            // START: Added intensive logging for final emission data
+                            Timber.d("FINAL EMIT PREP for $messageId: updatedMessageEntity = $updatedMessageEntity")
+                            Timber.d("FINAL EMIT PREP for $messageId: updatedBodyEntity = $updatedBodyEntity")
+                            Timber.d(
+                                "FINAL EMIT PREP for $messageId: updatedBodyEntity.content (first 100) = ${
+                                    updatedBodyEntity?.content?.take(
+                                        100
+                                    )
+                                }"
+                            )
+                            Timber.d("FINAL EMIT PREP for $messageId: updatedBodyEntity.contentType = ${updatedBodyEntity?.contentType}")
+                            // END: Added intensive logging for final emission data
+                            
                             messageToSend = updatedMessageEntity?.toDomainModel()?.copy(
                                 body = updatedBodyEntity?.content,
                                 bodyContentType = updatedBodyEntity?.contentType
                             )
+
+                            Timber.d("Re-fetched for emit: messageToSend body empty: ${messageToSend?.body.isNullOrBlank()}, contentType: ${messageToSend?.bodyContentType}")
                             send(messageToSend) // Send the updated message from DB
                         } else {
                             // Message was not in DB (cache miss). Send API-fetched message directly.
