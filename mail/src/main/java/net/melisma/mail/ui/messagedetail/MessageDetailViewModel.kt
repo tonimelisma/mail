@@ -18,8 +18,11 @@ import javax.inject.Inject
 @HiltViewModel
 class MessageDetailViewModel @Inject constructor(
     private val getMessageDetailsUseCase: GetMessageDetailsUseCase,
+    // TODO: P1_SYNC - Inject SyncEngine
+    // private val syncEngine: net.melisma.data.sync.SyncEngine,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
+    // TODO: P1_SYNC - Refine UI states based on sync progress/errors from SyncEngine later.
 
     private val _uiState = MutableStateFlow<MessageDetailUIState>(MessageDetailUIState.Loading)
     val uiState: StateFlow<MessageDetailUIState> = _uiState.asStateFlow()
@@ -50,8 +53,17 @@ class MessageDetailViewModel @Inject constructor(
                         if (message != null) {
                             Timber.d("ViewModelDBG: UseCase Flow collected message for $messageId. Subject: '${message.subject}', BodyIsBlank: ${message.body.isNullOrBlank()}, BodyContentType: ${message.bodyContentType}. Emitting Success state.")
                             _uiState.value = MessageDetailUIState.Success(message)
+                            if (message.body.isNullOrBlank()) {
+                                // TODO: P1_SYNC - Trigger message body download if missing.
+                                // Ensure accountId and messageId are available here.
+                                Timber.d("ViewModelDBG: Message body is blank for $messageId. Conceptually triggering body download.")
+                                // syncEngine.downloadMessageBody(accountId, messageId)
+                            }
                         } else {
                             Timber.d("ViewModelDBG: UseCase Flow collected NULL message for $messageId. Emitting Error state - Message not found.")
+                            // TODO: P1_SYNC - If message is not found in DB, it might need to be fetched by SyncEngine.
+                            // This could be a specific "fetch single message details" worker if not covered by folder sync.
+                            // syncEngine.fetchMessageDetails(accountId, messageId)
                             _uiState.value = MessageDetailUIState.Error("Message not found")
                         }
                     }

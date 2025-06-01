@@ -42,7 +42,7 @@ class SyncStatusConverter {
         MessageBodyEntity::class, 
         AttachmentEntity::class
     ],
-    version = 9,
+    version = 10,
     exportSchema = false // Set to true for production apps for schema migration history
 )
 @TypeConverters(WellKnownFolderTypeConverter::class, StringListConverter::class, SyncStatusConverter::class)
@@ -73,7 +73,8 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_5_6,
                         MIGRATION_6_7,
                         MIGRATION_7_8,
-                        MIGRATION_8_9
+                        MIGRATION_8_9,
+                        MIGRATION_9_10
                     )
                     .build()
                 INSTANCE = instance
@@ -238,5 +239,52 @@ abstract class AppDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE `attachments` ADD COLUMN `needsFullSync` INTEGER NOT NULL DEFAULT 0")
             }
         }
+
+        val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Create new table with the desired schema
+                db.execSQL("""
+                    CREATE TABLE `accounts_new` (
+                        `id` TEXT NOT NULL PRIMARY KEY,
+                        `displayName` TEXT,
+                        `emailAddress` TEXT NOT NULL,
+                        `providerType` TEXT NOT NULL,
+                        `needsReauthentication` INTEGER NOT NULL DEFAULT 0,
+                        `syncStatus` TEXT NOT NULL DEFAULT 'IDLE',
+                        `lastSyncAttemptTimestamp` INTEGER,
+                        `lastSuccessfulSyncTimestamp` INTEGER,
+                        `lastSyncError` TEXT,
+                        `isLocalOnly` INTEGER NOT NULL DEFAULT 0,
+                        `needsFullSync` INTEGER NOT NULL DEFAULT 0
+                    )
+                """)
+
+                // Copy data from old table to new table, transforming username -> emailAddress and setting displayName
+                // Assumes 'username' from old table is the correct emailAddress.
+                // 'lastSyncError' is selected as NULL because it didn't exist on the old 'accounts' table schema based on MIGRATION_8_9.
+                // Other sync fields (syncStatus, lastSyncAttemptTimestamp, lastSuccessfulSyncTimestamp, isLocalOnly, needsFullSync) are assumed to exist from MIGRATION_8_9.
+                db.execSQL("""
+                    INSERT INTO `accounts_new` (
+                        `id`, `displayName`, `emailAddress`, `providerType`, `needsReauthentication`,
+                        `syncStatus`, `lastSyncAttemptTimestamp`, `lastSuccessfulSyncTimestamp`, `lastSyncError`,
+                        `isLocalOnly`, `needsFullSync`
+                    )
+                    SELECT
+                        `id`, NULL, `username`, `providerType`, `needsReauthentication`,
+                        `syncStatus`, `lastSyncAttemptTimestamp`, `lastSuccessfulSyncTimestamp`, NULL,
+                        `isLocalOnly`, `needsFullSync`
+                    FROM `accounts`
+                """)
+
+                // Drop the old table
+                db.execSQL("DROP TABLE `accounts`")
+
+                // Rename the new table to the original table name
+                db.execSQL("ALTER TABLE `accounts_new` RENAME TO `accounts`")
+
+                // Create unique index on emailAddress
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_accounts_emailAddress` ON `accounts` (`emailAddress`)")
+            }
+        }
     }
-} 
+}

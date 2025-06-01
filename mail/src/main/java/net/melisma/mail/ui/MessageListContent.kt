@@ -253,7 +253,7 @@ internal fun AccountContextHeader(account: Account) {
         Text(
             text = stringResource(
                 R.string.account_context_label,
-                account.username
+                account.displayName ?: account.emailAddress
             ), // Use formatted string
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant

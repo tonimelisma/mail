@@ -241,7 +241,7 @@ private fun AccountHeader(account: Account, onRefreshClicked: () -> Unit) {
         )
         Spacer(Modifier.width(16.dp))
         Text(
-            text = account.username,
+            text = account.displayName ?: account.emailAddress,
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -253,7 +253,7 @@ private fun AccountHeader(account: Account, onRefreshClicked: () -> Unit) {
         IconButton(onClick = onRefreshClicked, modifier = Modifier.size(36.dp)) {
             Icon(
                 imageVector = Icons.Filled.Refresh, // Make sure this import exists: androidx.compose.material.icons.filled.Refresh
-                contentDescription = "Refresh folders for ${account.username}",
+                contentDescription = "Refresh folders for ${account.displayName ?: account.emailAddress}",
                 tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }

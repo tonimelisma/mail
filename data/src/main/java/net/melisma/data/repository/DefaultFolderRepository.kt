@@ -75,6 +75,7 @@ class DefaultFolderRepository @Inject constructor(
                         val accountFolderFlows: List<Flow<Pair<String, FolderFetchState>>> =
                             accountEntities.map { accountEntity ->
                                 val accountId = accountEntity.id
+                                // TODO: P1_SYNC - If folderEntities is empty/stale for a known account, trigger SyncEngine.
                                 folderDao.getFoldersForAccount(accountId)
                                     .map<List<net.melisma.core_db.entity.FolderEntity>, FolderFetchState> { folderEntities ->
                                         FolderFetchState.Success(folderEntities.map { it.toDomainModel() })
@@ -135,10 +136,10 @@ class DefaultFolderRepository @Inject constructor(
 
     override suspend fun manageObservedAccounts(accounts: List<Account>) {
         withContext(ioDispatcher) {
-            Timber.i("manageObservedAccounts called with ${accounts.size} accounts. Usernames: ${accounts.joinToString { it.username }}.")
+            Timber.i("manageObservedAccounts called with ${accounts.size} accounts. EmailAddresses: ${accounts.joinToString { it.emailAddress }}.")
             val currentDbAccountEntities = accountDao.getAllAccounts().first() // Get current state
-            Timber.d("manageObservedAccounts: API accounts: ${accounts.joinToString { it.id + ":" + it.username }}")
-            Timber.d("manageObservedAccounts: Current DB accounts before any upsert: ${currentDbAccountEntities.joinToString { it.id + ":" + it.username }}")
+            Timber.d("manageObservedAccounts: API accounts: ${accounts.joinToString { it.id + ":" + it.emailAddress }}")
+            Timber.d("manageObservedAccounts: Current DB accounts before any upsert: ${currentDbAccountEntities.joinToString { it.id + ":" + it.emailAddress }}")
 
             val currentDbAccountIds = currentDbAccountEntities.map { it.id }.toSet()
             val newApiAccountIds = accounts.map { it.id }.toSet()
@@ -171,7 +172,7 @@ class DefaultFolderRepository @Inject constructor(
 
                 if (needsSync) {
                     Timber.d(
-                        "manageObservedAccounts: Account ${account.username} needs initial folder sync. Current state: $currentState"
+                        "manageObservedAccounts: Account ${account.emailAddress} needs initial folder sync. Current state: $currentState"
                     )
                     // Use externalScope for sync jobs that shouldn't be tied to a ViewModel lifecycle
                     // but should persist as long as the repository (Singleton) exists.
@@ -327,7 +328,7 @@ class DefaultFolderRepository @Inject constructor(
             return
         }
         val account = accountEntity.toDomainAccount()
-        Timber.i("refreshFoldersForAccount called for ${account.username}")
+        Timber.i("refreshFoldersForAccount called for ${account.emailAddress}")
         refreshFoldersForAccountInternal(
             account,
             activity,
@@ -358,7 +359,7 @@ class DefaultFolderRepository @Inject constructor(
                 )
             } else {
                 Timber.w(
-                    "refreshAllFolders: Skipping ${account.username} as provider $providerType is not supported."
+                    "refreshAllFolders: Skipping ${account.emailAddress} as provider $providerType is not supported."
                 )
                 _folderStates.update { currentMap ->
                     currentMap + (account.id to FolderFetchState.Error("Unsupported provider for refresh"))

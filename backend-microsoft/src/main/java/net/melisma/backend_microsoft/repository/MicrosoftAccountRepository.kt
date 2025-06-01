@@ -243,7 +243,7 @@ class MicrosoftAccountRepository @Inject constructor(
 
     override fun signOut(account: Account): Flow<GenericSignOutResult> = flow {
         Timber.tag(TAG)
-            .i("signOut called for account: ${account.username} (ID: ${account.id.take(5)}...)")
+            .i("signOut called for account: ${account.emailAddress} (ID: ${account.id.take(5)}...)")
         if (!account.providerType.equals(Account.PROVIDER_TYPE_MS, ignoreCase = true)) {
             Timber.tag(TAG).w("signOut: Unsupported provider type: ${account.providerType}")
             emit(
@@ -288,7 +288,7 @@ class MicrosoftAccountRepository @Inject constructor(
             }
         } catch (e: Exception) {
             Timber.tag(TAG)
-                .e(e, "signOut: Exception during Microsoft sign-out for ${account.username}")
+                .e(e, "signOut: Exception during Microsoft sign-out for ${account.emailAddress}")
             emit(GenericSignOutResult.Error(ErrorDetails(message = "Sign out failed: ${e.message}")))
         }
     }.flowOn(ioDispatcher)

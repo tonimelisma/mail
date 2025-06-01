@@ -173,4 +173,8 @@ interface MessageDao {
 
     @Query("SELECT * FROM messages WHERE (syncStatus = 'PENDING_UPLOAD' OR syncStatus = 'PENDING_DOWNLOAD' OR syncStatus = 'ERROR') AND (isDraft = 1 OR isOutbox = 1)")
     suspend fun getPendingSyncDraftsAndOutbox(): List<MessageEntity>
-} 
+
+    // TODO: P3_CACHE - Refine query to also check for messages not marked as 'keep_offline' if such a flag is added later.
+    @Query("SELECT * FROM messages WHERE timestamp < :maxTimestamp AND syncStatus != :pendingStatus AND isDraft = 0 AND isOutbox = 0")
+    abstract fun getMessagesOlderThan(maxTimestamp: Long, pendingStatus: SyncStatus = SyncStatus.PENDING_UPLOAD): List<MessageEntity>
+}
