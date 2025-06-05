@@ -1,7 +1,6 @@
 package net.melisma.backend_google
 
 // import net.melisma.core_data.errors.MappedErrorDetails // Commented out
-import com.google.api.services.gmail.Gmail
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.MockRequestHandleScope
@@ -48,7 +47,6 @@ class GmailApiHelperTest {
 
     // New mocks for dependencies
     private lateinit var mockIoDispatcher: CoroutineDispatcher
-    private var mockGmailService: Gmail? = null // Nullable, can be null or a mock
     private lateinit var mockAuthManager: GoogleAuthManager
 
     // To hold request handlers for different scenarios in a test
@@ -217,8 +215,6 @@ class GmailApiHelperTest {
 
         // Initialize new mocks
         mockIoDispatcher = Dispatchers.Unconfined // Or TestCoroutineDispatcher()
-        mockGmailService =
-            mockk<Gmail>(relaxed = true) // Mocking as non-null for safety, can be set to null if specific tests need it
         mockAuthManager = mockk<GoogleAuthManager>(relaxed = true)
 
         coEvery { mockErrorMapper.mapExceptionToErrorDetails(any()) } answers {
@@ -284,7 +280,6 @@ class GmailApiHelperTest {
             httpClient = httpClient,
             errorMapper = mockErrorMapper,
             ioDispatcher = mockIoDispatcher,
-            gmailService = mockGmailService,
             authManager = mockAuthManager
         )
     }

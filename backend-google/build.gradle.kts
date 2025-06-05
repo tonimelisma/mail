@@ -78,7 +78,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.play.services) // For Task.await() if still needed elsewhere, review
 
     // --- Google API Services ---
-    implementation("com.google.apis:google-api-services-gmail:v1-rev20220404-2.0.0") // Added for Gmail API
+    // implementation("com.google.apis:google-api-services-gmail:v1-rev20220404-2.0.0") // Added for Gmail API
 
     // --- Unit Testing ---
     testImplementation(libs.junit)

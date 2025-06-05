@@ -56,7 +56,6 @@ class GmailApiHelper @Inject constructor(
     @GoogleHttpClient private val httpClient: HttpClient,
     private val errorMapper: ErrorMapperService,
     private val ioDispatcher: CoroutineDispatcher,
-    private val gmailService: com.google.api.services.gmail.Gmail?,
     private val authManager: GoogleAuthManager
 ) : MailApiService {
     private val BASE_URL = "https://gmail.googleapis.com/gmail/v1/users/me"

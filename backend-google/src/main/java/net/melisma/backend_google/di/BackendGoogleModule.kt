@@ -169,7 +169,6 @@ object BackendGoogleModule {
         @GoogleHttpClient httpClient: HttpClient,
         googleErrorMapper: GoogleErrorMapper,
         ioDispatcher: CoroutineDispatcher,
-        gmailService: com.google.api.services.gmail.Gmail?,
         authManager: GoogleAuthManager
     ): GmailApiHelper {
         Timber.d("Providing GmailApiHelper with all dependencies, including GoogleAuthManager")
@@ -177,7 +176,6 @@ object BackendGoogleModule {
             httpClient,
             googleErrorMapper,
             ioDispatcher,
-            gmailService,
             authManager
         )
     }
@@ -221,28 +219,4 @@ object BackendGoogleModule {
     @Provides
     @Singleton
     fun provideIoDispatcher(): CoroutineDispatcher = Dispatchers.IO
-
-    // Added provider for Gmail Service (nullable placeholder)
-    @Provides
-    @Singleton
-    fun provideGmailService(
-        // Potentially inject: GoogleAuthManager, ApplicationContext, ActiveGoogleAccountHolder
-        // For now, a simple approach to satisfy constructor:
-        // activeGoogleAccountHolder: ActiveGoogleAccountHolder, 
-        // googleAuthManager: GoogleAuthManager,
-        // @ApplicationContext context: Context 
-    ): com.google.api.services.gmail.Gmail? {
-        Timber.w("Providing null for com.google.api.services.gmail.Gmail. Needs full GMSCore/GoogleSignIn based init including HttpTransport, JsonFactory and active user Credentials.")
-        // TODO: Implement proper Gmail service initialization. This likely involves:
-        // 1. Get active GoogleSignInAccount from GoogleSignIn.getLastSignedInAccount(context).
-        // 2. If null, or token needs refresh, trigger sign-in/re-auth flow.
-        // 3. Build GoogleAccountCredential using GoogleSignInAccount and GMAIL_SCOPES.
-        // 4. Initialize HttpTransport (e.g., GoogleNetHttpTransport.newTrustedTransport() or OkHttp compatible one).
-        // 5. Initialize JsonFactory (e.g., JacksonFactory.getDefaultInstance()).
-        // 6. Build Gmail service: com.google.api.services.gmail.Gmail.Builder(transport, jsonFactory, credential)
-        //    .setApplicationName("Melisma Mail").build()
-        // This component is @Singleton, so the service should be cached once created for an active user.
-        // Handling account switching or token expiry requires more complex logic here or in GoogleAuthManager.
-        return null // Placeholder to allow compilation
-    }
 }
