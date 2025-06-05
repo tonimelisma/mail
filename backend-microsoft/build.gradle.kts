@@ -60,10 +60,13 @@ dependencies {
 
     // --- AndroidX & Kotlin ---
     implementation(libs.androidx.core.ktx)
-    implementation(libs.kotlinx.coroutines.core)
+    api(libs.kotlinx.coroutines.core)
 
     // Logging
     implementation(libs.timber)
+
+    // --- Microsoft Graph SDK ---
+    // implementation(libs.microsoft.graph.sdk) // REMOVED MS Graph SDK
 
     // --- Ktor Client Dependencies ---
     implementation(libs.ktor.client.core)

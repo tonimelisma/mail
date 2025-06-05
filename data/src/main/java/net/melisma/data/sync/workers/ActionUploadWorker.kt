@@ -6,21 +6,24 @@ import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
-import kotlinx.coroutines.delay
+import kotlinx.serialization.json.Json
+import net.melisma.core_data.datasource.MailApiServiceSelector
+import net.melisma.core_data.errors.ApiServiceException
+import net.melisma.core_data.model.MessageDraft
 import net.melisma.core_data.model.SyncStatus
+import net.melisma.core_db.AppDatabase
+import net.melisma.core_db.dao.AccountDao
 import net.melisma.core_db.dao.MessageDao
-// TODO: P2_WRITE - Inject other DAOs as needed (FolderDao, AccountDao, etc.)
-// TODO: P2_WRITE - Inject MailApiServiceSelector
-// TODO: P2_WRITE - Inject SyncEngine (for potential re-queuing or complex flows)
 import timber.log.Timber
 
 @HiltWorker
 class ActionUploadWorker @AssistedInject constructor(
     @Assisted appContext: Context,
     @Assisted workerParams: WorkerParameters,
-    private val messageDao: MessageDao // Example: Start with MessageDao
-    // private val mailApiServiceSelector: MailApiServiceSelector,
-    // private val syncEngine: SyncEngine
+    private val messageDao: MessageDao,
+    private val mailApiServiceSelector: MailApiServiceSelector,
+    private val appDatabase: AppDatabase,
+    private val accountDao: AccountDao
 ) : CoroutineWorker(appContext, workerParams) {
 
     private val TAG = "ActionUploadWorker"
@@ -46,7 +49,6 @@ class ActionUploadWorker @AssistedInject constructor(
         val accountId = inputData.getString(KEY_ACCOUNT_ID)
         val entityId = inputData.getString(KEY_ENTITY_ID)
         val actionType = inputData.getString(KEY_ACTION_TYPE)
-        // val actionPayload = inputData.getString(KEY_ACTION_PAYLOAD) // For complex data
 
         if (accountId.isNullOrBlank() || entityId.isNullOrBlank() || actionType.isNullOrBlank()) {
             Timber.e("$TAG: Missing required input data (accountId, entityId, or actionType).")
@@ -56,84 +58,268 @@ class ActionUploadWorker @AssistedInject constructor(
         Timber.d("$TAG: Started for accountId: $accountId, entityId: $entityId, actionType: $actionType")
 
         try {
-            // TODO: P2_WRITE - Get MailApiService for accountId using MailApiServiceSelector
+            val mailService = mailApiServiceSelector.getServiceByAccountId(accountId)
+            if (mailService == null) {
+                Timber.e("$TAG: Could not get MailService for account $accountId. Failing task.")
+                // No specific API call failed here, but service itself is unavailable for the account.
+                // This could imply an issue with account setup, potentially re-auth if account is non-functional.
+                // For now, just fail. The flag needsReAuth is typically set by Auth layer or API call explicitly needing it.
+                try {
+                    messageDao.updateSyncStatusAndError(
+                        entityId,
+                        SyncStatus.ERROR,
+                        "Mail service not found"
+                    )
+                } catch (e: Exception) {
+                    Timber.w(
+                        e,
+                        "Failed to update error status for $entityId when mail service was null"
+                    )
+                }
+                return Result.failure()
+            }
 
-            when (actionType) {
-                ACTION_MARK_MESSAGE_READ -> {
-                    val isRead = inputData.getBoolean("IS_READ", false) // Example: get specific payload data
-                    Timber.d("$TAG: Processing $actionType for message $entityId, isRead: $isRead")
-                    // TODO: P2_WRITE - Implement API call for markMessageRead(accountId, entityId, isRead)
-                    // Simulate network call
-                    delay(1000)
-                    // TODO: P2_WRITE - On success from server:
-                    // messageDao.updateSyncStatus(entityId, SyncStatus.SYNCED)
-                    // TODO: P2_WRITE - On failure from server:
-                    // messageDao.updateLastSyncError(entityId, "Error message", SyncStatus.ERROR)
-                    // return Result.retry() or Result.failure() based on strategy
-                }
-                ACTION_STAR_MESSAGE -> {
-                    val isStarred = inputData.getBoolean("IS_STARRED", false)
-                    Timber.d("$TAG: Processing $actionType for message $entityId, isStarred: $isStarred")
-                    // TODO: P2_WRITE - Implement API call for starMessage(accountId, entityId, isStarred)
-                    delay(1000)
-                }
-                ACTION_DELETE_MESSAGE -> {
-                    Timber.d("$TAG: Processing $actionType for message $entityId")
-                    // TODO: P2_WRITE - Implement API call for deleteMessage(accountId, entityId)
-                    // On success, typically remove the message from local DB: messageDao.deleteMessageById(entityId)
-                    delay(1000)
-                }
-                ACTION_MOVE_MESSAGE -> {
-                    val newFolderId = inputData.getString("NEW_FOLDER_ID")
-                    val oldFolderId = inputData.getString("OLD_FOLDER_ID") // May be needed by some APIs
-                     if (newFolderId.isNullOrBlank()) {
-                        Timber.e("$TAG: $actionType for message $entityId failed: newFolderId is missing.")
-                        messageDao.updateLastSyncError(entityId, "Move failed: new folder ID missing", SyncStatus.ERROR)
-                        return Result.failure()
-                    }
-                    Timber.d("$TAG: Processing $actionType for message $entityId to newFolderId: $newFolderId (from oldFolderId: $oldFolderId)")
-                    // TODO: P2_WRITE - Implement API call for moveMessage(accountId, entityId, newFolderId, oldFolderId)
-                    delay(1000)
-                }
-                ACTION_SEND_MESSAGE -> {
-                     Timber.d("$TAG: Processing $actionType for message $entityId (outbox)")
-                     // TODO: P2_WRITE - Fetch full message details (body, attachments) from DB.
-                     // TODO: P2_WRITE - Implement API call for sendMessage(accountId, messageDetails)
-                     // On success, update message to not be isOutbox, set sentTimestamp, potentially move to Sent folder, set SyncStatus.SYNCED.
-                     // messageDao.markAsSent(entityId, System.currentTimeMillis(), "REAL_SENT_FOLDER_ID_FROM_API_OR_CONFIG")
-                     delay(2000)
-                }
-                ACTION_CREATE_DRAFT, ACTION_UPDATE_DRAFT -> {
-                    val isCreate = actionType == ACTION_CREATE_DRAFT
-                    Timber.d("$TAG: Processing $actionType for draft $entityId")
-                    // TODO: P2_WRITE - Fetch draft details (body, recipients etc.) from DB.
-                    // TODO: P2_WRITE - Implement API call for createOrUpdateDraft(accountId, draftDetails)
-                    // On success, API might return a new ID for created draft, or confirm update. Update local entity's messageId if changed, set SyncStatus.SYNCED.
-                    delay(1500)
-                }
-                // TODO: P2_WRITE - Add cases for other action types (folder actions, account settings)
-                else -> {
-                    Timber.w("$TAG: Unknown actionType: $actionType for entityId: $entityId")
-                    return Result.failure()
+            var success = false
+            var finalErrorMessage: String? = null
+            var needsReAuth = false
+
+            // Generic lambda to handle result failure
+            val handleFailure = { result: Result<*> ->
+                val exception = result.exceptionOrNull()
+                finalErrorMessage = exception?.message ?: "Unknown server error"
+                if (exception is ApiServiceException && exception.errorDetails.isNeedsReAuth) {
+                    needsReAuth = true
                 }
             }
 
-            // If all went well for a specific action and it's not handled above with specific DAO updates:
-            // Timber.d("$TAG: Action $actionType for entity $entityId processed successfully by API (simulated).")
-            // Example generic success update (specific updates are better inside each when case):
-            // if (actionType == ACTION_MARK_MESSAGE_READ || actionType == ACTION_STAR_MESSAGE) { // Assuming these don't delete the entity
-            //    messageDao.updateSyncStatus(entityId, SyncStatus.SYNCED)
-            // }
+            try {
+                when (actionType) {
+                    ACTION_MARK_MESSAGE_READ -> {
+                        val isRead = inputData.getBoolean("IS_READ", false)
+                        val applyToThread = inputData.getBoolean("APPLY_TO_THREAD", false)
+                        val result = if (applyToThread) mailService.markThreadRead(
+                            entityId,
+                            isRead,
+                            accountId
+                        )
+                        else mailService.markMessageRead(entityId, isRead, accountId)
+                        if (result.isSuccess) {
+                            appDatabase.withTransaction {
+                                if (applyToThread) {
+                                    val messageIds =
+                                        messageDao.getMessageIdsByThreadId(entityId, accountId)
+                                    messageDao.updateReadState(
+                                        messageIds,
+                                        isRead,
+                                        SyncStatus.SYNCED
+                                    )
+                                } else {
+                                    messageDao.updateReadState(entityId, isRead, SyncStatus.SYNCED)
+                                }
+                            }
+                            success = true
+                        } else handleFailure(result)
+                    }
 
-            Timber.d("$TAG: Worker finished successfully for accountId: $accountId, entityId: $entityId, actionType: $actionType")
-            return Result.success()
+                    ACTION_STAR_MESSAGE -> {
+                        val isStarred = inputData.getBoolean("IS_STARRED", false)
+                        val result = mailService.starMessage(entityId, isStarred, accountId)
+                        if (result.isSuccess) {
+                            messageDao.updateStarredState(entityId, isStarred, SyncStatus.SYNCED)
+                            success = true
+                        } else handleFailure(result)
+                    }
 
-        } catch (e: Exception) {
-            Timber.e(e, "$TAG: Error processing action $actionType for accountId: $accountId, entityId: $entityId")
-            // TODO: P2_WRITE - Update sync metadata to reflect error for this entity and action.
-            // Example: messageDao.updateLastSyncError(entityId, e.message ?: "Unknown error", SyncStatus.ERROR)
-            // TODO: P2_WRITE - Implement robust retry strategy (e.g., based on exception type)
-            return Result.failure() // Or Result.retry()
+                    ACTION_DELETE_MESSAGE -> {
+                        val applyToThread = inputData.getBoolean("APPLY_TO_THREAD", false)
+                        val result =
+                            if (applyToThread) mailService.deleteThread(entityId, accountId)
+                            else mailService.deleteMessage(entityId, accountId)
+                        if (result.isSuccess) {
+                            appDatabase.withTransaction {
+                                if (applyToThread) {
+                                    val messageIds =
+                                        messageDao.getMessageIdsByThreadId(entityId, accountId)
+                                    messageDao.deleteMessagesByIds(messageIds) // Requires new DAO method
+                                } else {
+                                    messageDao.deleteMessageById(entityId)
+                                }
+                            }
+                            success = true
+                        } else handleFailure(result)
+                    }
+
+                    ACTION_MOVE_MESSAGE -> {
+                        val newFolderId = inputData.getString("NEW_FOLDER_ID")
+                        val oldFolderId = inputData.getString("OLD_FOLDER_ID")
+                        val applyToThread = inputData.getBoolean("APPLY_TO_THREAD", false)
+                        if (newFolderId.isNullOrBlank()) {
+                            finalErrorMessage = "Move failed: newFolderId is missing."
+                        } else {
+                            val result = if (applyToThread) mailService.moveThread(
+                                entityId,
+                                newFolderId,
+                                oldFolderId,
+                                accountId
+                            )
+                            else mailService.moveMessage(
+                                entityId,
+                                newFolderId,
+                                oldFolderId,
+                                accountId
+                            )
+                            if (result.isSuccess) {
+                                appDatabase.withTransaction {
+                                    if (applyToThread) {
+                                        val messageIds =
+                                            messageDao.getMessageIdsByThreadIdAndFolder(
+                                                entityId,
+                                                accountId,
+                                                oldFolderId ?: ""
+                                            ) // oldFolderId might be null if not provided
+                                        messageDao.updateFolderIdForMessages(
+                                            messageIds,
+                                            newFolderId,
+                                            SyncStatus.SYNCED
+                                        )
+                                    } else {
+                                        messageDao.updateMessageFolderAndSyncState(
+                                            entityId,
+                                            newFolderId,
+                                            SyncStatus.SYNCED
+                                        )
+                                    }
+                                }
+                                success = true
+                            } else handleFailure(result)
+                        }
+                    }
+
+                    ACTION_SEND_MESSAGE -> {
+                        val draftJson = inputData.getString("DRAFT_JSON")
+                        val sentFolderId = inputData.getString("SENT_FOLDER_ID") ?: "SENT"
+                        if (draftJson == null) {
+                            finalErrorMessage =
+                                "Draft details missing for sending message $entityId"
+                        } else {
+                            val draft = Json.decodeFromString<MessageDraft>(draftJson)
+                            val result = mailService.sendMessage(draft, accountId)
+                            if (result.isSuccess) {
+                                val sentMessageServerId = result.getOrThrow()
+                                appDatabase.withTransaction {
+                                    messageDao.markAsSent(
+                                        localOutboxMessageId = entityId,
+                                        sentTimestamp = System.currentTimeMillis(),
+                                        targetFolderId = sentFolderId,
+                                        newServerId = sentMessageServerId // Update with server ID if different
+                                    )
+                                }
+                                success = true
+                            } else handleFailure(result)
+                        }
+                    }
+
+                    ACTION_CREATE_DRAFT, ACTION_UPDATE_DRAFT -> {
+                        val isCreate = actionType == ACTION_CREATE_DRAFT
+                        val draftJson = inputData.getString("DRAFT_JSON")
+                        if (draftJson == null) {
+                            finalErrorMessage = "Draft details missing for $actionType on $entityId"
+                        } else {
+                            val draft = Json.decodeFromString<MessageDraft>(draftJson)
+                            val result = if (isCreate) mailService.createDraft(draft, accountId)
+                            else mailService.updateDraft(entityId, draft, accountId)
+                            if (result.isSuccess) {
+                                val (returnedId, _) = result.getOrThrow()
+                                appDatabase.withTransaction {
+                                    messageDao.updateDraftAfterSync(
+                                        localDraftId = entityId,
+                                        newServerId = returnedId, // Use server ID
+                                        syncStatus = SyncStatus.SYNCED,
+                                        subject = draft.subject, // Re-affirm from local draft
+                                        // body might be updated by server, but local body is source of truth before send
+                                        // recipient info also from local draft
+                                        recipientNames = draft.to,
+                                        recipientAddresses = draft.to
+                                    )
+                                    // If body content can change on server and needs to be re-synced:
+                                    // messageBodyDao.updateContentAndStatus(returnedId, returnedBody, SyncStatus.SYNCED)
+                                }
+                                success = true
+                            } else handleFailure(result)
+                        }
+                    }
+
+                    else -> {
+                        Timber.w("$TAG: Unknown actionType: $actionType for entityId: $entityId")
+                        finalErrorMessage = "Unknown action type"
+                    }
+                }
+            } catch (e: Exception) { // Catch-all for unexpected issues within the when block
+                Timber.e(
+                    e,
+                    "$TAG: Exception while processing $actionType for $entityId inside when block"
+                )
+                finalErrorMessage = e.message ?: "Unexpected exception in worker's action handling"
+                if (e is ApiServiceException && e.errorDetails.isNeedsReAuth) {
+                    needsReAuth = true
+                } // else, it's some other exception, re-auth not implied by this catch directly
+            }
+
+            if (success) {
+                Timber.d("$TAG: Action $actionType for entity $entityId processed successfully.")
+                return Result.success()
+            } else {
+                Timber.e("$TAG: Action $actionType for entity $entityId failed. Error: $finalErrorMessage")
+                if (needsReAuth) {
+                    Timber.w("$TAG: Marking account $accountId for re-authentication due to $actionType failure.")
+                    try {
+                        accountDao.setNeedsReauthentication(accountId, true)
+                    } catch (dbException: Exception) {
+                        Timber.e(
+                            dbException,
+                            "$TAG: Failed to mark account $accountId for re-authentication in DB."
+                        )
+                    }
+                }
+                // Update sync metadata to reflect error for this entity and action.
+                try {
+                    // This assumes entityId is a messageId. If it can be folderId, this needs adjustment.
+                    // For now, ActionUploadWorker primarily deals with message-like actions.
+                    messageDao.updateLastSyncError(
+                        entityId,
+                        finalErrorMessage ?: "Unknown server error",
+                        SyncStatus.ERROR
+                    )
+                } catch (e: Exception) {
+                    Timber.w(
+                        e,
+                        "$TAG: Failed to update message sync error status for $entityId after $actionType failure."
+                    )
+                }
+
+                return Result.failure()
+            }
+        } catch (outerException: Exception) { // Catch exceptions from mailServiceSelector or initial setup
+            Timber.e(
+                outerException,
+                "$TAG: Unhandled exception in ActionUploadWorker for $actionType, $entityId. Account $accountId"
+            )
+            // Check if this outer exception implies re-auth (less likely here, but good for robustness)
+            if (outerException is ApiServiceException && outerException.errorDetails.isNeedsReAuth) {
+                try {
+                    accountDao.setNeedsReauthentication(
+                        accountId!!,
+                        true
+                    ) // accountId should be non-null if we reached here
+                    Timber.w("$TAG: Marking account $accountId for re-authentication due to outer exception.")
+                } catch (dbException: Exception) {
+                    Timber.e(
+                        dbException,
+                        "$TAG: Failed to mark account $accountId for re-auth in DB (outer exception)."
+                    )
+                }
+            }
+            return Result.failure()
         }
     }
 }

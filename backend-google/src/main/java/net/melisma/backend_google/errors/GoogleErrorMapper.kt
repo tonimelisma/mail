@@ -3,11 +3,17 @@ package net.melisma.backend_google.errors
 import net.melisma.core_data.errors.ErrorMapperService
 import net.melisma.core_data.model.ErrorDetails
 import net.openid.appauth.AuthorizationException
+import timber.log.Timber
 import java.io.IOException
+import java.net.UnknownHostException
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.cancellation.CancellationException
-import timber.log.Timber
+
+// Ktor exceptions that GmailApiHelper might throw if it used Ktor directly for all calls
+// For now, assume GMS ApiException and AppAuth AuthorizationException are primary concerns from GoogleSignInClient and AppAuth.
+// import io.ktor.client.plugins.ClientRequestException 
+// import io.ktor.client.plugins.ServerResponseException
 
 @Singleton
 class GoogleErrorMapper @Inject constructor() : ErrorMapperService {
@@ -25,9 +31,18 @@ class GoogleErrorMapper @Inject constructor() : ErrorMapperService {
                 ErrorDetails(
                     message = message,
                     code = "AppAuth-${exception.code}",
-                    cause = exception
+                    cause = exception,
+                    isNeedsReAuth = true // Key change: set isNeedsReAuth
                 )
             }
+            // Specific Google Auth re-authentication exception if one exists from GoogleSignIn
+            // For example, GoogleAuthUiRequiredException (hypothetical)
+            // is GoogleAuthNeedsReAuthException -> ErrorDetails(
+            //     message = exception.message ?: "Your Google session requires re-authentication.",
+            //     code = exception.javaClass.simpleName,
+            //     cause = exception,
+            //     isNeedsReAuth = true
+            // )
 
             is CancellationException -> ErrorDetails(
                 message = exception.message ?: "Operation cancelled.",
@@ -35,6 +50,9 @@ class GoogleErrorMapper @Inject constructor() : ErrorMapperService {
                 cause = exception
             )
             is com.google.android.gms.common.api.ApiException -> {
+                // Some GMS API exceptions might indicate a need for re-auth, e.g., related to Play Services update or specific auth codes.
+                // This requires more detailed knowledge of specific status codes from GMS Core.
+                // For now, not setting isNeedsReAuth broadly for all GMS ApiExceptions.
                 val message = exception.message?.takeIf { it.isNotBlank() }
                     ?: "A Google Play Services error occurred (code: ${exception.statusCode})"
                 ErrorDetails(
@@ -44,19 +62,30 @@ class GoogleErrorMapper @Inject constructor() : ErrorMapperService {
                 )
             }
 
+            is UnknownHostException -> ErrorDetails(
+                message = "No internet connection. Please check your network.",
+                code = "UnknownHost",
+                cause = exception,
+                isConnectivityIssue = true
+            )
+
             is IOException -> ErrorDetails( // General network IO errors
                 message = exception.message
                     ?: "A network error occurred with Google services. Please check your connection.",
                 code = "IOException",
-                cause = exception
+                cause = exception,
+                isConnectivityIssue = true // Key change: set isConnectivityIssue
             )
+
+            // TODO: Add Ktor specific exception handling if GmailApiHelper uses Ktor more directly for non-SDK calls
+            // and these are not caught and re-wrapped by a GMS/AppAuth exception.
+            // is ClientRequestException -> { ... isConnectivityIssue = true / isNeedsReAuth = (e.response.status.value == 401) ... }
+            // is ServerResponseException -> { ... isConnectivityIssue = true ... }
 
             null -> ErrorDetails( // Handle null exception case
                 message = "An unknown error occurred with Google services.",
                 code = "UnknownThrowableNullGoogle"
-                // cause is null here
             )
-            // Fallback for other Throwables
             else -> ErrorDetails(
                 message = exception.message?.takeIf { it.isNotBlank() }
                     ?: "An unexpected error occurred with Google services.",
@@ -65,16 +94,5 @@ class GoogleErrorMapper @Inject constructor() : ErrorMapperService {
             )
         }
     }
-
-    fun mapNetworkOrApiException(exception: Throwable?): String {
-        // This method might become less relevant if UI consumes ErrorDetails directly.
-        // For now, make it use the new mapExceptionToErrorDetails.
-        return mapExceptionToErrorDetails(exception).message
-    }
-
-    fun mapAuthExceptionToUserMessage(exception: Throwable?): String {
-        // This method might become less relevant if UI consumes ErrorDetails directly.
-        // For now, make it use the new mapExceptionToErrorDetails.
-        return mapExceptionToErrorDetails(exception).message
-    }
+    // Removed mapNetworkOrApiException and mapAuthExceptionToUserMessage
 }

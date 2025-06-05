@@ -1,5 +1,6 @@
 package net.melisma.backend_google.di
 
+// Added imports for Dispatchers
 import android.accounts.AccountManager
 import android.content.Context
 import dagger.Module
@@ -21,6 +22,8 @@ import io.ktor.client.request.header
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.serialization.kotlinx.json.json
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.serialization.json.Json
 import net.melisma.backend_google.GmailApiHelper
 import net.melisma.backend_google.auth.ActiveGoogleAccountHolder
@@ -164,10 +167,19 @@ object BackendGoogleModule {
     @Singleton
     fun provideGmailApiHelper(
         @GoogleHttpClient httpClient: HttpClient,
-        googleErrorMapper: GoogleErrorMapper
+        googleErrorMapper: GoogleErrorMapper,
+        ioDispatcher: CoroutineDispatcher,
+        gmailService: com.google.api.services.gmail.Gmail?,
+        authManager: GoogleAuthManager
     ): GmailApiHelper {
-        Timber.d("Providing GmailApiHelper")
-        return GmailApiHelper(httpClient, googleErrorMapper)
+        Timber.d("Providing GmailApiHelper with all dependencies, including GoogleAuthManager")
+        return GmailApiHelper(
+            httpClient,
+            googleErrorMapper,
+            ioDispatcher,
+            gmailService,
+            authManager
+        )
     }
 
     @Provides
@@ -203,5 +215,34 @@ object BackendGoogleModule {
     fun provideAccountManager(@ApplicationContext context: Context): AccountManager { // Ensure @ApplicationContext if directly using it here for safety
         Timber.d("Providing AccountManager")
         return AccountManager.get(context)
+    }
+
+    // Added provider for CoroutineDispatcher
+    @Provides
+    @Singleton
+    fun provideIoDispatcher(): CoroutineDispatcher = Dispatchers.IO
+
+    // Added provider for Gmail Service (nullable placeholder)
+    @Provides
+    @Singleton
+    fun provideGmailService(
+        // Potentially inject: GoogleAuthManager, ApplicationContext, ActiveGoogleAccountHolder
+        // For now, a simple approach to satisfy constructor:
+        // activeGoogleAccountHolder: ActiveGoogleAccountHolder, 
+        // googleAuthManager: GoogleAuthManager,
+        // @ApplicationContext context: Context 
+    ): com.google.api.services.gmail.Gmail? {
+        Timber.w("Providing null for com.google.api.services.gmail.Gmail. Needs full GMSCore/GoogleSignIn based init including HttpTransport, JsonFactory and active user Credentials.")
+        // TODO: Implement proper Gmail service initialization. This likely involves:
+        // 1. Get active GoogleSignInAccount from GoogleSignIn.getLastSignedInAccount(context).
+        // 2. If null, or token needs refresh, trigger sign-in/re-auth flow.
+        // 3. Build GoogleAccountCredential using GoogleSignInAccount and GMAIL_SCOPES.
+        // 4. Initialize HttpTransport (e.g., GoogleNetHttpTransport.newTrustedTransport() or OkHttp compatible one).
+        // 5. Initialize JsonFactory (e.g., JacksonFactory.getDefaultInstance()).
+        // 6. Build Gmail service: com.google.api.services.gmail.Gmail.Builder(transport, jsonFactory, credential)
+        //    .setApplicationName("Melisma Mail").build()
+        // This component is @Singleton, so the service should be cached once created for an active user.
+        // Handling account switching or token expiry requires more complex logic here or in GoogleAuthManager.
+        return null // Placeholder to allow compilation
     }
 }

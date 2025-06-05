@@ -9,9 +9,10 @@ import net.melisma.core_db.entity.AccountEntity
 fun AccountEntity.toDomainAccount(): Account {
     return Account(
         id = this.id,
-        username = this.username, // AccountEntity.username should map to Account.username
-        // emailAddress from AccountEntity is not directly in Account model but username often serves as email
+        displayName = this.displayName,
+        emailAddress = this.emailAddress,
         providerType = this.providerType,
-        needsReauthentication = this.needsReauthentication
+        needsReauthentication = this.needsReauthentication,
+        isLocalOnly = this.isLocalOnly
     )
 } 

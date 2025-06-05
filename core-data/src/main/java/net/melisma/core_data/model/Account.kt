@@ -14,7 +14,8 @@ data class Account(
     val displayName: String?,
     val emailAddress: String,
     val providerType: String,
-    val needsReauthentication: Boolean = false
+    val needsReauthentication: Boolean = false,
+    val isLocalOnly: Boolean = false
 ) {
     companion object {
         const val PROVIDER_TYPE_MS = "MS"

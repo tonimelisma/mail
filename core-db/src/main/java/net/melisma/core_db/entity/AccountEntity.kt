@@ -22,5 +22,12 @@ data class AccountEntity(
     val lastSuccessfulSyncTimestamp: Long? = null,
     val lastSyncError: String? = null,
     val isLocalOnly: Boolean = false,
-    val needsFullSync: Boolean = false
+    val needsFullSync: Boolean = false,
+
+    // Sync metadata specific to folder list synchronization
+    val lastFolderListSyncTimestamp: Long? = null,
+    val lastFolderListSyncError: String? = null,
+
+    // Sync metadata for other potential top-level sync errors not covered by folder list or general status
+    val lastGenericSyncError: String? = null
 )

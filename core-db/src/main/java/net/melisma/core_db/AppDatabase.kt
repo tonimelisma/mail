@@ -16,11 +16,13 @@ import net.melisma.core_db.dao.AttachmentDao
 import net.melisma.core_db.dao.FolderDao
 import net.melisma.core_db.dao.MessageBodyDao
 import net.melisma.core_db.dao.MessageDao
+import net.melisma.core_db.dao.RemoteKeyDao
 import net.melisma.core_db.entity.AccountEntity
 import net.melisma.core_db.entity.AttachmentEntity
 import net.melisma.core_db.entity.FolderEntity
 import net.melisma.core_db.entity.MessageBodyEntity
 import net.melisma.core_db.entity.MessageEntity
+import net.melisma.core_db.entity.RemoteKeyEntity
 
 class SyncStatusConverter {
     @TypeConverter
@@ -39,10 +41,11 @@ class SyncStatusConverter {
         AccountEntity::class, 
         FolderEntity::class, 
         MessageEntity::class, 
-        MessageBodyEntity::class, 
-        AttachmentEntity::class
+        MessageBodyEntity::class,
+        AttachmentEntity::class,
+        RemoteKeyEntity::class
     ],
-    version = 10,
+    version = 11,
     exportSchema = false // Set to true for production apps for schema migration history
 )
 @TypeConverters(WellKnownFolderTypeConverter::class, StringListConverter::class, SyncStatusConverter::class)
@@ -52,6 +55,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun messageDao(): MessageDao
     abstract fun messageBodyDao(): MessageBodyDao
     abstract fun attachmentDao(): AttachmentDao
+    abstract fun remoteKeyDao(): RemoteKeyDao
 
     companion object {
         @Volatile
@@ -74,7 +78,8 @@ abstract class AppDatabase : RoomDatabase() {
                         MIGRATION_6_7,
                         MIGRATION_7_8,
                         MIGRATION_8_9,
-                        MIGRATION_9_10
+                        MIGRATION_9_10,
+                        MIGRATION_10_11
                     )
                     .build()
                 INSTANCE = instance
@@ -284,6 +289,22 @@ abstract class AppDatabase : RoomDatabase() {
 
                 // Create unique index on emailAddress
                 db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_accounts_emailAddress` ON `accounts` (`emailAddress`)")
+            }
+        }
+
+        val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `remote_keys` (
+                        `folderId` TEXT NOT NULL,
+                        `nextPageToken` TEXT,
+                        `prevPageToken` TEXT,
+                        PRIMARY KEY(`folderId`)
+                    )
+                    """
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_remote_keys_folderId` ON `remote_keys` (`folderId`)")
             }
         }
     }

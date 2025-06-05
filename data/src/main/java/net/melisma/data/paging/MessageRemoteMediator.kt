@@ -6,30 +6,16 @@ import androidx.paging.PagingState
 import androidx.paging.RemoteMediator
 import androidx.room.withTransaction
 import kotlinx.coroutines.CoroutineDispatcher
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.first
+import net.melisma.core_data.connectivity.NetworkMonitor
 import net.melisma.core_data.datasource.MailApiService
-import net.melisma.core_data.model.Message
-import net.melisma.core_data.model.MessageSyncState
+import net.melisma.core_data.model.PagedMessagesResponse
 import net.melisma.core_db.AppDatabase
 import net.melisma.core_db.entity.MessageEntity
+import net.melisma.core_db.entity.RemoteKeyEntity
 import net.melisma.data.mapper.toEntity
 import timber.log.Timber
 import java.io.IOException
-
-// Define a simple class to hold API response for paged messages
-data class PagedMessageResponse(
-    val messages: List<Message>,
-    val nextPageKey: String?, // Could be an offset, a timestamp, or a specific token
-    val prevPageKey: String? // For bi-directional paging, if supported
-)
-
-// Assume MailApiService has an updated method like this:
-// suspend fun getMessagesForFolderPaged(
-//     folderId: String,
-//     pageSize: Int,
-//     pageKey: String? // Could be null for the first page
-// ): Result<PagedMessageResponse>
-
 
 @OptIn(ExperimentalPagingApi::class)
 class MessageRemoteMediator(
@@ -37,34 +23,15 @@ class MessageRemoteMediator(
     private val folderId: String,
     private val database: AppDatabase,
     private val mailApiService: MailApiService,
-    private val ioDispatcher: CoroutineDispatcher,
-    private val onSyncStateChanged: (MessageSyncState) -> Unit
+    private val networkMonitor: NetworkMonitor,
+    private val ioDispatcher: CoroutineDispatcher
 ) : RemoteMediator<Int, MessageEntity>() {
 
     private val messageDao = database.messageDao()
-
-    // Define a page size for fetching messages during REFRESH.
-    // This should be large enough to get a good initial set, but not excessive.
-    // Consistent with DefaultMessageRepository.syncMessagesForFolderInternal
-    private val REFRESH_PAGE_SIZE = 100
+    private val remoteKeyDao = database.remoteKeyDao()
 
     override suspend fun initialize(): InitializeAction {
-        // val messageCount = withContext(ioDispatcher) {
-        //     messageDao.getMessagesCountForFolder(accountId, folderId)
-        // }
-
-        // return if (messageCount == 0) {
-        //     Timber.d(
-        //         "initialize() for $accountId/$folderId: No messages cached (count is $messageCount). Returning LAUNCH_INITIAL_REFRESH."
-        //     )
-        //     InitializeAction.LAUNCH_INITIAL_REFRESH
-        // } else {
-        //     Timber.d(
-        //         "initialize() for $accountId/$folderId: Messages found in cache (count is $messageCount). Returning SKIP_INITIAL_REFRESH."
-        //     )
-        //     InitializeAction.SKIP_INITIAL_REFRESH
-        // }
-        Timber.d("initialize() for $accountId/$folderId: Always returning LAUNCH_INITIAL_REFRESH to ensure cache is cleared and fresh data is loaded.")
+        Timber.d("initialize() for $accountId/$folderId: Launching initial refresh as per simplified plan.")
         return InitializeAction.LAUNCH_INITIAL_REFRESH
     }
 
@@ -72,127 +39,96 @@ class MessageRemoteMediator(
         loadType: LoadType,
         state: PagingState<Int, MessageEntity>
     ): MediatorResult {
-        Timber.i(
-            "load() called. LoadType: $loadType, Account: $accountId, Folder: $folderId, PageSize: ${state.config.pageSize}, Prefetch: ${state.config.prefetchDistance}, InitialSize: ${state.config.initialLoadSize}"
-        )
-        onSyncStateChanged(MessageSyncState.Syncing(accountId, folderId))
-        // Timber.d(
-        //     "load() called. LoadType: $loadType, Account: $accountId, Folder: $folderId, PageSize: ${state.config.pageSize}"
-        // )
+        Timber.i("load() called. LoadType: $loadType, Account: $accountId, Folder: $folderId, ConfigPageSize: ${state.config.pageSize}")
 
-        return try {
-            when (loadType) {
+        try {
+            if (loadType != LoadType.REFRESH && !networkMonitor.isOnline.first()) {
+                Timber.w("load() for $accountId/$folderId ($loadType): Network is offline. Returning error.")
+                return MediatorResult.Error(IOException("Network unavailable. Cannot load messages for $loadType."))
+            }
+
+            val pageTokenToFetch: String? = when (loadType) {
                 LoadType.REFRESH -> {
-                    // Fetch from network
-                    Timber.i(
-                        "REFRESH for $accountId/$folderId: Fetching messages from network. API page size: $REFRESH_PAGE_SIZE"
-                    )
-                    val apiResponse = withContext(ioDispatcher) {
-                        mailApiService.getMessagesForFolder(
-                            folderId = folderId,
-                            // selectFields = emptyList(), // Use API default or specify if needed
-                            maxResults = REFRESH_PAGE_SIZE
-                        )
-                    }
-
-                    if (apiResponse.isSuccess) {
-                        val messagesFromApi = apiResponse.getOrThrow()
-                        Timber.i(
-                            "REFRESH for $accountId/$folderId: Fetched ${messagesFromApi.size} messages from API."
-                        )
-
-                        val dbLogPrefix = "REFRESH DB for $accountId/$folderId:"
-                        database.withTransaction {
-                            Timber.d(
-                                "$dbLogPrefix Clearing old messages for $accountId/$folderId before inserting ${messagesFromApi.size} new ones."
-                            )
-                            // It's important that this deletion is specific to the accountId and folderId
-                            messageDao.deleteMessagesForFolder(accountId, folderId)
-                            val messageEntities =
-                                messagesFromApi.map { it.toEntity(accountId, folderId) }
-                            messageDao.insertOrUpdateMessages(messageEntities)
-                            Timber.d("$dbLogPrefix Database transaction completed.")
-                        }
-                        // Since the API doesn't support true pagination with next/prev keys,
-                        // after a refresh, we assume we have all we can get via this mediator for APPEND/PREPEND.
-                        val endOfPaginationReached = true
-                        Timber.i(
-                            "REFRESH for $accountId/$folderId: Success. endOfPaginationReached=$endOfPaginationReached. Notifying SyncSuccess."
-                        )
-                        onSyncStateChanged(MessageSyncState.SyncSuccess(accountId, folderId))
-                        return MediatorResult.Success(endOfPaginationReached = endOfPaginationReached)
-                    } else {
-                        val exception = apiResponse.exceptionOrNull()
-                            ?: IOException("Unknown API error on REFRESH for $accountId/$folderId")
-                        Timber.e(
-                            exception,
-                            "REFRESH for $accountId/$folderId: API call failed: ${exception.message}"
-                        )
-                        onSyncStateChanged(
-                            MessageSyncState.SyncError(
-                                accountId,
-                                folderId,
-                                exception.message ?: "API Error on REFRESH"
-                            )
-                        )
-                        return MediatorResult.Error(exception)
-                    }
+                    Timber.d("load() REFRESH for $accountId/$folderId: No page token needed for initial load.")
+                    null
                 }
 
                 LoadType.PREPEND -> {
-                    // Prepending not supported with the current API structure
-                    Timber.i(
-                        "PREPEND for $accountId/$folderId: Not supported, returning success with endOfPaginationReached = true. Notifying SyncSuccess (as no error occurred)."
-                    )
-                    onSyncStateChanged(
-                        MessageSyncState.SyncSuccess(
-                            accountId,
-                            folderId
-                        )
-                    ) // No actual sync error
+                    Timber.i("load() PREPEND for $accountId/$folderId: Not supported by this mediator. End of pagination.")
                     return MediatorResult.Success(endOfPaginationReached = true)
                 }
 
                 LoadType.APPEND -> {
-                    // Appending from network not supported with the current API structure via RemoteMediator
-                    // The PagingSource from DAO handles serving already fetched data.
-                    Timber.i(
-                        "APPEND for $accountId/$folderId: Not supported by RemoteMediator, returning success with endOfPaginationReached = true. Notifying SyncSuccess."
-                    )
-                    onSyncStateChanged(
-                        MessageSyncState.SyncSuccess(
-                            accountId,
-                            folderId
-                        )
-                    ) // No actual sync error
-                    return MediatorResult.Success(endOfPaginationReached = true)
+                    val remoteKey = database.withTransaction {
+                        remoteKeyDao.getRemoteKeyForFolder(folderId)
+                    }
+
+                    if (remoteKey?.nextPageToken == null) {
+                        Timber.i("load() APPEND for $accountId/$folderId: No next page token in RemoteKeyEntity. End of pagination.")
+                        return MediatorResult.Success(endOfPaginationReached = true)
+                    }
+                    Timber.d("load() APPEND for $accountId/$folderId: Using nextPageToken from RemoteKeyEntity: ${remoteKey.nextPageToken}")
+                    remoteKey.nextPageToken
                 }
             }
-        } catch (e: IOException) {
-            Timber.e(
-                e,
-                "IOException during load ($loadType for $accountId/$folderId): ${e.message}"
-            )
-            onSyncStateChanged(
-                MessageSyncState.SyncError(
-                    accountId,
-                    folderId,
-                    e.message ?: "Network Error during $loadType"
+
+            Timber.d("load() for $accountId/$folderId ($loadType): Fetching messages. PageToken to use: '$pageTokenToFetch', PageSize: ${state.config.pageSize}")
+
+            val apiResponseResult: Result<PagedMessagesResponse> =
+                mailApiService.getMessagesForFolder(
+                    folderId = folderId,
+                    maxResults = state.config.pageSize,
+                    pageToken = pageTokenToFetch
                 )
-            )
+
+            if (apiResponseResult.isSuccess) {
+                val apiResponse = apiResponseResult.getOrThrow()
+                val messagesFromApi = apiResponse.messages
+                val newNextPageToken = apiResponse.nextPageToken
+                val endOfPaginationReached = newNextPageToken == null
+
+                Timber.i("load() for $accountId/$folderId ($loadType): API success. Fetched ${messagesFromApi.size} messages. NewNextPageToken: '$newNextPageToken'. EndReached: $endOfPaginationReached")
+
+                database.withTransaction {
+                    if (loadType == LoadType.REFRESH) {
+                        Timber.d("load() REFRESH for $accountId/$folderId: Clearing old messages and remote key for folder.")
+                        messageDao.deleteMessagesForFolder(accountId, folderId)
+                        remoteKeyDao.deleteRemoteKeyForFolder(folderId)
+                    }
+
+                    if (loadType == LoadType.APPEND) remoteKeyDao.getRemoteKeyForFolder(folderId) else null
+                    remoteKeyDao.insertOrReplace(
+                        RemoteKeyEntity(
+                            folderId = folderId,
+                            nextPageToken = newNextPageToken,
+                            prevPageToken = if (loadType == LoadType.APPEND) pageTokenToFetch else null
+                        )
+                    )
+                    Timber.d("load() for $accountId/$folderId ($loadType): Upserted RemoteKeyEntity. Next: '$newNextPageToken', Prev: '${if (loadType == LoadType.APPEND) pageTokenToFetch else null}'.")
+
+                    val messageEntities = messagesFromApi.map {
+                        it.toEntity(
+                            accountId = accountId,
+                            folderId = folderId
+                        )
+                    }
+                    messageDao.insertOrUpdateMessages(messageEntities)
+                    Timber.d("load() ($loadType) for $accountId/$folderId: Inserted/Updated ${messageEntities.size} messages into DB.")
+                }
+
+                return MediatorResult.Success(endOfPaginationReached = endOfPaginationReached)
+            } else {
+                val exception = apiResponseResult.exceptionOrNull()
+                    ?: IOException("Unknown API error during $loadType for $accountId/$folderId")
+                Timber.e(exception, "load() ($loadType) for $accountId/$folderId: API call failed.")
+                return MediatorResult.Error(exception)
+            }
+
+        } catch (e: IOException) {
+            Timber.e(e, "IOException during load ($loadType for $accountId/$folderId)")
             return MediatorResult.Error(e)
         } catch (e: Exception) {
-            Timber.e(
-                e,
-                "Generic exception during load ($loadType for $accountId/$folderId): ${e.message}"
-            )
-            onSyncStateChanged(
-                MessageSyncState.SyncError(
-                    accountId,
-                    folderId,
-                    e.message ?: "Unknown Error during $loadType"
-                )
-            )
+            Timber.e(e, "Generic exception during load ($loadType for $accountId/$folderId)")
             return MediatorResult.Error(e)
         }
     }

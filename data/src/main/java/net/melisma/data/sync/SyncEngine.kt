@@ -1,25 +1,34 @@
 package net.melisma.data.sync
 
+import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.workDataOf
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import net.melisma.core_data.connectivity.NetworkMonitor
+import net.melisma.core_data.datasource.MailApiServiceSelector
+import net.melisma.core_data.di.ApplicationScope
+import net.melisma.core_data.di.Dispatcher
+import net.melisma.core_data.di.MailDispatchers
 import net.melisma.core_db.dao.AccountDao
 import net.melisma.core_db.dao.FolderDao
 import net.melisma.core_db.dao.MessageDao
 import net.melisma.data.sync.workers.ActionUploadWorker
 import net.melisma.data.sync.workers.AttachmentDownloadWorker
+import net.melisma.data.sync.workers.CacheCleanupWorker
 import net.melisma.data.sync.workers.FolderContentSyncWorker
 import net.melisma.data.sync.workers.FolderListSyncWorker
 import net.melisma.data.sync.workers.MessageBodyDownloadWorker
 import timber.log.Timber
+import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import androidx.work.ExistingPeriodicWorkPolicy
-import androidx.work.PeriodicWorkRequestBuilder
-import java.util.concurrent.TimeUnit
 
 enum class SyncProgress {
     IDLE,
@@ -32,8 +41,11 @@ class SyncEngine @Inject constructor(
     private val workManager: WorkManager,
     private val accountDao: AccountDao, // Example DAO, add others as needed
     private val folderDao: FolderDao,   // Example DAO
-    private val messageDao: MessageDao  // Example DAO
-    // TODO: P1_SYNC - Inject MailApiServiceSelector or similar
+    private val messageDao: MessageDao,  // Example DAO
+    private val mailApiServiceSelector: MailApiServiceSelector,
+    private val networkMonitor: NetworkMonitor,
+    @ApplicationScope private val externalScope: CoroutineScope,
+    @Dispatcher(MailDispatchers.IO) private val ioDispatcher: CoroutineDispatcher
 ) {
     private val TAG = "SyncEngine"
 
@@ -44,157 +56,170 @@ class SyncEngine @Inject constructor(
 
     // --- Action Enqueuing (from Phase 2) ---
     fun enqueueMessageAction(accountId: String, messageId: String, actionType: String, payload: Map<String, Any?>) {
-        Timber.d("$TAG: Enqueuing ActionUploadWorker for message action: $actionType, messageId: $messageId")
-        // TODO: P3_SYNC - Implement actual priority using WorkManager's setExpedited or by chaining work requests.
-        // User-initiated actions like this should generally have higher priority.
-        val workRequestBuilder = OneTimeWorkRequestBuilder<ActionUploadWorker>()
-            .setInputData(
-                workDataOf(
-                    ActionUploadWorker.KEY_ACCOUNT_ID to accountId,
-                    ActionUploadWorker.KEY_ENTITY_ID to messageId,
-                    ActionUploadWorker.KEY_ACTION_TYPE to actionType,
-                    *payload.toList().toTypedArray() // Spread operator for map to varargs pairs
+        externalScope.launch(ioDispatcher) {
+            if (!networkMonitor.isOnline.first()) {
+                Timber.w("$TAG: Network offline. Skipping ActionUploadWorker for message action: $actionType, messageId: $messageId")
+                return@launch
+            }
+            Timber.d("$TAG: Enqueuing ActionUploadWorker for message action: $actionType, messageId: $messageId")
+            val workRequestBuilder = OneTimeWorkRequestBuilder<ActionUploadWorker>()
+                .setInputData(
+                    workDataOf(
+                        ActionUploadWorker.KEY_ACCOUNT_ID to accountId,
+                        ActionUploadWorker.KEY_ENTITY_ID to messageId,
+                        ActionUploadWorker.KEY_ACTION_TYPE to actionType,
+                        *payload.toList().toTypedArray()
+                    )
                 )
-            )
-            .addTag("${actionType}_${accountId}_${messageId}")
-
-        // Example of how priority could be conceptualized:
-        // if (actionType == ActionUploadWorker.ACTION_SEND_MESSAGE) {
-        //    workRequestBuilder.setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
-        // }
-
-        workManager.enqueue(workRequestBuilder.build())
-        _overallSyncState.value = SyncProgress.SYNCING // Basic state update
-        // TODO: More robust state update based on work completion
+                .addTag("${actionType}_${accountId}_${messageId}")
+            workManager.enqueue(workRequestBuilder.build())
+            _overallSyncState.value = SyncProgress.SYNCING
+        }
     }
 
     fun enqueueThreadAction(accountId: String, threadId: String, actionType: String, payload: Map<String, Any?>) {
-        Timber.d("$TAG: Enqueuing ActionUploadWorker for thread action: $actionType, threadId: $threadId")
-        // TODO: P3_SYNC - Implement actual priority.
-        val workRequest = OneTimeWorkRequestBuilder<ActionUploadWorker>()
-            .setInputData(
-                workDataOf(
-                    ActionUploadWorker.KEY_ACCOUNT_ID to accountId,
-                    ActionUploadWorker.KEY_ENTITY_ID to threadId, // Assuming threadId is the entityId for thread actions
-                    ActionUploadWorker.KEY_ACTION_TYPE to actionType,
-                    *payload.toList().toTypedArray()
+        externalScope.launch(ioDispatcher) {
+            if (!networkMonitor.isOnline.first()) {
+                Timber.w("$TAG: Network offline. Skipping ActionUploadWorker for thread action: $actionType, threadId: $threadId")
+                return@launch
+            }
+            Timber.d("$TAG: Enqueuing ActionUploadWorker for thread action: $actionType, threadId: $threadId")
+            val workRequest = OneTimeWorkRequestBuilder<ActionUploadWorker>()
+                .setInputData(
+                    workDataOf(
+                        ActionUploadWorker.KEY_ACCOUNT_ID to accountId,
+                        ActionUploadWorker.KEY_ENTITY_ID to threadId,
+                        ActionUploadWorker.KEY_ACTION_TYPE to actionType,
+                        *payload.toList().toTypedArray()
+                    )
                 )
-            )
-            .addTag("${actionType}_${accountId}_${threadId}")
-            .build()
-        workManager.enqueue(workRequest)
-        _overallSyncState.value = SyncProgress.SYNCING
+                .addTag("${actionType}_${accountId}_${threadId}")
+                .build()
+            workManager.enqueue(workRequest)
+            _overallSyncState.value = SyncProgress.SYNCING
+        }
     }
 
     // --- Content Sync/Download Triggers ---
     fun syncFolders(accountId: String) {
-        Timber.d("Enqueuing FolderListSyncWorker for accountId: $accountId")
-        // TODO: P3_SYNC - Consider if this should be unique work to prevent duplicates if called rapidly.
-        _overallSyncState.value = SyncProgress.SYNCING
-        val workRequest = OneTimeWorkRequestBuilder<FolderListSyncWorker>()
-            .setInputData(workDataOf("ACCOUNT_ID" to accountId))
-            .addTag("FolderListSync_${accountId}") // Tag for observation or cancellation
-            .build()
-        workManager.enqueue(workRequest)
-        // Basic state update, real update would await worker completion
+        externalScope.launch(ioDispatcher) {
+            if (!networkMonitor.isOnline.first()) {
+                Timber.w("$TAG: Network offline. Skipping FolderListSyncWorker for accountId: $accountId")
+                return@launch
+            }
+            Timber.d("Enqueuing FolderListSyncWorker for accountId: $accountId")
+            _overallSyncState.value = SyncProgress.SYNCING
+            val workRequest = OneTimeWorkRequestBuilder<FolderListSyncWorker>()
+                .setInputData(workDataOf("ACCOUNT_ID" to accountId))
+                .addTag("FolderListSync_${accountId}")
+                .build()
+            workManager.enqueue(workRequest)
+        }
     }
 
     fun syncFolderContent(accountId: String, folderId: String, folderRemoteId: String) {
-        Timber.d("Enqueuing FolderContentSyncWorker for accountId: $accountId, folderId: $folderId, folderRemoteId: $folderRemoteId")
-        _overallSyncState.value = SyncProgress.SYNCING
-        val workRequest = OneTimeWorkRequestBuilder<FolderContentSyncWorker>()
-            .setInputData(
-                workDataOf(
-                    "ACCOUNT_ID" to accountId,
-                    "FOLDER_ID" to folderId,
-                    "FOLDER_REMOTE_ID" to folderRemoteId
+        externalScope.launch(ioDispatcher) {
+            if (!networkMonitor.isOnline.first()) {
+                Timber.w("$TAG: Network offline. Skipping FolderContentSyncWorker for accountId: $accountId, folderId: $folderId")
+                return@launch
+            }
+            Timber.d("Enqueuing FolderContentSyncWorker for accountId: $accountId, folderId: $folderId, folderRemoteId: $folderRemoteId")
+            _overallSyncState.value = SyncProgress.SYNCING
+            val workRequest = OneTimeWorkRequestBuilder<FolderContentSyncWorker>()
+                .setInputData(
+                    workDataOf(
+                        "ACCOUNT_ID" to accountId,
+                        "FOLDER_ID" to folderId,
+                        "FOLDER_REMOTE_ID" to folderRemoteId
+                    )
                 )
-            )
-            .addTag("FolderContentSync_${accountId}_${folderId}")
-            .build()
-        workManager.enqueue(workRequest)
+                .addTag("FolderContentSync_${accountId}_${folderId}")
+                .build()
+            workManager.enqueue(workRequest)
+        }
     }
 
     fun downloadMessageBody(accountId: String, messageId: String) {
-        Timber.d("Enqueuing MessageBodyDownloadWorker for accountId: $accountId, messageId: $messageId")
-        // This is typically a user-triggered action, could be higher priority.
-        _overallSyncState.value = SyncProgress.SYNCING
-        val workRequest = OneTimeWorkRequestBuilder<MessageBodyDownloadWorker>()
-            .setInputData(
-                workDataOf(
-                    "ACCOUNT_ID" to accountId,
-                    "MESSAGE_ID" to messageId
+        externalScope.launch(ioDispatcher) {
+            if (!networkMonitor.isOnline.first()) {
+                Timber.w("$TAG: Network offline. Skipping MessageBodyDownloadWorker for accountId: $accountId, messageId: $messageId")
+                return@launch
+            }
+            Timber.d("Enqueuing MessageBodyDownloadWorker for accountId: $accountId, messageId: $messageId")
+            _overallSyncState.value = SyncProgress.SYNCING
+            val workRequest = OneTimeWorkRequestBuilder<MessageBodyDownloadWorker>()
+                .setInputData(
+                    workDataOf(
+                        "ACCOUNT_ID" to accountId,
+                        "MESSAGE_ID" to messageId
+                    )
                 )
-            )
-            .addTag("MessageBodyDownload_${accountId}_${messageId}")
-            .build()
-        workManager.enqueue(workRequest)
+                .addTag("MessageBodyDownload_${accountId}_${messageId}")
+                .build()
+            workManager.enqueue(workRequest)
+        }
     }
 
     fun downloadAttachment(accountId: String, messageId: String, attachmentId: String, attachmentName: String) {
-        Timber.d("Enqueuing AttachmentDownloadWorker for accountId: $accountId, messageId: $messageId, attachmentId: $attachmentId")
-        // User-triggered, could be higher priority.
-        _overallSyncState.value = SyncProgress.SYNCING
-        val workRequest = OneTimeWorkRequestBuilder<AttachmentDownloadWorker>()
-            .setInputData(
-                workDataOf(
-                    "ACCOUNT_ID" to accountId,
-                    "MESSAGE_ID" to messageId,
-                    "ATTACHMENT_ID" to attachmentId,
-                    "ATTACHMENT_NAME" to attachmentName
+        externalScope.launch(ioDispatcher) {
+            if (!networkMonitor.isOnline.first()) {
+                Timber.w("$TAG: Network offline. Skipping AttachmentDownloadWorker for accountId: $accountId, messageId: $messageId, attachmentId: $attachmentId")
+                return@launch
+            }
+            Timber.d("Enqueuing AttachmentDownloadWorker for accountId: $accountId, messageId: $messageId, attachmentId: $attachmentId")
+            _overallSyncState.value = SyncProgress.SYNCING
+            val workRequest = OneTimeWorkRequestBuilder<AttachmentDownloadWorker>()
+                .setInputData(
+                    workDataOf(
+                        "ACCOUNT_ID" to accountId,
+                        "MESSAGE_ID" to messageId,
+                        "ATTACHMENT_ID" to attachmentId,
+                        "ATTACHMENT_NAME" to attachmentName
+                    )
                 )
-            )
-            .addTag("AttachmentDownload_${accountId}_${messageId}_${attachmentId}")
-            .build()
-        workManager.enqueue(workRequest)
+                .addTag("AttachmentDownload_${accountId}_${messageId}_${attachmentId}")
+                .build()
+            workManager.enqueue(workRequest)
+        }
     }
 
     // --- Sync Scheduling Logic (Conceptual) ---
 
     fun schedulePeriodicSync(accountId: String) {
         Timber.d("$TAG: Scheduling periodic sync for accountId: $accountId")
-        // TODO: P3_SYNC - Define appropriate repeat interval and constraints (e.g., metered network, battery not low).
-        // For example, sync every 4 hours.
         val periodicFolderListSync = PeriodicWorkRequestBuilder<FolderListSyncWorker>(4, TimeUnit.HOURS)
             .setInputData(workDataOf("ACCOUNT_ID" to accountId))
-            // .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.UNMETERED).build())
             .addTag("PeriodicFolderListSync_$accountId")
             .build()
 
         workManager.enqueueUniquePeriodicWork(
             "PeriodicFolderListSyncWork_$accountId",
-            ExistingPeriodicWorkPolicy.KEEP, // Or REPLACE
+            ExistingPeriodicWorkPolicy.KEEP,
             periodicFolderListSync
         )
-
-        // TODO: P3_SYNC - Consider periodic sync for important folder contents as well.
-        // This would require knowing which folders are "important" (e.g., Inbox).
-        // val periodicInboxSync = PeriodicWorkRequestBuilder<FolderContentSyncWorker>(...)
-        // workManager.enqueueUniquePeriodicWork("PeriodicInboxSyncWork_$accountId", ..., periodicInboxSync)
-
-        _overallSyncState.value = SyncProgress.IDLE // Scheduling itself doesn't mean active sync
+        _overallSyncState.value = SyncProgress.IDLE
     }
 
     fun triggerSyncOnNetworkChange(accountId: String) {
-        Timber.d("$TAG: Network change detected, triggering sync for accountId: $accountId")
-        // TODO: P3_SYNC - This should be called from a network callback mechanism.
-        // This would typically sync essential data like folder list and perhaps inbox content.
-        syncFolders(accountId)
-        // TODO: P3_SYNC - Potentially sync content of key folders like Inbox.
-        // val inboxFolder = folderDao.getInboxFolder(accountId) // Needs such a DAO method
-        // inboxFolder?.let { syncFolderContent(accountId, it.id, it.remoteId) } // Assuming MailFolder has remoteId
-        _overallSyncState.value = SyncProgress.SYNCING
+        externalScope.launch(ioDispatcher) {
+            if (!networkMonitor.isOnline.first()) {
+                Timber.i("$TAG: Network change detected, but network is offline. Skipping sync for accountId: $accountId")
+                return@launch
+            }
+            Timber.d("$TAG: Network change detected (online), triggering sync for accountId: $accountId")
+            syncFolders(accountId)
+        }
     }
 
     fun triggerSyncOnAppForeground(accountId: String) {
-        Timber.d("$TAG: App came to foreground, triggering sync for accountId: $accountId")
-        // TODO: P3_SYNC - This should be called from app lifecycle callbacks.
-        // Similar to network change, sync essential data.
-        // Could be more aggressive than periodic sync if data is stale.
-        // TODO: P3_SYNC - Implement staleness check before triggering.
-        syncFolders(accountId)
-        // TODO: P3_SYNC - Potentially sync content of key folders like Inbox if stale.
-        _overallSyncState.value = SyncProgress.SYNCING
+        externalScope.launch(ioDispatcher) {
+            if (!networkMonitor.isOnline.first()) {
+                Timber.i("$TAG: App came to foreground, but network is offline. Skipping sync for accountId: $accountId")
+                return@launch
+            }
+            Timber.d("$TAG: App came to foreground (network online), triggering sync for accountId: $accountId")
+            syncFolders(accountId)
+        }
     }
 
     // TODO: P3_SYNC - Consider a method to trigger sync for ALL accounts for each category (folders, content of key folders)
@@ -206,16 +231,13 @@ class SyncEngine @Inject constructor(
 
     fun schedulePeriodicCacheCleanup() {
         Timber.d("$TAG: Scheduling periodic cache cleanup.")
-        // TODO: P3_CACHE - Define appropriate repeat interval for cache cleanup (e.g., daily).
         val dailyCacheCleanupRequest = PeriodicWorkRequestBuilder<CacheCleanupWorker>(1, TimeUnit.DAYS)
-            // TODO: P3_CACHE - Add constraints? e.g., device idle, charging.
-            // .setConstraints(Constraints.Builder().setRequiresDeviceIdle(true).setRequiresCharging(true).build())
             .addTag("PeriodicCacheCleanup")
             .build()
 
         workManager.enqueueUniquePeriodicWork(
             "PeriodicCacheCleanupWork",
-            ExistingPeriodicWorkPolicy.KEEP, // Or REPLACE if new parameters/logic
+            ExistingPeriodicWorkPolicy.KEEP,
             dailyCacheCleanupRequest
         )
         Timber.i("$TAG: Periodic cache cleanup worker enqueued.")

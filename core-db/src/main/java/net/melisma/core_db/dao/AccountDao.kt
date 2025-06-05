@@ -21,12 +21,26 @@ interface AccountDao {
     @Query("SELECT * FROM accounts WHERE id = :accountId")
     suspend fun getAccountByIdSuspend(accountId: String): AccountEntity?
 
-    @Query("SELECT * FROM accounts")
+    @Query("SELECT * FROM accounts ORDER BY emailAddress ASC")
     fun getAllAccounts(): Flow<List<AccountEntity>>
+
+    @Query("UPDATE accounts SET needsReauthentication = :needsReauth WHERE id = :accountId")
+    suspend fun setNeedsReauthentication(accountId: String, needsReauth: Boolean)
 
     @Query("DELETE FROM accounts WHERE id = :accountId")
     suspend fun deleteAccount(accountId: String)
 
     @Query("SELECT * FROM accounts LIMIT 1")
     suspend fun getAnyAccount(): AccountEntity? // Helper for checking if DB has any accounts
+
+    // New methods for folder list sync status
+    @Query("UPDATE accounts SET lastFolderListSyncTimestamp = :timestamp, lastFolderListSyncError = NULL, lastGenericSyncError = NULL WHERE id = :accountId")
+    suspend fun updateFolderListSyncSuccess(accountId: String, timestamp: Long)
+
+    @Query("UPDATE accounts SET lastFolderListSyncError = :errorMessage WHERE id = :accountId")
+    suspend fun updateFolderListSyncError(accountId: String, errorMessage: String)
+
+    // Generic sync error update for the account
+    @Query("UPDATE accounts SET lastGenericSyncError = :errorMessage WHERE id = :accountId")
+    suspend fun updateAccountSyncError(accountId: String, errorMessage: String)
 } 

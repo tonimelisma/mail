@@ -12,7 +12,8 @@ fun Account.toEntity(): AccountEntity {
         displayName = this.displayName,
         emailAddress = this.emailAddress,
         providerType = this.providerType,
-        needsReauthentication = this.needsReauthentication
+        needsReauthentication = this.needsReauthentication,
+        isLocalOnly = this.isLocalOnly // Map from domain to entity
         // syncStatus, lastSyncAttemptTimestamp, etc., are intentionally not set here
         // as they are managed by sync processes or have defaults in AccountEntity.
     )
@@ -24,6 +25,7 @@ fun AccountEntity.toDomainAccount(): Account {
         displayName = this.displayName,
         emailAddress = this.emailAddress,
         providerType = this.providerType,
-        needsReauthentication = this.needsReauthentication
+        needsReauthentication = this.needsReauthentication,
+        isLocalOnly = this.isLocalOnly // Map from entity to domain
     )
 }

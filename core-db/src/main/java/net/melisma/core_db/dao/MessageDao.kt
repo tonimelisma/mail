@@ -7,8 +7,8 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Transaction
 import kotlinx.coroutines.flow.Flow
-import net.melisma.core_db.entity.MessageEntity
 import net.melisma.core_data.model.SyncStatus
+import net.melisma.core_db.entity.MessageEntity
 
 @Dao
 interface MessageDao {
@@ -176,5 +176,33 @@ interface MessageDao {
 
     // TODO: P3_CACHE - Refine query to also check for messages not marked as 'keep_offline' if such a flag is added later.
     @Query("SELECT * FROM messages WHERE timestamp < :maxTimestamp AND syncStatus != :pendingStatus AND isDraft = 0 AND isOutbox = 0")
-    abstract fun getMessagesOlderThan(maxTimestamp: Long, pendingStatus: SyncStatus = SyncStatus.PENDING_UPLOAD): List<MessageEntity>
+    fun getMessagesOlderThan(maxTimestamp: Long, pendingStatus: SyncStatus = SyncStatus.PENDING_UPLOAD): List<MessageEntity>
+
+    // Methods for thread operations
+    @Query("SELECT messageId FROM messages WHERE threadId = :threadId AND accountId = :accountId")
+    suspend fun getMessageIdsByThreadId(threadId: String, accountId: String): List<String>
+
+    @Query("SELECT messageId FROM messages WHERE threadId = :threadId AND accountId = :accountId AND folderId = :folderId")
+    suspend fun getMessageIdsByThreadIdAndFolder(
+        threadId: String,
+        accountId: String,
+        folderId: String
+    ): List<String>
+
+    @Query("UPDATE messages SET isRead = :isRead, syncStatus = :syncStatus WHERE messageId IN (:messageIds)")
+    suspend fun updateReadStateForMessages(
+        messageIds: List<String>,
+        isRead: Boolean,
+        syncStatus: SyncStatus
+    )
+
+    @Query("UPDATE messages SET isLocallyDeleted = 1, syncStatus = :syncStatus WHERE messageId IN (:messageIds)")
+    suspend fun markMessagesAsLocallyDeleted(messageIds: List<String>, syncStatus: SyncStatus)
+
+    @Query("UPDATE messages SET folderId = :newFolderId, syncStatus = :syncStatus WHERE messageId IN (:messageIds)")
+    suspend fun updateFolderIdForMessages(
+        messageIds: List<String>,
+        newFolderId: String,
+        syncStatus: SyncStatus
+    )
 }

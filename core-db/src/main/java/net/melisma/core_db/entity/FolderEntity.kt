@@ -5,7 +5,6 @@ import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
 import net.melisma.core_data.model.SyncStatus
-import net.melisma.core_data.model.WellKnownFolderType
 
 @Entity(
     tableName = "folders",
@@ -20,18 +19,19 @@ import net.melisma.core_data.model.WellKnownFolderType
     indices = [Index(value = ["accountId"])]
 )
 data class FolderEntity(
-    @PrimaryKey val id: String, // Corresponds to MailFolder.id
+    @PrimaryKey val id: String, // Unique local ID for the folder
     val accountId: String,
-    val displayName: String,
-    val totalItemCount: Int,
-    val unreadItemCount: Int,
-    val type: WellKnownFolderType, // Room will use TypeConverter for this
-
-    // Sync Metadata
+    val remoteId: String?, // ID used by the remote server (e.g., Gmail Label ID, Outlook Folder ID)
+    val name: String?,
+    val type: String?, // e.g., "inbox", "sent", "drafts", "user"
+    val unreadCount: Int? = 0,
+    val totalCount: Int? = 0,
+    val canHaveChildren: Boolean? = false,
+    val parentFolderId: String? = null, // Local DB ID of parent folder
     val syncStatus: SyncStatus = SyncStatus.IDLE,
     val lastSyncAttemptTimestamp: Long? = null,
     val lastSuccessfulSyncTimestamp: Long? = null,
     val lastSyncError: String? = null,
-    val isLocalOnly: Boolean = false,
-    val needsFullSync: Boolean = false
+    val lastFullContentSyncTimestamp: Long? = null, // For MessageRemoteMediator: last time all pages were fetched
+    val nextPageToken: String? = null // For MessageRemoteMediator: token for the next page of messages
 ) 

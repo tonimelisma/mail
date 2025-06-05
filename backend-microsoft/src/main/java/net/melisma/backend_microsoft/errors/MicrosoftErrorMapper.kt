@@ -11,12 +11,12 @@ import io.ktor.client.plugins.ServerResponseException
 import kotlinx.serialization.SerializationException
 import net.melisma.core_data.errors.ErrorMapperService
 import net.melisma.core_data.model.ErrorDetails
+import timber.log.Timber
 import java.io.IOException
 import java.net.UnknownHostException
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.cancellation.CancellationException
-import timber.log.Timber
 
 /**
  * Microsoft-specific implementation of [ErrorMapperService].
@@ -24,27 +24,6 @@ import timber.log.Timber
  */
 @Singleton
 class MicrosoftErrorMapper @Inject constructor() : ErrorMapperService {
-
-    /**
-     * Maps an HTTP status code and response body to a user-friendly error message.
-     * Used by GraphApiHelper to handle HTTP errors from Microsoft Graph API.
-     *
-     * @param statusCode The HTTP status code
-     * @param errorBody The error response body as text
-     * @return A user-friendly error message
-     */
-    fun mapHttpError(statusCode: Int, errorBody: String): Exception {
-        Timber.w("Mapping HTTP error: $statusCode - $errorBody")
-        val errorMessage = when (statusCode) {
-            401 -> "Authentication failed. Please sign in again."
-            403 -> "You don't have permission to access this resource."
-            404 -> "The requested item could not be found."
-            429 -> "Too many requests. Please try again later."
-            500, 502, 503, 504 -> "Microsoft service is unavailable. Please try again later."
-            else -> "Error communicating with Microsoft services (HTTP $statusCode)."
-        }
-        return Exception(errorMessage)
-    }
 
     /**
      * Maps any exception to a user-friendly error message.
@@ -79,7 +58,8 @@ class MicrosoftErrorMapper @Inject constructor() : ErrorMapperService {
             is MsalUiRequiredException -> ErrorDetails(
                 message = exception.message ?: "Your session has expired. Please sign in again.",
                 code = errorCode,
-                cause = exception
+                cause = exception,
+                isNeedsReAuth = true
             )
 
             is MsalUserCancelException -> ErrorDetails(
@@ -103,7 +83,13 @@ class MicrosoftErrorMapper @Inject constructor() : ErrorMapperService {
             is MsalServiceException -> {
                 val msg =
                     exception.message ?: "A service error occurred with Microsoft authentication."
-                ErrorDetails(message = msg, code = errorCode, cause = exception)
+                val needsReAuth = errorCode == "invalid_grant" || errorCode == "unauthorized_client"
+                ErrorDetails(
+                    message = msg,
+                    code = errorCode,
+                    cause = exception,
+                    isNeedsReAuth = needsReAuth
+                )
             }
 
             else -> ErrorDetails(
@@ -131,19 +117,27 @@ class MicrosoftErrorMapper @Inject constructor() : ErrorMapperService {
             is UnknownHostException -> ErrorDetails(
                 message = "No internet connection. Please check your network.",
                 code = "UnknownHost",
-                cause = exception
+                cause = exception,
+                isConnectivityIssue = true
             )
 
-            is ClientRequestException -> ErrorDetails(
-                message = "Error connecting to Microsoft services (HTTP ${exception.response.status.value}). Check network or server status.",
-                code = "KtorClientRequest-${exception.response.status.value}",
-                cause = exception
-            )
+            is ClientRequestException -> {
+                val statusCode = exception.response.status.value
+                val isAuthError = statusCode == 401 || statusCode == 403
+                ErrorDetails(
+                    message = "Error connecting to Microsoft services (HTTP $statusCode). Check network or server status.",
+                    code = "KtorClientRequest-$statusCode",
+                    cause = exception,
+                    isNeedsReAuth = isAuthError,
+                    isConnectivityIssue = !isAuthError
+                )
+            }
 
             is ServerResponseException -> ErrorDetails(
                 message = "Microsoft service error (HTTP ${exception.response.status.value}). Please try again later.",
                 code = "KtorServerResponse-${exception.response.status.value}",
-                cause = exception
+                cause = exception,
+                isConnectivityIssue = true
             )
 
             is SerializationException -> ErrorDetails(
@@ -156,7 +150,8 @@ class MicrosoftErrorMapper @Inject constructor() : ErrorMapperService {
                 message = exception.message
                     ?: "A network error occurred. Please check your connection.",
                 code = "IOException",
-                cause = exception
+                cause = exception,
+                isConnectivityIssue = true
             )
 
             null -> ErrorDetails(

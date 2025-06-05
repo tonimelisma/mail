@@ -3,6 +3,7 @@ package net.melisma.core_data.datasource
 import kotlinx.coroutines.flow.Flow
 import net.melisma.core_data.model.MailFolder
 import net.melisma.core_data.model.Message
+import net.melisma.core_data.model.PagedMessagesResponse
 
 /**
  * Interface defining the common mail operations across different email providers.
@@ -32,15 +33,17 @@ interface MailApiService {
      * Fetches messages for a specific folder ID.
      *
      * @param folderId The ID of the folder to fetch messages from
-     * @param selectFields Optional list of fields to include in the response
+     * @param activity The optional Activity context, which might be needed for auth flows by some providers.
      * @param maxResults Maximum number of messages to return (pagination limit)
+     * @param pageToken Token for next page
      * @return Result containing the list of messages or an error
      */
     suspend fun getMessagesForFolder(
         folderId: String,
-        selectFields: List<String> = emptyList(),
-        maxResults: Int = 20
-    ): Result<List<Message>>
+        activity: android.app.Activity? = null,
+        maxResults: Int? = null,
+        pageToken: String? = null
+    ): Result<PagedMessagesResponse>
 
     /**
      * Fetches messages for a specific thread/conversation.

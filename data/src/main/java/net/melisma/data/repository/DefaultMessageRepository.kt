@@ -9,8 +9,6 @@ import androidx.paging.PagingConfig
 import androidx.paging.PagingData
 import androidx.paging.map
 import androidx.room.withTransaction
-import androidx.work.Data
-import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineDispatcher
@@ -23,6 +21,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
@@ -50,6 +49,7 @@ import net.melisma.core_data.repository.AccountRepository
 import net.melisma.core_data.repository.MessageRepository
 import net.melisma.core_db.AppDatabase
 import net.melisma.core_db.dao.AttachmentDao
+import net.melisma.core_db.dao.FolderDao
 import net.melisma.core_db.dao.MessageBodyDao
 import net.melisma.core_db.dao.MessageDao
 import net.melisma.core_db.entity.AttachmentEntity
@@ -58,10 +58,9 @@ import net.melisma.core_db.entity.MessageEntity
 import net.melisma.data.mapper.toDomainModel
 import net.melisma.data.mapper.toEntity
 import net.melisma.data.paging.MessageRemoteMediator
-import net.melisma.data.worker.SyncMessageStateWorker
+import net.melisma.data.sync.SyncEngine
+import net.melisma.data.sync.workers.ActionUploadWorker
 import timber.log.Timber
-import java.io.File
-import java.io.FileOutputStream
 import java.io.IOException
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -78,10 +77,10 @@ class DefaultMessageRepository @Inject constructor(
     private val messageDao: MessageDao,
     private val messageBodyDao: MessageBodyDao,
     private val attachmentDao: AttachmentDao,
+    private val folderDao: FolderDao,
     private val appDatabase: AppDatabase,
-    private val workManager: WorkManager // Keep for now, though SyncEngine will use it
-    // TODO: P2_WRITE - Inject SyncEngine
-    // private val syncEngine: net.melisma.data.sync.SyncEngine
+    private val workManager: WorkManager, // Keep for now, though SyncEngine will use it
+    private val syncEngine: SyncEngine // Inject SyncEngine
 ) : MessageRepository {
 
     private val TAG = "DefaultMessageRepo"
@@ -101,7 +100,33 @@ class DefaultMessageRepository @Inject constructor(
         folderId: String
     ): Flow<List<Message>> {
         Timber.d("observeMessagesForFolder: accountId=$accountId, folderId=$folderId")
-        // TODO: P1_SYNC - Request sync from SyncEngine if message list is stale or empty for this folder.
+
+        // Launch a one-off check to see if sync is needed for this folder.
+        externalScope.launch(ioDispatcher) {
+            val messagesCount = messageDao.getMessagesCountForFolder(accountId, folderId)
+            val folderEntity =
+                folderDao.getFolderByIdSuspend(folderId) // Assumes folderId is the local DB ID
+
+            if (folderEntity != null) {
+                // Heuristic: Sync if no messages locally, or if sync timestamp is very old/null.
+                // More robust staleness (e.g., < 15 mins) can be added later.
+                // Also, folderEntity.remoteId is needed for SyncEngine.
+                val needsSync =
+                    messagesCount == 0 || folderEntity.lastSuccessfulSyncTimestamp == null
+                // || (System.currentTimeMillis() - (folderEntity.lastSuccessfulSyncTimestamp ?: 0) > SYNC_THRESHOLD_MS)
+
+
+                if (needsSync && folderEntity.remoteId != null) {
+                    Timber.d("observeMessagesForFolder: Folder $folderId (remote: ${folderEntity.remoteId}) needs content sync (count=$messagesCount, lastSync=${folderEntity.lastSuccessfulSyncTimestamp}). Triggering SyncEngine.")
+                    syncEngine.syncFolderContent(accountId, folderId, folderEntity.remoteId!!)
+                } else if (folderEntity.remoteId == null) {
+                    Timber.w("observeMessagesForFolder: Cannot sync folder $folderId content because remoteId is null.")
+                }
+            } else {
+                Timber.w("observeMessagesForFolder: FolderEntity for id $folderId not found. Cannot determine if sync is needed.")
+            }
+        }
+
         return messageDao.getMessagesForFolder(accountId, folderId)
             .map { entities -> entities.map { it.toDomainModel() } }
     }
@@ -152,7 +177,7 @@ class DefaultMessageRepository @Inject constructor(
         val newAccountId = account?.id
         val newFolderId = folder?.id
         Timber.d(
-            "setTargetFolder: Account=${account?.username}($newAccountId), Folder=${folder?.displayName}($newFolderId). CurrentTarget: ${currentTargetAccount?.id}/$currentTargetFolderId. SyncJob Active: ${syncJob?.isActive}"
+            "setTargetFolder: Account=${account?.emailAddress}($newAccountId), Folder=${folder?.displayName}($newFolderId). CurrentTarget: ${currentTargetAccount?.id}/$currentTargetFolderId. SyncJob Active: ${syncJob?.isActive}"
         )
 
         if (newAccountId == currentTargetAccount?.id && newFolderId == currentTargetFolderId) {
@@ -317,40 +342,27 @@ class DefaultMessageRepository @Inject constructor(
         accountId: String
     ): Flow<Message?> {
         Timber.d("RepoDBG: getMessageDetails called. AccountId: $accountId, MessageId: $messageId")
-        return getMessageWithBody(accountId, messageId)
-    }
+        // Trigger body download if needed, but the Flow will primarily react to DB changes.
+        // This check can be done once when the flow is first collected.
+        // Launch a one-off check and trigger for body download.
+        externalScope.launch(ioDispatcher) {
+            val msg = messageDao.getMessageByIdSuspend(messageId)
+            val body = messageBodyDao.getMessageBodyByIdSuspend(messageId)
+            if (msg != null && (body == null || body.content.isNullOrBlank())) {
+                Timber.d("RepoDBG: Message body for $messageId is missing or blank. Triggering download via SyncEngine.")
+                syncEngine.downloadMessageBody(accountId, messageId)
+            }
+        }
 
-    private fun getMessageWithBody(accountId: String, messageId: String): Flow<Message?> =
-        channelFlow {
-            Timber.d("RepoDBG: getMessageWithBody started. AccountId: $accountId, MessageId: $messageId")
-
-            // Step 1: Initial DB Load and Emit
-            var existingMessageEntity = messageDao.getMessageByIdSuspend(messageId)
-            var existingBodyEntity = messageBodyDao.getMessageBodyByIdSuspend(messageId)
-            Timber.d("RepoDBG: Initial DB load - MessageEntity found: ${existingMessageEntity != null}, BodyEntity found: ${existingBodyEntity != null}, BodyEntity content blank: ${existingBodyEntity?.content.isNullOrBlank()}")
-
-            var messageToSend: Message? = existingMessageEntity?.toDomainModel()?.copy(
-                body = existingBodyEntity?.content,
-                bodyContentType = existingBodyEntity?.contentType
+        // Return a combined flow from DAO
+        return messageDao.getMessageById(messageId)
+            .combine(messageBodyDao.getMessageBodyById(messageId)) { messageEntity, bodyEntity ->
+                messageEntity?.toDomainModel()?.copy(
+                    body = bodyEntity?.content,
+                    bodyContentType = bodyEntity?.contentType
             )
-            Timber.d("RepoDBG: Emitting from cache - Message ID: ${messageToSend?.id}, Subject: '${messageToSend?.subject}', Body is blank: ${messageToSend?.body.isNullOrBlank()}, BodyContentType: ${messageToSend?.bodyContentType}")
-            send(messageToSend) // Emit cached state immediately
-
-            // TODO: P1_SYNC - Request message body fetch from SyncEngine if existingBodyEntity is null or content is empty.
-            // The SyncEngine will fetch the body, save it to messageBodyDao,
-            // which should then trigger this Flow to re-emit if it's observing messageBodyDao.
-            // For now, this flow only emits what's currently in the DB.
-
-            // Step 2 & 3 (Network Fetch and subsequent DB save/emit) are removed from this read Flow.
-            // The flow will emit the initial DB state and then complete.
-            // If the data changes in DB due to external sync, a new collection of this Flow will see it.
-            // If this needs to be a long-lived flow that updates when body is fetched,
-            // it should be messageDao.getMessageById(messageId).combine(messageBodyDao.getMessageBodyById(messageId))
-            // For now, per instructions, it's a one-shot read from DB then complete.
-
-            Timber.d("RepoDBG: getMessageWithBody for $messageId finished. Emitted cached content. Closing flow.")
-            close() // Close the flow after emitting cached content.
         }.flowOn(ioDispatcher)
+    }
 
     override suspend fun markMessageRead(
         account: Account,
@@ -360,21 +372,19 @@ class DefaultMessageRepository @Inject constructor(
         Timber.d("markMessageRead: msgId=$messageId, isRead=$isRead, account=${account.id}")
         try {
             appDatabase.withTransaction {
-                messageDao.updateReadState(messageId, isRead, syncStatus = SyncStatus.PENDING_UPLOAD)
+                messageDao.updateReadState(
+                    messageId = messageId,
+                    isRead = isRead,
+                    syncStatus = SyncStatus.PENDING_UPLOAD
+                )
             }
             Timber.i("Optimistically marked message $messageId as isRead=$isRead, syncStatus=PENDING_UPLOAD")
-            // TODO: P2_WRITE - Replace with SyncEngine call
-            // syncEngine.enqueueActionUploadWorker(
-            //     accountId = account.id,
-            //     entityId = messageId,
-            //     actionType = ActionUploadWorker.ACTION_MARK_MESSAGE_READ,
-            //     payload = workDataOf("IS_READ" to isRead)
-            // )
-            enqueueActionUploadWorker(
+
+            syncEngine.enqueueMessageAction( // Restore original SyncEngine call
                 accountId = account.id,
-                entityId = messageId,
+                messageId = messageId,
                 actionType = ActionUploadWorker.ACTION_MARK_MESSAGE_READ,
-                additionalPayload = mapOf("IS_READ" to isRead)
+                payload = mapOf("IS_READ" to isRead)
             )
             Result.success(Unit)
         } catch (e: Exception) {
@@ -393,21 +403,19 @@ class DefaultMessageRepository @Inject constructor(
         Timber.d("starMessage: msgId=$messageId, isStarred=$isStarred, account=${account.id}")
         try {
             appDatabase.withTransaction {
-                messageDao.updateStarredState(messageId, isStarred, syncStatus = SyncStatus.PENDING_UPLOAD)
+                messageDao.updateStarredState(
+                    messageId = messageId,
+                    isStarred = isStarred,
+                    syncStatus = SyncStatus.PENDING_UPLOAD
+                )
             }
             Timber.i("Optimistically starred message $messageId as isStarred=$isStarred, syncStatus=PENDING_UPLOAD")
-            // TODO: P2_WRITE - Replace with SyncEngine call
-            // syncEngine.enqueueActionUploadWorker(
-            //     accountId = account.id,
-            //     entityId = messageId,
-            //     actionType = ActionUploadWorker.ACTION_STAR_MESSAGE,
-            //     payload = workDataOf("IS_STARRED" to isStarred)
-            // )
-            enqueueActionUploadWorker(
+
+            syncEngine.enqueueMessageAction( // Restore original SyncEngine call
                 accountId = account.id,
-                entityId = messageId,
+                messageId = messageId,
                 actionType = ActionUploadWorker.ACTION_STAR_MESSAGE,
-                additionalPayload = mapOf("IS_STARRED" to isStarred)
+                payload = mapOf("IS_STARRED" to isStarred)
             )
             Result.success(Unit)
         } catch (e: Exception) {
@@ -418,13 +426,12 @@ class DefaultMessageRepository @Inject constructor(
         }
     }
 
-    override suspend fun deleteMessage(
-        account: Account,
-        messageId: String
-    ): Result<Unit> = withContext(ioDispatcher) {
+    override suspend fun deleteMessage(account: Account, messageId: String): Result<Unit> =
+        withContext(ioDispatcher) {
         Timber.d("deleteMessage: msgId=$messageId, account=${account.id}")
         try {
             appDatabase.withTransaction {
+                // This is one of the problematic calls.
                 messageDao.markAsLocallyDeleted(
                     messageId = messageId,
                     isLocallyDeleted = true,
@@ -432,27 +439,22 @@ class DefaultMessageRepository @Inject constructor(
                 )
             }
             Timber.i("Optimistically marked message $messageId as locally deleted, syncStatus=PENDING_UPLOAD")
-            // TODO: P2_WRITE - Replace with SyncEngine call
-            // syncEngine.enqueueActionUploadWorker(
-            //     accountId = account.id,
-            //     entityId = messageId,
-            //     actionType = ActionUploadWorker.ACTION_DELETE_MESSAGE
-            // )
-            enqueueActionUploadWorker(
+
+            syncEngine.enqueueMessageAction( // Restore original SyncEngine call
                 accountId = account.id,
-                entityId = messageId,
-                actionType = ActionUploadWorker.ACTION_DELETE_MESSAGE
+                messageId = messageId,
+                actionType = ActionUploadWorker.ACTION_DELETE_MESSAGE,
+                payload = emptyMap() 
             )
             Result.success(Unit)
         } catch (e: Exception) {
             Timber.e(e, "Error in deleteMessage for $messageId")
-            // Attempt to update sync error on the existing message if the optimistic delete failed before worker enqueue
             val currentMessage = messageDao.getMessageByIdSuspend(messageId)
-            if (currentMessage != null && !currentMessage.isLocallyDeleted) { // Check if it wasn't marked as deleted
+            if (currentMessage != null && !currentMessage.isLocallyDeleted) {
                 val errorMessage =
                     errorMappers[account.providerType.uppercase()]?.mapExceptionToErrorDetails(e)?.message
                         ?: e.message
-                messageDao.updateLastSyncError(messageId, "Optimistic delete failed: $errorMessage") // This sets syncStatus to ERROR
+                messageDao.updateLastSyncError(messageId, "Optimistic delete failed: $errorMessage")
             }
             Result.failure(Exception("Failed to mark message for deletion: ${e.message}", e))
         }
@@ -489,18 +491,11 @@ class DefaultMessageRepository @Inject constructor(
             }
             Timber.i("Optimistically moved message $messageId to folder $newFolderId, syncStatus=PENDING_UPLOAD")
 
-            // TODO: P2_WRITE - Replace with SyncEngine call
-            // syncEngine.enqueueActionUploadWorker(
-            //     accountId = account.id,
-            //     entityId = messageId,
-            //     actionType = ActionUploadWorker.ACTION_MOVE_MESSAGE,
-            //     payload = workDataOf("NEW_FOLDER_ID" to newFolderId, "OLD_FOLDER_ID" to oldFolderId)
-            // )
-            enqueueActionUploadWorker(
+            syncEngine.enqueueMessageAction(
                 accountId = account.id,
-                entityId = messageId,
+                messageId = messageId,
                 actionType = ActionUploadWorker.ACTION_MOVE_MESSAGE,
-                additionalPayload = mapOf("NEW_FOLDER_ID" to newFolderId, "OLD_FOLDER_ID" to oldFolderId)
+                payload = mapOf("NEW_FOLDER_ID" to newFolderId, "OLD_FOLDER_ID" to oldFolderId)
             )
             Result.success(Unit)
         } catch (e: Exception) {
@@ -532,81 +527,42 @@ class DefaultMessageRepository @Inject constructor(
         }
     }
 
-    override suspend fun sendMessage(draft: MessageDraft, account: Account): Result<String> {
-        return withContext(ioDispatcher) {
-            try {
-                // Generate a unique message ID for the outbox entry
-                val messageId = "outbox_${System.currentTimeMillis()}_${account.id}"
-                val currentTime = System.currentTimeMillis()
+    override suspend fun sendMessage(
+        account: Account,
+        messageId: String,
+        draft: MessageDraft
+    ): Result<Unit> = withContext(ioDispatcher) {
+        Timber.d("sendMessage: accountId=${account.id}, messageId=$messageId")
+        try {
+            val sentFolderId =
+                draft.sentFolderId ?: account.sentFolderId ?: "SENT" // Get sent folder ID
 
-                appDatabase.withTransaction {
-                    // Create outbox message entity
-                    val outboxMessage = MessageEntity(
-                        messageId = messageId,
-                        accountId = account.id,
-                        folderId = "OUTBOX", // Special folder for outbox
-                        threadId = draft.originalMessageId, // For reply threading
-                        subject = draft.subject,
-                        snippet = draft.body?.take(150),
-                        senderName = account.displayName ?: account.emailAddress,
-                        senderAddress = account.emailAddress,
-                        recipientNames = draft.to, // Will be converted by TypeConverter
-                        recipientAddresses = draft.to, // Will be converted by TypeConverter
-                        timestamp = currentTime,
-                        sentTimestamp = null,
-                        isRead = true,
-                        isStarred = false,
-                        hasAttachments = draft.attachments.isNotEmpty(),
-                        isLocallyDeleted = false,
-                        lastSyncError = null,
-                        isDraft = false, // No longer a draft
-                        isOutbox = true, // Now in outbox
-                        draftType = draft.type.name,
-                        draftParentId = draft.originalMessageId,
-                        sendAttempts = 0,
-                        lastSendError = null,
-                        scheduledSendTime = null,
-                        syncStatus = SyncStatus.PENDING_UPLOAD,
-                        lastSyncAttemptTimestamp = null,
-                        lastSuccessfulSyncTimestamp = null,
-                        isLocalOnly = true, // True for outbox messages until successfully sent
-                        needsFullSync = false
-                    )
-
-                    // Insert into database
-                    messageDao.insertOrUpdateMessages(listOf(outboxMessage))
-
-                    // Store message body
-                    val messageBody = MessageBodyEntity(
-                        messageId = messageId,
-                        contentType = "HTML",
-                        content = draft.body,
-                        lastFetchedTimestamp = currentTime
-                    )
-                    messageBodyDao.insertOrUpdateMessageBody(messageBody)
-
-                    // Enqueue worker to send the message
-                    val draftJson = Json.encodeToString(draft) // This is the payload
-                    // TODO: P2_WRITE - Replace with SyncEngine call
-                    // syncEngine.enqueueActionUploadWorker(
-                    //     accountId = account.id,
-                    //     entityId = messageId,
-                    //     actionType = ActionUploadWorker.ACTION_SEND_MESSAGE,
-                    //     payload = workDataOf("DRAFT_JSON" to draftJson, "SENT_FOLDER_ID" to "SENT")
-                    // )
-                    enqueueActionUploadWorker(
-                        accountId = account.id,
-                        entityId = messageId,
-                        actionType = ActionUploadWorker.ACTION_SEND_MESSAGE,
-                        additionalPayload = mapOf("DRAFT_JSON" to draftJson, "SENT_FOLDER_ID" to "SENT")
-                    )
-                }
-                Timber.d("$TAG: Message $messageId enqueued for sending via ActionUploadWorker.")
-                Result.success(messageId)
-            } catch (e: Exception) {
-                Timber.e(e, "Failed to queue message for sending")
-                Result.failure(e)
+            appDatabase.withTransaction {
+                // This is the other problematic call.
+                messageDao.moveToOutbox(
+                    messageId = messageId,
+                    isOutbox = true,
+                    syncStatus = SyncStatus.PENDING_UPLOAD
+                )
             }
+            Timber.i("Moved message $messageId to outbox for account ${account.id}, syncStatus=PENDING_UPLOAD.")
+
+            val draftJson = Json.encodeToString(draft)
+            syncEngine.enqueueMessageAction( // Restore SyncEngine call
+                accountId = account.id,
+                messageId = messageId,
+                actionType = ActionUploadWorker.ACTION_SEND_MESSAGE,
+                payload = mapOf(
+                    "DRAFT_JSON" to draftJson,
+                    "SENT_FOLDER_ID" to sentFolderId
+                )
+            )
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Timber.e(e, "Error in sendMessage for $messageId")
+            // If moving to outbox failed, or enqueueing worker failed, update error status.
+            messageDao.updateSendError(messageId, "Failed to initiate send: ${e.message}")
+            Result.failure(Exception("Failed to send message: ${e.message}", e))
         }
     }
 
@@ -634,7 +590,11 @@ class DefaultMessageRepository @Inject constructor(
                         // TODO: P1_SYNC - Request attachment list sync from SyncEngine for message $messageId because local attachments are empty but message.hasAttachments is true.
                         // The SyncEngine would call a method like internalFetchAndStoreAttachments(account, messageId).
                         // For now, do not call fetchAndStoreAttachments(account, messageId) directly here.
-                        Timber.d("getMessageAttachments: Attachments potentially missing for $messageId. SyncEngine should handle fetching.")
+                        Timber.d("getMessageAttachments: Attachments potentially missing for $messageId. Triggering sync via SyncEngine.")
+                        // TODO: Define if SyncEngine needs a specific method for attachment list sync for a message
+                        // or if FolderContentSyncWorker for the message's folder would cover this.
+                        // For now, let's assume this might be a separate trigger if message bodies are fetched sparsely.
+                        // syncEngine.syncMessageAttachments(accountId, messageId) // Placeholder for a potential new SyncEngine method
                     }
                 }
 
@@ -678,7 +638,8 @@ class DefaultMessageRepository @Inject constructor(
                     isDownloaded = false,
                     localFilePath = null,
                     timestamp = null,
-                    error = "Account not found"
+                    error = "Account not found",
+                    syncStatus = SyncStatus.ERROR // Added sync status update
                 )
                 send(null) // Error
                 close()
@@ -695,49 +656,33 @@ class DefaultMessageRepository @Inject constructor(
                     isDownloaded = false,
                     localFilePath = null,
                     timestamp = null,
-                    error = "API service not found"
+                    error = "API service not found",
+                    syncStatus = SyncStatus.ERROR // Added sync status update
                 )
                 send(null) // Error
                 close()
                 return@channelFlow
             }
 
-            val result = mailApiService.downloadAttachment(messageId, attachment.id)
+            // Delegate to SyncEngine
+            syncEngine.downloadAttachment(accountId, messageId, attachment.id, attachment.fileName)
 
-            if (result.isSuccess) {
-                val attachmentData = result.getOrThrow()
-                // Save to internal storage
-                val attachmentsDir = File(context.filesDir, "attachments/$messageId")
-                if (!attachmentsDir.exists()) {
-                    attachmentsDir.mkdirs()
-                }
-                val localFile = File(attachmentsDir, attachment.fileName)
+            // The rest of this method (direct API call, file saving) is now handled by AttachmentDownloadWorker.
+            // This Flow should observe the AttachmentEntity from DAO to reflect download progress/completion.
+            // For simplicity now, it will just trigger the download and the UI would need to observe the DAO separately.
+            // To make this flow reflect status, it would need to be: 
+            // attachmentDao.getAttachmentById(attachment.id).map { it?.localFilePath }.collect { send(it); if (it != null) close() }
+            // This is a simplification. A more robust solution would involve SyncEngine exposing worker status.
+            Log.d(
+                TAG,
+                "downloadAttachment for ${attachment.fileName} enqueued via SyncEngine. UI should observe DAO for updates."
+            )
+            send(null) // Indicate that an operation is in progress (or use a specific state object)
+            // The flow doesn't necessarily close here immediately; it might await DAO updates if it were observing.
+            // For now, we trigger and expect UI to update from DAO.
+            // To simply trigger and complete:
+            close() 
 
-                FileOutputStream(localFile).use { outputStream ->
-                    outputStream.write(attachmentData)
-                }
-                Log.d(TAG, "Attachment ${attachment.fileName} saved to ${localFile.absolutePath}")
-
-                attachmentDao.updateDownloadStatus(
-                    attachmentId = attachment.id,
-                    isDownloaded = true,
-                    localFilePath = localFile.absolutePath,
-                    timestamp = System.currentTimeMillis(),
-                    error = null
-                )
-                send(localFile.absolutePath) // Success, emit file path
-            } else {
-                val error = result.exceptionOrNull()?.message ?: "Unknown download error"
-                Log.e(TAG, "downloadAttachment: Failed for ${attachment.fileName} - $error")
-                attachmentDao.updateDownloadStatus(
-                    attachmentId = attachment.id,
-                    isDownloaded = false,
-                    localFilePath = null,
-                    timestamp = null,
-                    error = error
-                )
-                send(null) // Error
-            }
         } catch (e: IOException) {
             Log.e(TAG, "downloadAttachment: IOException for ${attachment.fileName} - ${e.message}", e)
             attachmentDao.updateDownloadStatus(
@@ -745,7 +690,8 @@ class DefaultMessageRepository @Inject constructor(
                 isDownloaded = false,
                 localFilePath = null,
                 timestamp = null,
-                error = "IOException: ${e.message}"
+                error = "IOException: ${e.message}",
+                syncStatus = SyncStatus.ERROR // Added sync status update
             )
             send(null) // Error
         } catch (e: Exception) {
@@ -755,7 +701,8 @@ class DefaultMessageRepository @Inject constructor(
                 isDownloaded = false,
                 localFilePath = null,
                 timestamp = null,
-                error = "Exception: ${e.message}"
+                error = "Exception: ${e.message}",
+                syncStatus = SyncStatus.ERROR // Added sync status update
             )
             send(null) // Error
         } finally {
@@ -772,7 +719,8 @@ class DefaultMessageRepository @Inject constructor(
             isDownloaded = false,
             localFilePath = null,
             timestamp = null,
-            error = "Flow failed: ${e.message}"
+            error = "Flow failed: ${e.message}",
+            syncStatus = SyncStatus.ERROR // Added sync status update
         )
         emit(null) // Emit error state
     }

@@ -6,17 +6,21 @@ import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
-import kotlinx.coroutines.delay
+import net.melisma.core_data.datasource.MailApiServiceSelector
+import net.melisma.core_data.errors.ApiServiceException
+import net.melisma.core_data.model.SyncStatus
+import net.melisma.core_db.dao.AccountDao
 import net.melisma.core_db.dao.AttachmentDao
 import timber.log.Timber
-import java.io.File // Required for file operations
+import java.io.File
 
 @HiltWorker
 class AttachmentDownloadWorker @AssistedInject constructor(
     @Assisted private val appContext: Context, // Renamed for clarity
     @Assisted workerParams: WorkerParameters,
-    private val attachmentDao: AttachmentDao
-    // TODO: P1_SYNC - Inject MailApiServiceSelector or specific MailApiService
+    private val attachmentDao: AttachmentDao,
+    private val mailApiServiceSelector: MailApiServiceSelector,
+    private val accountDao: AccountDao // Inject AccountDao
 ) : CoroutineWorker(appContext, workerParams) {
 
     private val TAG = "AttachmentDownloadWrkr"
@@ -35,34 +39,108 @@ class AttachmentDownloadWorker @AssistedInject constructor(
         Timber.d("Worker started for accountId: $accountId, messageId: $messageId, attachmentId: $attachmentId, name: $attachmentName")
 
         try {
-            // TODO: P1_SYNC - Get MailApiService for accountId
-            // TODO: P1_SYNC - Fetch attachment data for attachmentId from API.
-            // Simulate network delay and getting byte array
-            delay(2000)
-            val attachmentData: ByteArray = "Simulated attachment data for $attachmentId".toByteArray() // Placeholder
-
-            Timber.d("Simulated fetching attachment $attachmentId for message $messageId in account $accountId.")
-
-            // Save the attachment data to internal storage
-            val attachmentsDir = File(appContext.filesDir, "attachments/$messageId")
-            if (!attachmentsDir.exists()) {
-                attachmentsDir.mkdirs()
+            // Get MailApiService for accountId
+            val mailService = mailApiServiceSelector.getServiceByAccountId(accountId)
+            if (mailService == null) {
+                Timber.e("MailService not found for account $accountId. Failing download.")
+                attachmentDao.updateDownloadStatus(
+                    attachmentId,
+                    false,
+                    null,
+                    null,
+                    "Mail service not found",
+                    SyncStatus.ERROR
+                )
+                return Result.failure()
             }
-            val localFile = File(attachmentsDir, attachmentName)
 
-            localFile.outputStream().use { it.write(attachmentData) }
-            Timber.i("Attachment $attachmentName saved to ${localFile.absolutePath}")
+            // Set status to PENDING_DOWNLOAD before attempting download
+            attachmentDao.updateDownloadStatus(
+                attachmentId = attachmentId,
+                isDownloaded = false,
+                localFilePath = null, // Keep localFilePath as is, or clear if re-downloading
+                timestamp = null, // Don't update timestamp yet
+                error = null, // Clear previous error
+                syncStatus = SyncStatus.PENDING_DOWNLOAD
+            )
+            Timber.d("Set attachment $attachmentId status to PENDING_DOWNLOAD.")
 
-            // TODO: P1_SYNC - Update AttachmentEntity in attachmentDao: set localFilePath, downloadTimestamp, and sync status to SYNCED.
-            // Example:
-            // attachmentDao.updateDownloadStatus(attachmentId, true, localFile.absolutePath, System.currentTimeMillis(), null, SyncStatus.SYNCED)
+            // Fetch attachment data for attachmentId from API.
+            val downloadResult = mailService.downloadAttachment(messageId, attachmentId)
 
-            Timber.d("Worker finished successfully for attachment $attachmentId")
-            return Result.success()
+            if (downloadResult.isSuccess) {
+                val attachmentData = downloadResult.getOrThrow()
+                Timber.d("Fetched attachment $attachmentId for message $messageId.")
 
+                // Save the attachment data to internal storage
+                val attachmentsDir = File(appContext.filesDir, "attachments/$messageId")
+                if (!attachmentsDir.exists()) {
+                    attachmentsDir.mkdirs()
+                }
+                val localFile = File(attachmentsDir, attachmentName)
+
+                localFile.outputStream().use { it.write(attachmentData) }
+                Timber.i("Attachment $attachmentName saved to ${localFile.absolutePath}")
+
+                attachmentDao.updateDownloadStatus(
+                    attachmentId = attachmentId,
+                    isDownloaded = true,
+                    localFilePath = localFile.absolutePath,
+                    timestamp = System.currentTimeMillis(),
+                    error = null,
+                    syncStatus = SyncStatus.SYNCED
+                )
+                Timber.d("Worker finished successfully for attachment $attachmentId")
+                return Result.success()
+            } else {
+                val exception = downloadResult.exceptionOrNull()
+                val errorMessage = exception?.message ?: "Failed to download attachment"
+                Timber.e(exception, "Failed to download attachment $attachmentId: $errorMessage")
+                attachmentDao.updateDownloadStatus(
+                    attachmentId,
+                    false,
+                    null,
+                    null,
+                    errorMessage,
+                    SyncStatus.ERROR
+                )
+
+                if (exception is ApiServiceException && exception.errorDetails.isNeedsReAuth) {
+                    Timber.w("$TAG: Marking account $accountId for re-authentication due to attachment download failure.")
+                    try {
+                        accountDao.setNeedsReauthentication(accountId, true)
+                    } catch (dbException: Exception) {
+                        Timber.e(
+                            dbException,
+                            "$TAG: Failed to mark account $accountId for re-authentication in DB."
+                        )
+                    }
+                }
+                return Result.failure()
+            }
         } catch (e: Exception) {
             Timber.e(e, "Error downloading attachment $attachmentId for message $messageId")
-            // TODO: P1_SYNC - Update AttachmentEntity sync metadata to reflect error.
+            // Update AttachmentEntity sync metadata to reflect error.
+            attachmentDao.updateDownloadStatus(
+                attachmentId,
+                false,
+                null,
+                null,
+                e.message ?: "Unknown error during download",
+                SyncStatus.ERROR
+            )
+            // Check if this exception implies re-auth
+            if (e is ApiServiceException && e.errorDetails.isNeedsReAuth) {
+                Timber.w("$TAG: Marking account $accountId for re-authentication due to outer exception during attachment download.")
+                try {
+                    accountDao.setNeedsReauthentication(accountId, true)
+                } catch (dbException: Exception) {
+                    Timber.e(
+                        dbException,
+                        "$TAG: Failed to mark account $accountId for re-auth in DB (outer exception)."
+                    )
+                }
+            }
             return Result.failure()
         }
     }

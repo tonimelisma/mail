@@ -6,24 +6,31 @@ import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
-import kotlinx.coroutines.delay
+import net.melisma.core_data.datasource.MailApiServiceSelector
+import net.melisma.core_data.errors.ApiServiceException
+import net.melisma.core_data.model.SyncStatus
+import net.melisma.core_db.dao.AccountDao
+import net.melisma.core_db.dao.FolderDao
 import net.melisma.core_db.dao.MessageDao
+import net.melisma.data.mapper.toEntity
 import timber.log.Timber
 
 @HiltWorker
 class FolderContentSyncWorker @AssistedInject constructor(
     @Assisted appContext: Context,
     @Assisted workerParams: WorkerParameters,
-    private val messageDao: MessageDao
-    // TODO: P1_SYNC - Inject MailApiServiceSelector or specific MailApiService
+    private val messageDao: MessageDao,
+    private val folderDao: FolderDao,
+    private val mailApiServiceSelector: MailApiServiceSelector,
+    private val accountDao: AccountDao
 ) : CoroutineWorker(appContext, workerParams) {
 
     private val TAG = "FolderContentSyncWorker"
 
     override suspend fun doWork(): Result {
         val accountId = inputData.getString("ACCOUNT_ID")
-        val folderId = inputData.getString("FOLDER_ID") // Local DB folder ID
-        val folderRemoteId = inputData.getString("FOLDER_REMOTE_ID") // Actual ID used by API
+        val folderId = inputData.getString("FOLDER_ID")
+        val folderRemoteId = inputData.getString("FOLDER_REMOTE_ID")
 
         if (accountId.isNullOrBlank() || folderId.isNullOrBlank() || folderRemoteId.isNullOrBlank()) {
             Timber.e("Required ID (accountId, folderId, or folderRemoteId) missing in inputData.")
@@ -33,25 +40,83 @@ class FolderContentSyncWorker @AssistedInject constructor(
         Timber.d("Worker started for accountId: $accountId, folderId: $folderId (Remote: $folderRemoteId)")
 
         try {
-            // TODO: P1_SYNC - Get MailApiService for accountId
-            // TODO: P3_SYNC - In API call, pass lastSuccessfulSyncTimestamp for this folder (from FolderEntity or dedicated sync metadata table) to fetch only new/changed messages.
-            // TODO: P3_SYNC - Ensure DAOs and MailApiService support fetching messages since a timestamp/marker or use etags/delta tokens.
-            // TODO: P1_SYNC - Fetch message list for folderRemoteId from API. Handle paging if API supports it.
-            // Simulate network delay
-            delay(1000)
-            val fetchedMessagesFromApi = emptyList<Any>() // Placeholder
+            val mailService = mailApiServiceSelector.getServiceByAccountId(accountId)
+            if (mailService == null) {
+                Timber.e("MailService not found for account $accountId. Failing folder content sync.")
+                folderDao.updateSyncStatusAndError(
+                    folderId,
+                    SyncStatus.ERROR,
+                    "Mail service not found for account"
+                )
+                return Result.failure()
+            }
 
-            Timber.d("Simulated fetching ${fetchedMessagesFromApi.size} messages from API for folder $folderRemoteId (local $folderId) in account $accountId.")
+            val folderEntity = folderDao.getFolderByIdSuspend(folderId)
+            val lastSyncTime = folderEntity?.lastSuccessfulSyncTimestamp
+            Timber.d("$TAG: Current folder ($folderId) lastSuccessfulSyncTimestamp: $lastSyncTime. Will be used for delta sync in future API calls.")
 
-            // TODO: P1_SYNC - Map API messages to MessageEntity list (ensure accountId and folderId are set correctly)
-            // TODO: P1_SYNC - Save MessageEntity list to messageDao (e.g., using an insertOrUpdate strategy, consider merging, handle deletions if API indicates them).
-            // TODO: P1_SYNC - Update sync metadata for messages in this folder and the folder itself (e.g., new lastSuccessfulSyncTimestamp).
+            val messagesResult = mailService.getMessagesForFolder(
+                folderId = folderRemoteId,
+                activity = null,
+                maxResults = 25,
+                pageToken = folderEntity?.nextPageTokenForWorker
+            )
 
-            Timber.d("Worker finished successfully for accountId: $accountId, folderId: $folderId")
-            return Result.success()
+            if (messagesResult.isSuccess) {
+                val pagedResponse = messagesResult.getOrThrow()
+                val remoteMessages = pagedResponse.messages
+                Timber.d("Fetched ${remoteMessages.size} messages from API for folder $folderRemoteId (local $folderId). Next page token from API: ${pagedResponse.nextPageToken}")
 
+                if (remoteMessages.isNotEmpty()) {
+                    val messageEntities = remoteMessages.map { it.toEntity(accountId, folderId) }
+                    messageDao.insertOrUpdateMessages(messageEntities)
+                    Timber.d("Saved ${messageEntities.size} messages to DB for folder $folderId.")
+                }
+
+                folderDao.updateLastSuccessfulSync(
+                    folderId,
+                    System.currentTimeMillis(),
+                    SyncStatus.SYNCED
+                )
+                Timber.d("Updated folder $folderId sync status to SYNCED.")
+                return Result.success()
+            } else {
+                val exception = messagesResult.exceptionOrNull()
+                val errorMessage = exception?.message ?: "Failed to fetch folder content"
+                Timber.e(exception, "Error syncing folder content for $folderId: $errorMessage")
+                folderDao.updateSyncStatusAndError(folderId, SyncStatus.ERROR, errorMessage)
+
+                if (exception is ApiServiceException && exception.errorDetails.isNeedsReAuth) {
+                    Timber.w("$TAG: Marking account $accountId for re-authentication due to folder content sync failure.")
+                    try {
+                        accountDao.setNeedsReauthentication(accountId, true)
+                    } catch (dbException: Exception) {
+                        Timber.e(
+                            dbException,
+                            "$TAG: Failed to mark account $accountId for re-authentication in DB."
+                        )
+                    }
+                }
+                return Result.failure()
+            }
         } catch (e: Exception) {
             Timber.e(e, "Error syncing folder content for accountId: $accountId, folderId: $folderId")
+            folderDao.updateSyncStatusAndError(
+                folderId,
+                SyncStatus.ERROR,
+                e.message ?: "Unknown error during folder content sync"
+            )
+            if (e is ApiServiceException && e.errorDetails.isNeedsReAuth) {
+                Timber.w("$TAG: Marking account $accountId for re-authentication due to outer exception during folder content sync.")
+                try {
+                    accountDao.setNeedsReauthentication(accountId, true)
+                } catch (dbException: Exception) {
+                    Timber.e(
+                        dbException,
+                        "$TAG: Failed to mark account $accountId for re-auth in DB (outer exception)."
+                    )
+                }
+            }
             return Result.failure()
         }
     }

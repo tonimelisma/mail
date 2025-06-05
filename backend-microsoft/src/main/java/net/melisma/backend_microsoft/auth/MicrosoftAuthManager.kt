@@ -120,7 +120,7 @@ class MicrosoftAuthManager @Inject constructor(
     private val tokenPersistenceService: MicrosoftTokenPersistenceService, // New service
     private val activeMicrosoftAccountHolder: ActiveMicrosoftAccountHolder, // New injection
     @Dispatcher(MailDispatchers.IO) private val ioDispatcher: CoroutineDispatcher
-) {
+) : MicrosoftAuthUserCredentials {
     private val TAG = "MicrosoftAuthManager"
 
     // private val PERSISTENCE_TAG = "MsAuthManagerPersist" // Moved to persistence service
@@ -924,4 +924,64 @@ class MicrosoftAuthManager @Inject constructor(
             // there's no specific action to take here for the current design other than logging.
             // If this method were to *complete* an ongoing Flow (like in AppAuth), it would need a way to signal that Flow.
         }
+
+    // ADD IMPLEMENTATION FOR MicrosoftAuthUserCredentials
+    override suspend fun getAccessToken(): String? = withContext(ioDispatcher) {
+        val accountId = activeMicrosoftAccountHolder.activeMicrosoftAccountId.value
+        if (accountId == null) {
+            Timber.tag(TAG).w("getAccessToken: No active Microsoft account ID found.")
+            return@withContext null
+        }
+
+        val account = getMsalAccount(accountId) // Assumes getMsalAccount retrieves IAccount by ID
+        if (account == null) {
+            Timber.tag(TAG).w("getAccessToken: Could not retrieve MSAL account for ID: $accountId")
+            return@withContext null
+        }
+
+        Timber.tag(TAG)
+            .d("getAccessToken: Attempting silent token acquisition for account: ${account.username}")
+        // Use a simplified version of acquireTokenSilent or a direct call if suitable
+        // For simplicity, adapting acquireTokenSilentInternal logic here:
+        if (mMultipleAccountApp == null) {
+            Timber.tag(TAG).e("getAccessToken: MSAL app not initialized.")
+            return@withContext null
+        }
+
+        val silentParameters = AcquireTokenSilentParameters.Builder()
+            .withScopes(MICROSOFT_SCOPES.toList()) // Ensure MICROSOFT_SCOPES is accessible
+            .forAccount(account)
+            .fromAuthority(account.authority) // It's good practice to specify authority
+            .build()
+
+        return@withContext try {
+            val authResult = mMultipleAccountApp!!.acquireTokenSilent(silentParameters)
+            Timber.tag(TAG)
+                .i("getAccessToken: Silent token acquisition successful for ${account.username}")
+            authResult.accessToken
+        } catch (e: MsalUiRequiredException) {
+            Timber.tag(TAG).w(
+                e,
+                "getAccessToken: MsalUiRequiredException for ${account.username}. UI interaction needed."
+            )
+            // Optionally, notify about re-authentication needed, though GraphApiHelper might not handle UI.
+            null // Token cannot be acquired silently
+        } catch (e: MsalException) {
+            Timber.tag(TAG).e(
+                e,
+                "getAccessToken: MsalException during silent token acquisition for ${account.username}"
+            )
+            null
+        } catch (e: Exception) {
+            Timber.tag(TAG).e(
+                e,
+                "getAccessToken: Generic exception during silent token acquisition for ${account.username}"
+            )
+            null
+        }
+    }
+
+    override suspend fun getActiveAccountId(): String? {
+        return activeMicrosoftAccountHolder.activeMicrosoftAccountId.value
+    }
 }

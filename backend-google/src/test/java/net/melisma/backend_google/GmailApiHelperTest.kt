@@ -1,6 +1,7 @@
 package net.melisma.backend_google
 
 // import net.melisma.core_data.errors.MappedErrorDetails // Commented out
+import com.google.api.services.gmail.Gmail
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.MockRequestHandleScope
@@ -16,13 +17,15 @@ import io.ktor.http.fullPath
 import io.ktor.http.headersOf
 import io.ktor.serialization.kotlinx.json.json
 import io.mockk.coEvery
-import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkStatic
 import io.mockk.unmockkStatic
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import net.melisma.backend_google.auth.GoogleAuthManager
 import net.melisma.backend_google.errors.GoogleErrorMapper
 import net.melisma.core_data.model.ErrorDetails
 import net.melisma.core_data.model.GenericAuthErrorType
@@ -32,8 +35,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.BeforeClass
 import org.junit.Test
-import java.io.IOException
 import timber.log.Timber
+import java.io.IOException
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class GmailApiHelperTest {
@@ -42,6 +45,11 @@ class GmailApiHelperTest {
     private lateinit var gmailApiHelper: GmailApiHelper
     private lateinit var json: Json
     private lateinit var mockEngine: MockEngine
+
+    // New mocks for dependencies
+    private lateinit var mockIoDispatcher: CoroutineDispatcher
+    private var mockGmailService: Gmail? = null // Nullable, can be null or a mock
+    private lateinit var mockAuthManager: GoogleAuthManager
 
     // To hold request handlers for different scenarios in a test
     private var requestHandler: suspend MockRequestHandleScope.(HttpRequestData) -> HttpResponseData =
@@ -207,6 +215,12 @@ class GmailApiHelperTest {
         mockErrorMapper =
             mockk<GoogleErrorMapper>(relaxed = true) // relax to avoid mocking every method
 
+        // Initialize new mocks
+        mockIoDispatcher = Dispatchers.Unconfined // Or TestCoroutineDispatcher()
+        mockGmailService =
+            mockk<Gmail>(relaxed = true) // Mocking as non-null for safety, can be set to null if specific tests need it
+        mockAuthManager = mockk<GoogleAuthManager>(relaxed = true)
+
         coEvery { mockErrorMapper.mapExceptionToErrorDetails(any()) } answers {
             val exception = arg<Throwable?>(0)
             val defaultMessage = "An unexpected error occurred with Google services."
@@ -259,12 +273,20 @@ class GmailApiHelperTest {
             this.requestHandler(request)
         }
 
-        val mockHttpClient = HttpClient(mockEngine) {
+        val httpClient = HttpClient(mockEngine) {
             install(ContentNegotiation) {
                 json(this@GmailApiHelperTest.json)
             }
         }
-        gmailApiHelper = GmailApiHelper(mockHttpClient, mockErrorMapper)
+
+        // Updated instantiation of GmailApiHelper
+        gmailApiHelper = GmailApiHelper(
+            httpClient = httpClient,
+            errorMapper = mockErrorMapper,
+            ioDispatcher = mockIoDispatcher,
+            gmailService = mockGmailService,
+            authManager = mockAuthManager
+        )
     }
 
     private fun setOkTextResponse(content: String) {
