@@ -42,14 +42,14 @@ class ActionUploadWorker @AssistedInject constructor(
         const val KEY_NEW_FOLDER_ID = "NEW_FOLDER_ID"
 
         // Example Action Types (define these more robustly, perhaps in a shared consts file or enum)
-        const val ACTION_MARK_READ = "MARK_READ"
+        const val ACTION_MARK_AS_READ = "MARK_AS_READ"
+        const val ACTION_MARK_AS_UNREAD = "MARK_AS_UNREAD"
         const val ACTION_STAR_MESSAGE = "STAR_MESSAGE"
         const val ACTION_DELETE_MESSAGE = "DELETE_MESSAGE"
         const val ACTION_MOVE_MESSAGE = "MOVE_MESSAGE"
         const val ACTION_SEND_MESSAGE = "SEND_MESSAGE"
         const val ACTION_CREATE_DRAFT = "CREATE_DRAFT"
         const val ACTION_UPDATE_DRAFT = "UPDATE_DRAFT"
-        // Add other action types for folders, accounts etc. as needed
     }
 
     override suspend fun doWork(): Result {
@@ -67,7 +67,6 @@ class ActionUploadWorker @AssistedInject constructor(
         val account = accountDao.getAccountByIdSuspend(accountId)
         if (account == null) {
             Timber.e("$TAG: Account not found for ID: $accountId. Failing task.")
-            // Optionally update a state for this entity if possible, though it's tricky without action details
             return Result.failure()
         }
 
@@ -85,11 +84,11 @@ class ActionUploadWorker @AssistedInject constructor(
                 Result.success()
             } else {
                 Timber.w("$TAG: Action '$actionType' failed for entity $entityId")
-                Result.retry() // or Result.failure() depending on whether it's recoverable
+                Result.retry()
             }
         } catch (e: Exception) {
             Timber.e(e, "$TAG: Exception during action '$actionType' for entity $entityId")
-            Result.retry() // or Result.failure()
+            Result.retry()
         }
     }
 
@@ -101,64 +100,47 @@ class ActionUploadWorker @AssistedInject constructor(
         payload: Map<String, Any?>
     ): Boolean {
         val result: Result<out Any> = when (actionType) {
-            ACTION_MARK_READ -> {
-                val isRead = payload[KEY_IS_READ] as? Boolean
+            ACTION_MARK_AS_READ, ACTION_MARK_AS_UNREAD -> {
+                val isReadStr = payload[KEY_IS_READ] as? String
+                val isRead = isReadStr?.toBoolean()
                 if (isRead == null) {
-                    Timber.w("$TAG: MARK_READ action missing 'isRead' boolean payload for entity $entityId.")
-                    Result.failure(IllegalArgumentException("Missing 'isRead' payload for MARK_READ"))
+                    Result.failure(IllegalArgumentException("Missing 'isRead' payload"))
                 } else {
-                    // mailService.markMessageAsRead(entityId, isRead) // Temporarily commented for diagnosis
-                    Result.success(Unit) // Diagnostic replacement
+                    mailService.markMessageRead(entityId, isRead)
                 }
             }
-
             ACTION_STAR_MESSAGE -> {
-                val isStarred = payload[KEY_IS_STARRED] as? Boolean
+                val isStarredStr = payload[KEY_IS_STARRED] as? String
+                val isStarred = isStarredStr?.toBoolean()
                 if (isStarred == null) {
-                    Timber.w("$TAG: STAR_MESSAGE action missing 'isStarred' boolean payload for entity $entityId.")
-                    Result.failure(IllegalArgumentException("Missing 'isStarred' payload for STAR_MESSAGE"))
+                    Result.failure(IllegalArgumentException("Missing 'isStarred' payload"))
                 } else {
                     mailService.starMessage(entityId, isStarred)
                 }
             }
 
-            ACTION_DELETE_MESSAGE -> {
-                mailService.deleteMessage(entityId)
-            }
-
+            ACTION_DELETE_MESSAGE -> mailService.deleteMessage(entityId)
             ACTION_MOVE_MESSAGE -> {
-                val destinationFolderId = payload[KEY_NEW_FOLDER_ID] as? String
+                val targetFolderId = payload[KEY_NEW_FOLDER_ID] as? String
                 val sourceFolderId = payload[KEY_OLD_FOLDER_ID] as? String
-                if (destinationFolderId == null) {
-                    Timber.w("$TAG: MOVE_MESSAGE action missing 'destinationFolderId' payload for entity $entityId.")
-                    Result.failure(IllegalArgumentException("Missing 'destinationFolderId' for MOVE_MESSAGE"))
-                } else if (sourceFolderId == null) {
-                    Timber.w("$TAG: MOVE_MESSAGE action missing 'sourceFolderId' payload for entity $entityId.")
-                    Result.failure(IllegalArgumentException("Missing 'sourceFolderId' for MOVE_MESSAGE"))
-                } else {
-                    mailService.moveMessage(entityId, sourceFolderId, destinationFolderId)
+                when {
+                    targetFolderId == null -> Result.failure(IllegalArgumentException("Missing target folder ID"))
+                    sourceFolderId == null -> Result.failure(IllegalArgumentException("Missing source folder ID"))
+                    else -> mailService.moveMessage(entityId, sourceFolderId, targetFolderId)
                 }
             }
-
             ACTION_SEND_MESSAGE -> {
-                val draftJson = payload[KEY_DRAFT_DETAILS] as? String
-                if (draftJson == null) {
-                    Timber.w("$TAG: SEND_MESSAGE action missing 'draftJson' payload for entity $entityId.")
-                    Result.failure(IllegalArgumentException("Missing 'draftJson' for SEND_MESSAGE"))
+                val message = messageDao.getMessageByIdSuspend(entityId)
+                if (message == null) {
+                    Result.failure(IllegalArgumentException("Message to send not found in DB: $entityId"))
                 } else {
-                    try {
-                        val draft = Json.decodeFromString<MessageDraft>(draftJson)
-                        mailService.sendMessage(draft)
-                    } catch (e: Exception) {
-                        Timber.e(
-                            e,
-                            "$TAG: SEND_MESSAGE action failed to decode draftJson for entity $entityId."
-                        )
-                        Result.failure(e)
-                    }
+                    val draft = MessageDraft(
+                        subject = message.subject ?: "",
+                        body = message.body ?: ""
+                    )
+                    mailService.sendMessage(draft)
                 }
             }
-
             ACTION_CREATE_DRAFT -> {
                 val draftJson = payload[KEY_DRAFT_DETAILS] as? String
                 if (draftJson == null) {
@@ -177,7 +159,6 @@ class ActionUploadWorker @AssistedInject constructor(
                     }
                 }
             }
-
             ACTION_UPDATE_DRAFT -> {
                 val draftJson = payload[KEY_DRAFT_DETAILS] as? String
                 if (draftJson == null) {
@@ -196,28 +177,24 @@ class ActionUploadWorker @AssistedInject constructor(
                     }
                 }
             }
-
             else -> {
-                Timber.e("$TAG: Unknown action type: $actionType for entity $entityId")
                 Result.failure(IllegalArgumentException("Unknown action type: $actionType"))
             }
         }
 
         if (result.isSuccess) {
-            // After a successful API call, update the local database state accordingly.
-            // For example, for a delete action, you'd delete the item from the local DB.
             appDatabase.withTransaction {
                 when (actionType) {
                     ACTION_DELETE_MESSAGE -> messageDao.deleteMessageById(entityId)
-                    // Add other post-success DB operations here
                 }
             }
         } else {
-            // Handle API errors
             val error = result.exceptionOrNull()
-            Timber.e(error, "API Error for action $actionType on entity $entityId")
-            // Update UI by setting an error state in the DB for the specific entity
-            // e.g., messageDao.updateLastSyncError(entityId, error?.message)
+            Timber.e(
+                error,
+                "API Error for action $actionType on entity $entityId: ${error?.message}"
+            )
+            messageDao.updateLastSyncError(entityId, error?.message ?: "Unknown API error")
         }
 
         return result.isSuccess

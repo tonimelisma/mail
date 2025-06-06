@@ -131,4 +131,6 @@ interface MessageRepository {
         messageId: String,
         attachment: Attachment
     ): Flow<String?>
+
+    fun observeMessageAttachments(messageId: String): Flow<List<Attachment>>
 }

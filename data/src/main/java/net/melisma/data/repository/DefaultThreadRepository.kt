@@ -56,7 +56,7 @@ class DefaultThreadRepository @Inject constructor(
 
     private var currentTargetAccount: Account? = null
     private var currentTargetFolder: MailFolder? = null
-    
+
     private var collectionJob: Job? = null
     private var networkFetchJob: Job? = null
 
@@ -88,7 +88,7 @@ class DefaultThreadRepository @Inject constructor(
 
         collectionJob?.cancel(CancellationException("New target folder set for threads: ${folder?.displayName}"))
         networkFetchJob?.cancel(CancellationException("New target folder set for threads: ${folder?.displayName}, cancelling network job too"))
-        
+
         currentTargetAccount = account
         currentTargetFolder = folder
 
@@ -97,13 +97,13 @@ class DefaultThreadRepository @Inject constructor(
             Timber.d("setTargetFolderForThreads: Cleared target, state set to Initial.")
             return
         }
-        
+
         // Shadowing for non-null access within coroutine scopes
         val currentAccount = account
         val currentFolder = folder
 
         _threadDataState.value = ThreadDataState.Loading
-        
+
         collectionJob = externalScope.launch {
             Timber.d("[${currentFolder.displayName}] Starting to observe MessageDao for account ${currentAccount.id}, folder ${currentFolder.id}")
             messageDao.getMessagesForFolder(currentAccount.id, currentFolder.id)
@@ -187,18 +187,18 @@ class DefaultThreadRepository @Inject constructor(
 
             val sortedMessages = messagesInThread.sortedByDescending { it.timestamp }
             val latestMessage = sortedMessages.first()
-            
+
             val domainMessages = sortedMessages.map { it.toDomainModel() }
 
             // Create a summary of participants
             val participantsList = domainMessages
-                .flatMap { 
+                .flatMap {
                     val senders = listOfNotNull(it.senderName, it.senderAddress?.substringBefore('@'))
                     val recipients = it.recipientNames.orEmpty() + it.recipientAddresses.orEmpty().mapNotNull { addr -> addr?.substringBefore('@') }
                     (senders + recipients).filterNotNull().filter { name -> name.isNotBlank() }
                 }
                 .distinct()
-            
+
             val participantsSummary = if (participantsList.size > 2) {
                 "${participantsList.take(2).joinToString()}, +${participantsList.size - 2}"
             } else {
@@ -218,15 +218,6 @@ class DefaultThreadRepository @Inject constructor(
             )
         }.sortedByDescending { it.lastMessageDateTime?.time }
     }
-
-    // Methods from ThreadRepository interface - STUB IMPLEMENTATIONS
-
-    // TODO: P2_WRITE - Define ActionTypes for Thread actions if they differ from Message actions
-    // For now, can reuse message action types if applicable or create new ones in ActionUploadWorker.
-    // e.g., ACTION_MARK_THREAD_READ, ACTION_DELETE_THREAD, ACTION_MOVE_THREAD
-
-    // This local enqueueActionUploadWorker method is now REMOVED.
-    // Calls will be made directly to syncEngine.enqueueThreadAction(...)
 
     override suspend fun markThreadRead(account: Account, threadId: String, isRead: Boolean): Result<Unit> {
         Timber.d("markThreadRead: threadId=$threadId, isRead=$isRead, account=${account.id}")
@@ -255,7 +246,6 @@ class DefaultThreadRepository @Inject constructor(
             return Result.success(Unit)
         } catch (e: Exception) {
             Timber.e(e, "$TAG: Error in markThreadRead for threadId $threadId")
-            // Optionally update sync status of messages in thread to ERROR here if needed
             return Result.failure(e)
         }
     }
@@ -294,7 +284,7 @@ class DefaultThreadRepository @Inject constructor(
         Timber.d("moveThread: threadId=$threadId, account=${account.id}, from $currentFolderId to $destinationFolderId")
         if (currentFolderId == destinationFolderId) {
             Timber.i("$TAG: Source and destination folder are the same ($currentFolderId). No action needed for thread $threadId.")
-            return Result.success(Unit) // Or a specific result indicating no-op
+            return Result.success(Unit)
         }
         try {
             appDatabase.withTransaction {
@@ -312,7 +302,7 @@ class DefaultThreadRepository @Inject constructor(
                 actionType = net.melisma.data.sync.workers.ActionUploadWorker.ACTION_MOVE_MESSAGE,
                 payload = mapOf(
                     "NEW_FOLDER_ID" to destinationFolderId,
-                    "OLD_FOLDER_ID" to currentFolderId, 
+                    "OLD_FOLDER_ID" to currentFolderId,
                     "APPLY_TO_THREAD" to true
                 )
             )

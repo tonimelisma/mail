@@ -1,5 +1,6 @@
 package net.melisma.backend_google
 
+import android.annotation.SuppressLint
 import android.util.Base64
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
@@ -1123,6 +1124,7 @@ class GmailApiHelper @Inject constructor(
         }
     }
 
+    @SuppressLint("SuspiciousIndentation")
     override suspend fun createDraftMessage(draft: net.melisma.core_data.model.MessageDraft): Result<Message> =
         withContext(ioDispatcher) {
         Timber.d("createDraftMessage: subject='${draft.subject}'")
@@ -1163,6 +1165,7 @@ class GmailApiHelper @Inject constructor(
         }
     }
 
+    @SuppressLint("SuspiciousIndentation")
     override suspend fun updateDraftMessage(
         messageId: String,
         draft: net.melisma.core_data.model.MessageDraft
@@ -1205,6 +1208,7 @@ class GmailApiHelper @Inject constructor(
         }
     }
 
+    @SuppressLint("SuspiciousIndentation")
     override suspend fun sendMessage(draft: net.melisma.core_data.model.MessageDraft): Result<String> =
         withContext(ioDispatcher) {
         Timber.d("sendMessage: subject='${draft.subject}'")

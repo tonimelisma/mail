@@ -6,8 +6,11 @@ package net.melisma.core_data.model
  * It serves as the primary account model used across UI and ViewModel layers.
  *
  * @property id A unique identifier for the account, typically provided by the auth system (e.g., MSAL account ID).
- * @property username A user-friendly name or email address representing the account.
+ * @property displayName The display name associated with the account, if available.
+ * @property emailAddress The primary email address for the account.
  * @property providerType An identifier string for the backend provider (e.g., "MS" for Microsoft, "GOOGLE" for Google). Used for routing logic.
+ * @property needsReauthentication A flag indicating if the account's credentials have expired and require user action.
+ * @property isLocalOnly A flag indicating if this representation is only local and not yet synced with any backend.
  */
 data class Account(
     val id: String,

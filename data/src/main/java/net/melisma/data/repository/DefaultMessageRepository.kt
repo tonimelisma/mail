@@ -180,7 +180,7 @@ class DefaultMessageRepository @Inject constructor(
 
         if (newAccountId == currentTargetAccount?.id && newFolderId == currentTargetFolderId) {
             Timber.d(
-                "setTargetFolder: Same target account/folder. No change to repository\'s internal target."
+                "setTargetFolder: Same target account/folder. No change to repository's internal target."
             )
             return
         }
@@ -369,8 +369,8 @@ class DefaultMessageRepository @Inject constructor(
         syncEngine.enqueueMessageAction(
             account.id,
             messageId,
-            ActionUploadWorker.ACTION_MARK_READ,
-            mapOf("isRead" to isRead)
+            if (isRead) ActionUploadWorker.ACTION_MARK_AS_READ else ActionUploadWorker.ACTION_MARK_AS_UNREAD,
+            mapOf(ActionUploadWorker.KEY_IS_READ to isRead.toString())
         )
         Result.success(Unit)
     }
@@ -385,7 +385,7 @@ class DefaultMessageRepository @Inject constructor(
             account.id,
             messageId,
             ActionUploadWorker.ACTION_STAR_MESSAGE,
-            mapOf("isStarred" to isStarred)
+            mapOf(ActionUploadWorker.KEY_IS_STARRED to isStarred.toString())
         )
         Result.success(Unit)
     }
@@ -419,8 +419,8 @@ class DefaultMessageRepository @Inject constructor(
             messageId,
             ActionUploadWorker.ACTION_MOVE_MESSAGE,
             mapOf(
-                "currentFolderId" to currentMessage.folderId,
-                "destinationFolderId" to newFolderId
+                ActionUploadWorker.KEY_OLD_FOLDER_ID to currentMessage.folderId,
+                ActionUploadWorker.KEY_NEW_FOLDER_ID to newFolderId
             )
         )
         Result.success(Unit)
@@ -640,5 +640,10 @@ class DefaultMessageRepository @Inject constructor(
         )
 
         Result.success(updatedMessage.toDomainModel())
+    }
+
+    override fun observeMessageAttachments(messageId: String): Flow<List<Attachment>> {
+        return attachmentDao.getAttachmentsForMessage(messageId)
+            .map { entities -> entities.map { it.toDomainModel() } }
     }
 }

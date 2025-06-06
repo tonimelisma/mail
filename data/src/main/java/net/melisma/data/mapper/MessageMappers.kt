@@ -17,7 +17,7 @@ fun Message.toEntity(accountId: String, folderId: String): MessageEntity {
             e,
             "Failed to parse receivedDateTime: '${this.receivedDateTime}'. Defaulting to 0L for accountId: $accountId, folderId: $folderId, messageId: ${this.id}"
         )
-        0L // Use 0L as a marker for "unknown/unparseable date"
+        0L
     }
 
     val sentTs: Long? = this.sentDateTime?.let {
@@ -28,26 +28,28 @@ fun Message.toEntity(accountId: String, folderId: String): MessageEntity {
                 e,
                 "Failed to parse sentDateTime: '$it'. Defaulting to null for accountId: $accountId, folderId: $folderId, messageId: ${this.id}"
             )
-            null // If sentDateTime is present but unparseable, store null
+            null
         }
     }
 
     return MessageEntity(
+        id = this.id,
         messageId = this.id,
         accountId = accountId,
         folderId = folderId,
         threadId = this.threadId,
         subject = this.subject,
         snippet = this.bodyPreview,
+        body = this.body,
         senderName = this.senderName,
         senderAddress = this.senderAddress,
-        recipientNames = this.recipientNames,       // Now directly from Message model
-        recipientAddresses = this.recipientAddresses, // Now directly from Message model
-        timestamp = receivedTs, // this.timestamp is also available if Message.fromApi was used
-        sentTimestamp = sentTs,                     // Added
+        recipientNames = this.recipientNames,
+        recipientAddresses = this.recipientAddresses,
+        timestamp = receivedTs,
+        sentTimestamp = sentTs,
         isRead = this.isRead,
-        isStarred = this.isStarred,                 // Now directly from Message model
-        hasAttachments = this.hasAttachments        // Now directly from Message model
+        isStarred = this.isStarred,
+        hasAttachments = this.hasAttachments
     )
 }
 
@@ -60,7 +62,7 @@ fun MessageEntity.toDomainModel(): Message {
             e,
             "Failed to parse timestamp in MessageEntity.toDomainModel for id ${this.id}. Defaulting receivedDateTime to empty string."
         )
-        "" // Fallback for invalid timestamp. Message.receivedDateTime is String (non-null).
+        ""
     }
     val sentDateTimeStr: String? = this.sentTimestamp?.let {
         try {

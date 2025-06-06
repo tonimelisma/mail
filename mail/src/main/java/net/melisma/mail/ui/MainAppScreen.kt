@@ -176,7 +176,7 @@ fun MainAppScreen(
                                         context as Activity
                                     )
                                 }) {
-                                    Text("Re-authenticate ${acc.username}")
+                                    Text("Re-authenticate ${acc.emailAddress}")
                                 }
                             }
                         }
