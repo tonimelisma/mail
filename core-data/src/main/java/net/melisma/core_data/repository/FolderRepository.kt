@@ -56,4 +56,6 @@ interface FolderRepository {
     suspend fun syncFolderContents(accountId: String, folderId: String): Result<Unit>
     fun getThreadsInFolder(accountId: String, folderId: String): Flow<List<MailThread>>
     fun getMessagesInFolder(accountId: String, folderId: String): Flow<List<Message>>
+    fun getFolderById(folderId: String): Flow<net.melisma.core_data.model.MailFolder?>
+    suspend fun getFolderByIdSuspend(folderId: String): net.melisma.core_data.model.MailFolder?
 }

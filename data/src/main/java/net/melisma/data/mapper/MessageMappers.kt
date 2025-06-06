@@ -56,31 +56,43 @@ fun MessageEntity.toDomainModel(): Message {
         OffsetDateTime.ofInstant(java.time.Instant.ofEpochMilli(this.timestamp), ZoneOffset.UTC)
             .toString()
     } catch (e: Exception) {
-        "" // Fallback for invalid timestamp
+        Timber.w(
+            e,
+            "Failed to parse timestamp in MessageEntity.toDomainModel for id ${this.id}. Defaulting receivedDateTime to empty string."
+        )
+        "" // Fallback for invalid timestamp. Message.receivedDateTime is String (non-null).
     }
     val sentDateTimeStr: String? = this.sentTimestamp?.let {
         try {
             OffsetDateTime.ofInstant(java.time.Instant.ofEpochMilli(it), ZoneOffset.UTC).toString()
         } catch (e: Exception) {
+            Timber.w(
+                e,
+                "Failed to parse sentTimestamp in MessageEntity.toDomainModel for id ${this.id}. Defaulting sentDateTime to null."
+            )
             null
         }
     }
 
     return Message(
-        id = this.messageId,
+        id = this.id,
+        accountId = this.accountId,
+        folderId = this.folderId,
         threadId = this.threadId,
         receivedDateTime = receivedDateTimeStr,
-        sentDateTime = sentDateTimeStr, // Mapped from sentTimestamp
+        sentDateTime = sentDateTimeStr,
         subject = this.subject,
         senderName = this.senderName,
         senderAddress = this.senderAddress,
         bodyPreview = this.snippet,
         isRead = this.isRead,
-        body = null, // Full body is not part of this basic message model/entity
+        body = this.body,
+        bodyContentType = null,
         recipientNames = this.recipientNames,
         recipientAddresses = this.recipientAddresses,
         isStarred = this.isStarred,
         hasAttachments = this.hasAttachments,
-        timestamp = this.timestamp // Pass through the Long timestamp
+        timestamp = this.timestamp,
+        attachments = emptyList()
     )
 } 

@@ -11,7 +11,7 @@ import net.melisma.core_data.model.SyncStatus
     foreignKeys = [
         ForeignKey(
             entity = MessageEntity::class,
-            parentColumns = ["messageId"],
+            parentColumns = ["id"],
             childColumns = ["messageId"],
             onDelete = ForeignKey.CASCADE
         )
@@ -27,7 +27,7 @@ data class AttachmentEntity(
     val messageId: String,
     val fileName: String,
     val size: Long,
-    val contentType: String,
+    val mimeType: String,
     val contentId: String? = null,
     val isInline: Boolean = false,
     val isDownloaded: Boolean = false,

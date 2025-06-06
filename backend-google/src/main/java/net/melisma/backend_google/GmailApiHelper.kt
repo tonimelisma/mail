@@ -39,10 +39,12 @@ import net.melisma.backend_google.model.MessagePartHeader
 import net.melisma.core_data.datasource.MailApiService
 import net.melisma.core_data.errors.ApiServiceException
 import net.melisma.core_data.errors.ErrorMapperService
+import net.melisma.core_data.model.EmailAddress
 import net.melisma.core_data.model.MailFolder
 import net.melisma.core_data.model.Message
 import net.melisma.core_data.model.PagedMessagesResponse
 import net.melisma.core_data.model.WellKnownFolderType
+import net.melisma.core_data.model.fromApi
 import timber.log.Timber
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -89,6 +91,26 @@ class GmailApiHelper @Inject constructor(
     }
 
     private val jsonParser = Json { ignoreUnknownKeys = true }
+
+    private suspend fun getCurrentAccountId(): String {
+        return authManager.getNullableActiveAccountId()
+            ?: throw IllegalStateException("Active account ID not found")
+    }
+
+    private fun formatEmailAddressesRfc2822(addresses: List<EmailAddress>): String {
+        return addresses.joinToString(", ") {
+            val displayNameString = it.displayName
+            if (displayNameString != null && displayNameString.isNotBlank()) {
+                "\"${displayNameString.replace("\"", "\\\"")}\" <${it.emailAddress}>"
+            } else {
+                it.emailAddress
+            }
+        }
+    }
+
+    private fun formatEmailAddressesForJsonValue(addresses: List<EmailAddress>): String {
+        return addresses.joinToString(", ") { it.emailAddress }
+    }
 
     override suspend fun getMailFolders(
         activity: android.app.Activity?,
@@ -175,9 +197,6 @@ class GmailApiHelper @Inject constructor(
                 type = WellKnownFolderType.STARRED; displayName =
                     DISPLAY_NAME_STARRED; determinedByTypeOrName = true
             }
-            GMAIL_ID_CHAT -> {
-                type = WellKnownFolderType.HIDDEN; determinedByTypeOrName = true
-            }
             "UNREAD" -> {
                 type = WellKnownFolderType.HIDDEN; determinedByTypeOrName = true
                 Timber.w("Label ID is 'UNREAD'. Setting HIDDEN. Original Name: '${label.name}'")
@@ -258,7 +277,30 @@ class GmailApiHelper @Inject constructor(
             "internalFetchMessageDetails: Fetching details for messageId: $messageId. SelectFields (metadata hint): $selectFields"
         )
         val gmailMessage = fetchRawGmailMessage(messageId)
-        gmailMessage?.let { mapGmailMessageToMessage(it) }
+        gmailMessage?.let {
+            val accountId = getCurrentAccountId()
+            // Determine folderId: Use INBOX if present, else first non-special label, else INBOX fallback
+            val determinedFolderId =
+                it.labelIds?.find { labelId -> labelId == GMAIL_LABEL_ID_INBOX }
+                    ?: it.labelIds?.firstOrNull { labelId ->
+                        !listOf(
+                            GMAIL_LABEL_ID_SENT,
+                            GMAIL_ID_CHAT,
+                            GMAIL_LABEL_ID_DRAFT,
+                            GMAIL_LABEL_ID_TRASH,
+                            GMAIL_LABEL_ID_SPAM,
+                            GMAIL_LABEL_ID_STARRED,
+                            GMAIL_LABEL_ID_IMPORTANT
+                        ).contains(labelId.uppercase())
+                    }
+                    ?: GMAIL_LABEL_ID_INBOX // Default fallback
+            mapGmailMessageToMessage(
+                it,
+                accountId,
+                determinedFolderId,
+                isForBodyContent = false
+            ) // isForBodyContent might depend on selectFields
+        }
     }
 
     private suspend fun fetchRawGmailMessage(messageId: String): GmailMessage? =
@@ -360,10 +402,12 @@ class GmailApiHelper @Inject constructor(
 
     private suspend fun mapGmailMessageToMessage(
         gmailMessage: GmailMessage,
+        accountId: String,
+        folderIdToAssign: String,
         isForBodyContent: Boolean = false
     ): Message? = withContext(ioDispatcher) {
         Timber.v(
-            "mapGmailMessageToMessage for Gmail Message ID: ${gmailMessage.id}, isForBodyContent: $isForBodyContent"
+            "mapGmailMessageToMessage for Gmail Message ID: ${gmailMessage.id}, accountId: $accountId, folderId: $folderIdToAssign, isForBodyContent: $isForBodyContent"
         )
         try {
             val headers = gmailMessage.payload?.headers ?: emptyList()
@@ -421,9 +465,13 @@ class GmailApiHelper @Inject constructor(
                     foundContentType ?: "text/plain"
             }
 
-            Message(
+            val currentAttachments = extractAttachmentsFromMessage(gmailMessage.id!!, gmailMessage)
+
+            Message.fromApi(
                 id = gmailMessage.id
                     ?: throw IllegalStateException("Message ID cannot be null from Gmail message: $gmailMessage"),
+                accountId = accountId,
+                folderId = folderIdToAssign,
                 threadId = threadId,
                 receivedDateTime = receivedDateTimeString,
                 sentDateTime = sentDateTimeString,
@@ -437,8 +485,11 @@ class GmailApiHelper @Inject constructor(
                 isRead = isRead,
                 body = messageBody,
                 bodyContentType = messageBodyContentType,
+                recipientNames = extractRecipientNames(gmailMessage),
+                recipientAddresses = extractRecipientAddresses(gmailMessage),
                 isStarred = gmailMessage.labelIds?.contains(GMAIL_LABEL_ID_STARRED) == true,
-                hasAttachments = gmailMessage.payload?.parts?.any { !it.filename.isNullOrBlank() && !it.body?.attachmentId.isNullOrBlank() } == true
+                hasAttachments = gmailMessage.payload?.parts?.any { !it.filename.isNullOrBlank() && !it.body?.attachmentId.isNullOrBlank() } == true,
+                attachments = currentAttachments
             )
         } catch (e: Exception) {
             Timber.e(e, "Error mapping GmailMessage to Message: ${e.message}")
@@ -508,11 +559,33 @@ class GmailApiHelper @Inject constructor(
         withContext(ioDispatcher) {
         Timber.d("getMessageContent: Fetching full content for messageId $messageId")
             try {
+                val accountId = getCurrentAccountId()
             val gmailMessage =
                 fetchRawGmailMessage(messageId)
                     ?: return@withContext Result.failure(Exception("Failed to fetch raw message for $messageId"))
 
-            val message = mapGmailMessageToMessage(gmailMessage, isForBodyContent = true)
+                // Determine folderId: Use INBOX if present, else first non-special label, else INBOX fallback
+                val determinedFolderId =
+                    gmailMessage.labelIds?.find { labelId -> labelId == GMAIL_LABEL_ID_INBOX }
+                        ?: gmailMessage.labelIds?.firstOrNull { labelId ->
+                            !listOf(
+                                GMAIL_LABEL_ID_SENT,
+                                GMAIL_ID_CHAT,
+                                GMAIL_LABEL_ID_DRAFT,
+                                GMAIL_LABEL_ID_TRASH,
+                                GMAIL_LABEL_ID_SPAM,
+                                GMAIL_LABEL_ID_STARRED,
+                                GMAIL_LABEL_ID_IMPORTANT
+                            ).contains(labelId.uppercase())
+                        }
+                        ?: GMAIL_LABEL_ID_INBOX // Default fallback
+
+                val message = mapGmailMessageToMessage(
+                    gmailMessage,
+                    accountId,
+                    determinedFolderId,
+                    isForBodyContent = true
+                )
                 ?: return@withContext Result.failure(Exception("Failed to map Gmail message $messageId to domain model for body content"))
 
             Timber.i(
@@ -731,6 +804,7 @@ class GmailApiHelper @Inject constructor(
             Timber.d(
                 "Fetching messages for thread ID: $threadId (original folder: $folderId, maxResults: $maxResults). selectFields noted: $selectFields"
             )
+            val accountId = getCurrentAccountId()
             val response = httpClient.get("$BASE_URL/threads/$threadId") {
                 accept(ContentType.Application.Json)
             }
@@ -745,7 +819,13 @@ class GmailApiHelper @Inject constructor(
                 val gmailThread = response.body<GmailThread>()
 
                 val messages =
-                    gmailThread.messages?.mapNotNull { mapGmailMessageToMessage(it) } ?: emptyList()
+                    gmailThread.messages?.mapNotNull {
+                        mapGmailMessageToMessage(
+                            it,
+                            accountId,
+                            folderId
+                        )
+                    } ?: emptyList()
 
                 Timber.d(
                     "Successfully fetched and mapped ${messages.size} messages for thread ID: $threadId"
@@ -977,7 +1057,7 @@ class GmailApiHelper @Inject constructor(
 
             if (response.status.isSuccess()) {
                 val message = response.body<GmailMessage>()
-                val attachments = extractAttachmentsFromMessage(message)
+                val attachments = extractAttachmentsFromMessage(message.id!!, message)
                 Result.success(attachments)
             } else {
                 val errorBody = response.bodyAsText().take(500)
@@ -1047,6 +1127,7 @@ class GmailApiHelper @Inject constructor(
         withContext(ioDispatcher) {
         Timber.d("createDraftMessage: subject='${draft.subject}'")
             try {
+                val accountId = getCurrentAccountId()
             val draftPayload = buildGmailDraftPayload(draft)
             val response = httpClient.post("$BASE_URL/drafts") {
                 accept(ContentType.Application.Json)
@@ -1055,7 +1136,11 @@ class GmailApiHelper @Inject constructor(
 
             if (response.status.isSuccess()) {
                 val gmailDraft = response.body<GmailDraftResponse>()
-                val message = convertGmailMessageToMessage(gmailDraft.message)
+                val message = convertGmailMessageToMessage(
+                    gmailDraft.message,
+                    accountId,
+                    GMAIL_LABEL_ID_DRAFT
+                )
                 Result.success(message)
             } else {
                 val errorBody = response.bodyAsText().take(500)
@@ -1084,6 +1169,7 @@ class GmailApiHelper @Inject constructor(
     ): Result<Message> = withContext(ioDispatcher) {
         Timber.d("updateDraftMessage: messageId='$messageId', subject='${draft.subject}'")
         try {
+            val accountId = getCurrentAccountId()
             val draftPayload = buildGmailDraftPayload(draft)
             val response = httpClient.patch("$BASE_URL/drafts/$messageId") {
                 accept(ContentType.Application.Json)
@@ -1092,7 +1178,11 @@ class GmailApiHelper @Inject constructor(
 
             if (response.status.isSuccess()) {
                 val gmailDraft = response.body<GmailDraftResponse>()
-                val message = convertGmailMessageToMessage(gmailDraft.message)
+                val message = convertGmailMessageToMessage(
+                    gmailDraft.message,
+                    accountId,
+                    GMAIL_LABEL_ID_DRAFT
+                )
                 Result.success(message)
             } else {
                 val errorBody = response.bodyAsText().take(500)
@@ -1119,6 +1209,7 @@ class GmailApiHelper @Inject constructor(
         withContext(ioDispatcher) {
         Timber.d("sendMessage: subject='${draft.subject}'")
             try {
+                getCurrentAccountId()
             val messagePayload = buildGmailSendPayload(draft)
             val response = httpClient.post("$BASE_URL/messages/send") {
                 accept(ContentType.Application.Json)
@@ -1156,6 +1247,7 @@ class GmailApiHelper @Inject constructor(
     ): Result<List<Message>> = withContext(ioDispatcher) {
         Timber.d("searchMessages: query='$query', folderId='$folderId', maxResults=$maxResults")
         try {
+            val accountId = getCurrentAccountId()
             val searchQuery = if (folderId != null) "in:$folderId $query" else query
             val response = httpClient.get("$BASE_URL/messages") {
                 accept(ContentType.Application.Json)
@@ -1174,7 +1266,25 @@ class GmailApiHelper @Inject constructor(
                             }
                             if (detailResponse.status.isSuccess()) {
                                 val fullMessage = detailResponse.body<GmailMessage>()
-                                convertGmailMessageToMessage(fullMessage)
+                                val determinedFolderId = folderId
+                                    ?: (fullMessage.labelIds?.find { it == GMAIL_LABEL_ID_INBOX }
+                                        ?: fullMessage.labelIds?.firstOrNull { labelId ->
+                                            !listOf(
+                                                GMAIL_LABEL_ID_SENT,
+                                                GMAIL_ID_CHAT,
+                                                GMAIL_LABEL_ID_DRAFT,
+                                                GMAIL_LABEL_ID_TRASH,
+                                                GMAIL_LABEL_ID_SPAM,
+                                                GMAIL_LABEL_ID_STARRED,
+                                                GMAIL_LABEL_ID_IMPORTANT
+                                            ).contains(labelId.uppercase())
+                                        }
+                                        ?: GMAIL_LABEL_ID_INBOX)
+                                convertGmailMessageToMessage(
+                                    fullMessage,
+                                    accountId,
+                                    determinedFolderId
+                                )
                             } else null
                         }.getOrNull()
                     }
@@ -1201,7 +1311,10 @@ class GmailApiHelper @Inject constructor(
         }
     }
 
-    private fun extractAttachmentsFromMessage(message: GmailMessage): List<net.melisma.core_data.model.Attachment> {
+    private fun extractAttachmentsFromMessage(
+        parentMessageId: String,
+        message: GmailMessage
+    ): List<net.melisma.core_data.model.Attachment> {
         val attachments = mutableListOf<net.melisma.core_data.model.Attachment>()
 
         fun extractFromPart(part: MessagePart) {
@@ -1209,13 +1322,27 @@ class GmailApiHelper @Inject constructor(
                 attachments.add(
                     net.melisma.core_data.model.Attachment(
                         id = attachmentId,
-                        fileName = part.filename ?: "attachment",
-                        size = part.body.size?.toLong() ?: 0L,
+                        messageId = parentMessageId,
+                        fileName = part.filename ?: "attachment-${attachmentId}",
                         contentType = part.mimeType ?: "application/octet-stream",
-                        contentId = part.headers?.find { it.name == "Content-ID" }?.value,
-                        isInline = part.headers?.find { it.name == "Content-Disposition" }?.value?.contains(
-                            "inline"
-                        ) == true
+                        size = part.body.size?.toLong() ?: 0L,
+                        isInline = part.headers?.find {
+                            it.name.equals(
+                                "Content-Disposition",
+                                ignoreCase = true
+                            )
+                        }?.value?.contains(
+                            "inline", ignoreCase = true
+                        ) == true,
+                        contentId = part.headers?.find {
+                            it.name.equals(
+                                "Content-ID",
+                                ignoreCase = true
+                            )
+                        }?.value?.removeSurrounding("<", ">"),
+                        localUri = null,
+                        downloadStatus = if (part.body.data != null && part.body.data.isNotEmpty()) "DOWNLOADED" else "NOT_DOWNLOADED",
+                        lastSyncError = null
                     )
                 )
             }
@@ -1238,38 +1365,55 @@ class GmailApiHelper @Inject constructor(
 
     private fun buildGmailDraftPayload(draft: net.melisma.core_data.model.MessageDraft): Map<String, Any> {
         val headers = mutableListOf<Map<String, String>>()
-        headers.add(mapOf("name" to "To", "value" to draft.to.joinToString(", ")))
-        draft.cc?.let {
-            if (it.isNotEmpty()) headers.add(
+        headers.add(mapOf("name" to "To", "value" to formatEmailAddressesForJsonValue(draft.to)))
+        if (draft.cc.isNotEmpty()) {
+            headers.add(
                 mapOf(
                     "name" to "Cc",
-                    "value" to it.joinToString(", ")
+                    "value" to formatEmailAddressesForJsonValue(draft.cc)
                 )
             )
         }
-        draft.bcc?.let {
-            if (it.isNotEmpty()) headers.add(
+        if (draft.bcc.isNotEmpty()) {
+            headers.add(
                 mapOf(
                     "name" to "Bcc",
-                    "value" to it.joinToString(", ")
+                    "value" to formatEmailAddressesForJsonValue(draft.bcc)
                 )
             )
         }
-        draft.subject?.let { headers.add(mapOf("name" to "Subject", "value" to it)) }
+        draft.subject.let { headers.add(mapOf("name" to "Subject", "value" to it)) }
 
-        return mapOf(
-            "message" to mapOf(
-                "payload" to mapOf(
-                    "headers" to headers,
-                    "body" to mapOf(
-                        "data" to Base64.encodeToString(
-                            draft.body?.toByteArray() ?: byteArrayOf(),
-                            Base64.URL_SAFE or Base64.NO_WRAP
-                        )
+        // Determine content type, default to text/plain if body is simple, text/html if complex.
+        // For simplicity, let's assume body is HTML if it contains '<' and '>', otherwise plain.
+        // A more robust solution would be to have MessageDraft specify bodyContentType.
+        val bodyContentType =
+            if (draft.body.contains("<") && draft.body.contains(">")) "text/html" else "text/plain"
+
+        // Basic structure for a single part message. Attachments would require multipart.
+        // Gmail API for drafts is a bit tricky with attachments directly in this structure.
+        // Often, attachments are uploaded separately or message is sent as raw.
+        // For now, focusing on body.
+        val messagePayload = mutableMapOf<String, Any>(
+            "payload" to mapOf(
+                "mimeType" to bodyContentType,
+                "headers" to headers,
+                "body" to mapOf(
+                    "data" to Base64.encodeToString(
+                        draft.body.toByteArray(Charsets.UTF_8),
+                        Base64.URL_SAFE or Base64.NO_WRAP
                     )
                 )
             )
         )
+        // If draft.existingMessageId is present, Gmail expects 'id' for the draft and 'message.id' for the message being updated.
+        // However, the current MessageDraft.existingMessageId is the *message* id, not draft id.
+        // The API path /drafts/{draftId} uses the draftId.
+        // If this is for updating a message *within* a draft, the structure is { "message": { "raw": "...", "id": "messageId" } }
+        // The current call to client.patch already has draftId in URL.
+        // The payload here is for the "message" object within the draft.
+
+        return mapOf("message" to messagePayload)
     }
 
     private fun buildGmailSendPayload(draft: net.melisma.core_data.model.MessageDraft): Map<String, Any> {
@@ -1284,23 +1428,53 @@ class GmailApiHelper @Inject constructor(
 
     private fun buildRfc2822Message(draft: net.melisma.core_data.model.MessageDraft): String {
         val message = StringBuilder()
-        message.append("To: ${draft.to.joinToString(", ")}\r\n")
-        draft.cc?.let { if (it.isNotEmpty()) message.append("Cc: ${it.joinToString(", ")}\r\n") }
-        draft.bcc?.let { if (it.isNotEmpty()) message.append("Bcc: ${it.joinToString(", ")}\r\n") }
-        draft.subject?.let { message.append("Subject: $it\r\n") }
+        // Standard headers
+        message.append(
+            "Date: ${
+                SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss Z", Locale.US).format(
+                    Date()
+                )
+            }\r\n"
+        ) // Add Date header
+        message.append("MIME-Version: 1.0\r\n") // Standard MIME header
+
+        message.append("To: ${formatEmailAddressesRfc2822(draft.to)}\r\n")
+        if (draft.cc.isNotEmpty()) message.append("Cc: ${formatEmailAddressesRfc2822(draft.cc)}\r\n")
+        if (draft.bcc.isNotEmpty()) message.append("Bcc: ${formatEmailAddressesRfc2822(draft.bcc)}\r\n")
+        // From header will be set by Gmail based on authenticated user.
+        // draft.from is not part of MessageDraft, which is correct.
+        message.append("Subject: ${draft.subject}\r\n") // Ensure subject is not null, MessageDraft defaults to ""
+
+        // For simplicity, assuming body is HTML. A more robust solution would check draft.bodyContentType
+        // This simplified version doesn't handle attachments via raw RFC2822.
+        // That would require a multipart/mixed structure.
         message.append("Content-Type: text/html; charset=utf-8\r\n")
+        message.append("Content-Transfer-Encoding: base64\r\n") // Gmail often expects body to be base64 encoded for raw.
         message.append("\r\n")
-        message.append(draft.body ?: "")
+        message.append(
+            Base64.encodeToString(
+                draft.body.toByteArray(Charsets.UTF_8),
+                Base64.NO_WRAP
+            )
+        ) // Encode body to Base64
         return message.toString()
     }
 
-    private fun convertGmailMessageToMessage(gmailMessage: GmailMessage): Message {
+    private fun convertGmailMessageToMessage(
+        gmailMessage: GmailMessage,
+        accountId: String,
+        folderIdToAssign: String
+    ): Message {
         val timestamp = gmailMessage.internalDate?.toLongOrNull() ?: System.currentTimeMillis()
         val receivedDate = java.time.Instant.ofEpochMilli(timestamp).toString()
         val sentDate = java.time.Instant.ofEpochMilli(timestamp).toString()
 
-        return Message(
-            id = gmailMessage.id ?: "",
+        val currentAttachments = extractAttachmentsFromMessage(gmailMessage.id!!, gmailMessage)
+
+        return Message.fromApi(
+            id = gmailMessage.id ?: throw IllegalStateException("Gmail message ID is null"),
+            accountId = accountId,
+            folderId = folderIdToAssign,
             threadId = gmailMessage.threadId,
             receivedDateTime = receivedDate,
             sentDateTime = sentDate,
@@ -1309,21 +1483,13 @@ class GmailApiHelper @Inject constructor(
             senderAddress = extractSenderAddress(gmailMessage),
             bodyPreview = gmailMessage.snippet,
             isRead = gmailMessage.labelIds?.contains("UNREAD") != true,
+            body = null,
+            bodyContentType = null,
             recipientNames = extractRecipientNames(gmailMessage),
             recipientAddresses = extractRecipientAddresses(gmailMessage),
-            isStarred = gmailMessage.labelIds?.contains("STARRED") == true,
-            hasAttachments = gmailMessage.payload?.let { payload ->
-                val rootPart = MessagePart(
-                    partId = null,
-                    mimeType = payload.mimeType,
-                    filename = null,
-                    headers = payload.headers,
-                    body = payload.body,
-                    parts = payload.parts
-                )
-                hasAttachments(rootPart)
-            } == true,
-            timestamp = timestamp
+            isStarred = gmailMessage.labelIds?.contains(GMAIL_LABEL_ID_STARRED) == true,
+            hasAttachments = gmailMessage.payload?.parts?.any { !it.filename.isNullOrBlank() && !it.body?.attachmentId.isNullOrBlank() } == true,
+            attachments = currentAttachments
         )
     }
 
@@ -1360,11 +1526,6 @@ class GmailApiHelper @Inject constructor(
             } ?: emptyList()
     }
 
-    private fun hasAttachments(payload: MessagePart): Boolean {
-        if (payload.body?.attachmentId != null) return true
-        return payload.parts?.any { hasAttachments(it) } == true
-    }
-
     override suspend fun getMessagesForFolder(
         folderId: String,
         activity: android.app.Activity?,
@@ -1373,6 +1534,7 @@ class GmailApiHelper @Inject constructor(
     ): Result<PagedMessagesResponse> = withContext(ioDispatcher) {
         Timber.d("getMessagesForFolder: folderId='$folderId', maxResults=$maxResults, pageToken='$pageToken'")
         try {
+            val accountId = getCurrentAccountId()
             val actualMaxResults = maxResults ?: DEFAULT_MAX_RESULTS.toInt()
 
             val listResponse: HttpResponse = httpClient.get("$BASE_URL/messages") {
@@ -1419,7 +1581,12 @@ class GmailApiHelper @Inject constructor(
                         try {
                             val rawGmailMessage = fetchRawGmailMessage(messageId)
                             rawGmailMessage?.let {
-                                mapGmailMessageToMessage(it, isForBodyContent = false)
+                                mapGmailMessageToMessage(
+                                    it,
+                                    accountId,
+                                    folderId,
+                                    isForBodyContent = false
+                                )
                             }
                         } catch (e: Exception) {
                             Timber.e(

@@ -127,7 +127,6 @@ class DefaultThreadRepository @Inject constructor(
                     ensureNetworkFetch(
                         currentAccount,
                         currentFolder,
-                        currentFolder.id,
                         isExplicitRefresh = false,
                         isBackgroundCheck = false
                     )
@@ -138,7 +137,6 @@ class DefaultThreadRepository @Inject constructor(
     private fun ensureNetworkFetch(
         account: Account,
         folder: MailFolder,
-        folderApiId: String,
         isExplicitRefresh: Boolean,
         isBackgroundCheck: Boolean
     ) {
@@ -147,7 +145,7 @@ class DefaultThreadRepository @Inject constructor(
             return
         }
         Timber.d("[${folder.displayName}] Ensuring network fetch. Explicit: $isExplicitRefresh, Background: $isBackgroundCheck")
-        syncEngine.syncFolderContent(account.id, folder.id, folderApiId)
+        syncEngine.syncFolderContent(account.id, folder.id, folder.id)
     }
 
     override suspend fun refreshThreads(activity: Activity?) {
@@ -160,12 +158,6 @@ class DefaultThreadRepository @Inject constructor(
         }
         Timber.d("refreshThreads called for folder: ${folder.displayName}, Account: ${account.emailAddress}")
 
-        // val remoteId = folder.remoteId ?: tärkeä // placeholder
-        // if (remoteId == "tärkeä") {
-        //     Timber.e("[${folder.displayName}] Missing remoteId, cannot trigger folder content sync for refresh.")
-        //    _threadDataState.value = ThreadDataState.Error("Cannot refresh: Folder metadata incomplete.")
-        //    return
-        // }
         syncEngine.syncFolderContent(account.id, folder.id, folder.id) // Use folder.id as remoteId
     }
 
@@ -248,11 +240,17 @@ class DefaultThreadRepository @Inject constructor(
                 Timber.i("$TAG: Optimistically updated isRead=$isRead for ${messageIds.size} messages in thread $threadId, syncStatus=PENDING_UPLOAD")
             }
 
+            val actionType = if (isRead) {
+                "MARK_THREAD_AS_READ"
+            } else {
+                "MARK_THREAD_AS_UNREAD"
+            }
+
             syncEngine.enqueueThreadAction(
                 accountId = account.id,
                 threadId = threadId,
-                actionType = net.melisma.data.sync.workers.ActionUploadWorker.ACTION_MARK_MESSAGE_READ,
-                payload = mapOf("IS_READ" to isRead, "APPLY_TO_THREAD" to true) 
+                actionType = actionType,
+                payload = mapOf("isRead" to isRead)
             )
             return Result.success(Unit)
         } catch (e: Exception) {

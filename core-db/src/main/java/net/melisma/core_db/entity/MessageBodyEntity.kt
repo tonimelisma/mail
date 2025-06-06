@@ -12,15 +12,18 @@ import net.melisma.core_data.model.SyncStatus
     foreignKeys = [
         ForeignKey(
             entity = MessageEntity::class,
-            parentColumns = ["messageId"],
+            parentColumns = ["id"],
             childColumns = ["message_id"],
             onDelete = ForeignKey.CASCADE // If a message is deleted, its body should also be deleted
         )
     ],
-    indices = [Index(value = ["message_id"], unique = true)] // Each message has one body
+    indices = [
+        Index(value = ["message_id"], unique = true)
+    ]
 )
 data class MessageBodyEntity(
-    @PrimaryKey
+    @PrimaryKey(autoGenerate = true)
+    val id: Int = 0,
     @ColumnInfo(name = "message_id")
     val messageId: String, // Foreign key to MessageEntity's id
 

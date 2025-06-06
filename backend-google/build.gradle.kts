@@ -12,6 +12,10 @@ android {
     namespace = "net.melisma.backend_google"
     compileSdk = 35 // Or your project's compileSdk
 
+    lint {
+        baseline = file("lint-baseline.xml")
+    }
+
     defaultConfig {
         minSdk = 26 // Or your project's minSdk
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"

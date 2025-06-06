@@ -30,12 +30,14 @@ import net.melisma.core_data.model.SyncStatus
     ]
 )
 data class MessageEntity(
-    @PrimaryKey val messageId: String,
+    @PrimaryKey val id: String,
+    val messageId: String?, // Remote ID, nullable for local-only messages
     val accountId: String,
     val folderId: String,
     val threadId: String?,
     val subject: String?,
     val snippet: String?, // Corresponds to bodyPreview
+    val body: String?, // Full body, stored separately in MessageBodyEntity but can be denormalized here for simplicity
     val senderName: String?,
     val senderAddress: String?,
     val recipientNames: List<String>?, // Needs TypeConverter

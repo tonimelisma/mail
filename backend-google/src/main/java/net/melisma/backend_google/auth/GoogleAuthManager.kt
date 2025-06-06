@@ -71,6 +71,11 @@ class GoogleAuthManager @Inject constructor(
 ) {
     // Forcing recompilation
 
+    // Public method to get the currently active account ID
+    suspend fun getNullableActiveAccountId(): String? = withContext(ioDispatcher) {
+        activeGoogleAccountHolder.getActiveAccountIdValue()
+    }
+
     // Step 2.3: Helper Functions (Private)
     private fun mapPersistenceErrorToSignInError(
         failure: PersistenceResult.Failure<GooglePersistenceErrorType>,

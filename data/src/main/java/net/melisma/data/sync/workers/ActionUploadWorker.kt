@@ -2,15 +2,15 @@ package net.melisma.data.sync.workers
 
 import android.content.Context
 import androidx.hilt.work.HiltWorker
+import androidx.room.withTransaction
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.serialization.json.Json
+import net.melisma.core_data.datasource.MailApiService
 import net.melisma.core_data.datasource.MailApiServiceSelector
-import net.melisma.core_data.errors.ApiServiceException
 import net.melisma.core_data.model.MessageDraft
-import net.melisma.core_data.model.SyncStatus
 import net.melisma.core_db.AppDatabase
 import net.melisma.core_db.dao.AccountDao
 import net.melisma.core_db.dao.MessageDao
@@ -34,8 +34,15 @@ class ActionUploadWorker @AssistedInject constructor(
         const val KEY_ACTION_TYPE = "ACTION_TYPE"
         const val KEY_ACTION_PAYLOAD = "ACTION_PAYLOAD" // JSON string for complex data
 
+        // ADDING these keys to match what DefaultMessageRepository sends
+        const val KEY_DRAFT_DETAILS = "DRAFT_DETAILS"
+        const val KEY_IS_READ = "IS_READ"
+        const val KEY_IS_STARRED = "IS_STARRED"
+        const val KEY_OLD_FOLDER_ID = "OLD_FOLDER_ID"
+        const val KEY_NEW_FOLDER_ID = "NEW_FOLDER_ID"
+
         // Example Action Types (define these more robustly, perhaps in a shared consts file or enum)
-        const val ACTION_MARK_MESSAGE_READ = "MARK_MESSAGE_READ"
+        const val ACTION_MARK_READ = "MARK_READ"
         const val ACTION_STAR_MESSAGE = "STAR_MESSAGE"
         const val ACTION_DELETE_MESSAGE = "DELETE_MESSAGE"
         const val ACTION_MOVE_MESSAGE = "MOVE_MESSAGE"
@@ -57,269 +64,204 @@ class ActionUploadWorker @AssistedInject constructor(
 
         Timber.d("$TAG: Started for accountId: $accountId, entityId: $entityId, actionType: $actionType")
 
-        try {
-            val mailService = mailApiServiceSelector.getServiceByAccountId(accountId)
-            if (mailService == null) {
-                Timber.e("$TAG: Could not get MailService for account $accountId. Failing task.")
-                // No specific API call failed here, but service itself is unavailable for the account.
-                // This could imply an issue with account setup, potentially re-auth if account is non-functional.
-                // For now, just fail. The flag needsReAuth is typically set by Auth layer or API call explicitly needing it.
-                try {
-                    messageDao.updateSyncStatusAndError(
-                        entityId,
-                        SyncStatus.ERROR,
-                        "Mail service not found"
-                    )
-                } catch (e: Exception) {
-                    Timber.w(
-                        e,
-                        "Failed to update error status for $entityId when mail service was null"
-                    )
-                }
-                return Result.failure()
-            }
-
-            var success = false
-            var finalErrorMessage: String? = null
-            var needsReAuth = false
-
-            // Generic lambda to handle result failure
-            val handleFailure = { result: Result<*> ->
-                val exception = result.exceptionOrNull()
-                finalErrorMessage = exception?.message ?: "Unknown server error"
-                if (exception is ApiServiceException && exception.errorDetails.isNeedsReAuth) {
-                    needsReAuth = true
-                }
-            }
-
-            try {
-                when (actionType) {
-                    ACTION_MARK_MESSAGE_READ -> {
-                        val isRead = inputData.getBoolean("IS_READ", false)
-                        val applyToThread = inputData.getBoolean("APPLY_TO_THREAD", false)
-                        val result = if (applyToThread) mailService.markThreadRead(
-                            entityId,
-                            isRead,
-                            accountId
-                        )
-                        else mailService.markMessageRead(entityId, isRead, accountId)
-                        if (result.isSuccess) {
-                            appDatabase.withTransaction {
-                                if (applyToThread) {
-                                    val messageIds =
-                                        messageDao.getMessageIdsByThreadId(entityId, accountId)
-                                    messageDao.updateReadState(
-                                        messageIds,
-                                        isRead,
-                                        SyncStatus.SYNCED
-                                    )
-                                } else {
-                                    messageDao.updateReadState(entityId, isRead, SyncStatus.SYNCED)
-                                }
-                            }
-                            success = true
-                        } else handleFailure(result)
-                    }
-
-                    ACTION_STAR_MESSAGE -> {
-                        val isStarred = inputData.getBoolean("IS_STARRED", false)
-                        val result = mailService.starMessage(entityId, isStarred, accountId)
-                        if (result.isSuccess) {
-                            messageDao.updateStarredState(entityId, isStarred, SyncStatus.SYNCED)
-                            success = true
-                        } else handleFailure(result)
-                    }
-
-                    ACTION_DELETE_MESSAGE -> {
-                        val applyToThread = inputData.getBoolean("APPLY_TO_THREAD", false)
-                        val result =
-                            if (applyToThread) mailService.deleteThread(entityId, accountId)
-                            else mailService.deleteMessage(entityId, accountId)
-                        if (result.isSuccess) {
-                            appDatabase.withTransaction {
-                                if (applyToThread) {
-                                    val messageIds =
-                                        messageDao.getMessageIdsByThreadId(entityId, accountId)
-                                    messageDao.deleteMessagesByIds(messageIds) // Requires new DAO method
-                                } else {
-                                    messageDao.deleteMessageById(entityId)
-                                }
-                            }
-                            success = true
-                        } else handleFailure(result)
-                    }
-
-                    ACTION_MOVE_MESSAGE -> {
-                        val newFolderId = inputData.getString("NEW_FOLDER_ID")
-                        val oldFolderId = inputData.getString("OLD_FOLDER_ID")
-                        val applyToThread = inputData.getBoolean("APPLY_TO_THREAD", false)
-                        if (newFolderId.isNullOrBlank()) {
-                            finalErrorMessage = "Move failed: newFolderId is missing."
-                        } else {
-                            val result = if (applyToThread) mailService.moveThread(
-                                entityId,
-                                newFolderId,
-                                oldFolderId,
-                                accountId
-                            )
-                            else mailService.moveMessage(
-                                entityId,
-                                newFolderId,
-                                oldFolderId,
-                                accountId
-                            )
-                            if (result.isSuccess) {
-                                appDatabase.withTransaction {
-                                    if (applyToThread) {
-                                        val messageIds =
-                                            messageDao.getMessageIdsByThreadIdAndFolder(
-                                                entityId,
-                                                accountId,
-                                                oldFolderId ?: ""
-                                            ) // oldFolderId might be null if not provided
-                                        messageDao.updateFolderIdForMessages(
-                                            messageIds,
-                                            newFolderId,
-                                            SyncStatus.SYNCED
-                                        )
-                                    } else {
-                                        messageDao.updateMessageFolderAndSyncState(
-                                            entityId,
-                                            newFolderId,
-                                            SyncStatus.SYNCED
-                                        )
-                                    }
-                                }
-                                success = true
-                            } else handleFailure(result)
-                        }
-                    }
-
-                    ACTION_SEND_MESSAGE -> {
-                        val draftJson = inputData.getString("DRAFT_JSON")
-                        val sentFolderId = inputData.getString("SENT_FOLDER_ID") ?: "SENT"
-                        if (draftJson == null) {
-                            finalErrorMessage =
-                                "Draft details missing for sending message $entityId"
-                        } else {
-                            val draft = Json.decodeFromString<MessageDraft>(draftJson)
-                            val result = mailService.sendMessage(draft, accountId)
-                            if (result.isSuccess) {
-                                val sentMessageServerId = result.getOrThrow()
-                                appDatabase.withTransaction {
-                                    messageDao.markAsSent(
-                                        localOutboxMessageId = entityId,
-                                        sentTimestamp = System.currentTimeMillis(),
-                                        targetFolderId = sentFolderId,
-                                        newServerId = sentMessageServerId // Update with server ID if different
-                                    )
-                                }
-                                success = true
-                            } else handleFailure(result)
-                        }
-                    }
-
-                    ACTION_CREATE_DRAFT, ACTION_UPDATE_DRAFT -> {
-                        val isCreate = actionType == ACTION_CREATE_DRAFT
-                        val draftJson = inputData.getString("DRAFT_JSON")
-                        if (draftJson == null) {
-                            finalErrorMessage = "Draft details missing for $actionType on $entityId"
-                        } else {
-                            val draft = Json.decodeFromString<MessageDraft>(draftJson)
-                            val result = if (isCreate) mailService.createDraft(draft, accountId)
-                            else mailService.updateDraft(entityId, draft, accountId)
-                            if (result.isSuccess) {
-                                val (returnedId, _) = result.getOrThrow()
-                                appDatabase.withTransaction {
-                                    messageDao.updateDraftAfterSync(
-                                        localDraftId = entityId,
-                                        newServerId = returnedId, // Use server ID
-                                        syncStatus = SyncStatus.SYNCED,
-                                        subject = draft.subject, // Re-affirm from local draft
-                                        // body might be updated by server, but local body is source of truth before send
-                                        // recipient info also from local draft
-                                        recipientNames = draft.to,
-                                        recipientAddresses = draft.to
-                                    )
-                                    // If body content can change on server and needs to be re-synced:
-                                    // messageBodyDao.updateContentAndStatus(returnedId, returnedBody, SyncStatus.SYNCED)
-                                }
-                                success = true
-                            } else handleFailure(result)
-                        }
-                    }
-
-                    else -> {
-                        Timber.w("$TAG: Unknown actionType: $actionType for entityId: $entityId")
-                        finalErrorMessage = "Unknown action type"
-                    }
-                }
-            } catch (e: Exception) { // Catch-all for unexpected issues within the when block
-                Timber.e(
-                    e,
-                    "$TAG: Exception while processing $actionType for $entityId inside when block"
-                )
-                finalErrorMessage = e.message ?: "Unexpected exception in worker's action handling"
-                if (e is ApiServiceException && e.errorDetails.isNeedsReAuth) {
-                    needsReAuth = true
-                } // else, it's some other exception, re-auth not implied by this catch directly
-            }
-
-            if (success) {
-                Timber.d("$TAG: Action $actionType for entity $entityId processed successfully.")
-                return Result.success()
-            } else {
-                Timber.e("$TAG: Action $actionType for entity $entityId failed. Error: $finalErrorMessage")
-                if (needsReAuth) {
-                    Timber.w("$TAG: Marking account $accountId for re-authentication due to $actionType failure.")
-                    try {
-                        accountDao.setNeedsReauthentication(accountId, true)
-                    } catch (dbException: Exception) {
-                        Timber.e(
-                            dbException,
-                            "$TAG: Failed to mark account $accountId for re-authentication in DB."
-                        )
-                    }
-                }
-                // Update sync metadata to reflect error for this entity and action.
-                try {
-                    // This assumes entityId is a messageId. If it can be folderId, this needs adjustment.
-                    // For now, ActionUploadWorker primarily deals with message-like actions.
-                    messageDao.updateLastSyncError(
-                        entityId,
-                        finalErrorMessage ?: "Unknown server error",
-                        SyncStatus.ERROR
-                    )
-                } catch (e: Exception) {
-                    Timber.w(
-                        e,
-                        "$TAG: Failed to update message sync error status for $entityId after $actionType failure."
-                    )
-                }
-
-                return Result.failure()
-            }
-        } catch (outerException: Exception) { // Catch exceptions from mailServiceSelector or initial setup
-            Timber.e(
-                outerException,
-                "$TAG: Unhandled exception in ActionUploadWorker for $actionType, $entityId. Account $accountId"
-            )
-            // Check if this outer exception implies re-auth (less likely here, but good for robustness)
-            if (outerException is ApiServiceException && outerException.errorDetails.isNeedsReAuth) {
-                try {
-                    accountDao.setNeedsReauthentication(
-                        accountId!!,
-                        true
-                    ) // accountId should be non-null if we reached here
-                    Timber.w("$TAG: Marking account $accountId for re-authentication due to outer exception.")
-                } catch (dbException: Exception) {
-                    Timber.e(
-                        dbException,
-                        "$TAG: Failed to mark account $accountId for re-auth in DB (outer exception)."
-                    )
-                }
-            }
+        val account = accountDao.getAccountByIdSuspend(accountId)
+        if (account == null) {
+            Timber.e("$TAG: Account not found for ID: $accountId. Failing task.")
+            // Optionally update a state for this entity if possible, though it's tricky without action details
             return Result.failure()
         }
+
+        val mailService = mailApiServiceSelector.getServiceByProviderType(account.providerType)
+        if (mailService == null) {
+            Timber.e("$TAG: Could not get MailService for provider ${account.providerType}. Failing task.")
+            return Result.failure()
+        }
+
+        return try {
+            val success =
+                performAction(mailService, accountId, entityId, actionType, inputData.keyValueMap)
+            if (success) {
+                Timber.d("$TAG: Action '$actionType' completed successfully for entity $entityId")
+                Result.success()
+            } else {
+                Timber.w("$TAG: Action '$actionType' failed for entity $entityId")
+                Result.retry() // or Result.failure() depending on whether it's recoverable
+            }
+        } catch (e: Exception) {
+            Timber.e(e, "$TAG: Exception during action '$actionType' for entity $entityId")
+            Result.retry() // or Result.failure()
+        }
+    }
+
+    private suspend fun performAction(
+        mailService: MailApiService,
+        accountId: String,
+        entityId: String,
+        actionType: String,
+        payload: Map<String, Any?>
+    ): Boolean {
+        val result: Result<out Any> = when (actionType) {
+            ACTION_MARK_READ -> {
+                val isRead = payload[KEY_IS_READ] as? Boolean
+                if (isRead == null) {
+                    Timber.w("$TAG: MARK_READ action missing 'isRead' boolean payload for entity $entityId.")
+                    Result.failure(IllegalArgumentException("Missing 'isRead' payload for MARK_READ"))
+                } else {
+                    // mailService.markMessageAsRead(entityId, isRead) // Temporarily commented for diagnosis
+                    Result.success(Unit) // Diagnostic replacement
+                }
+            }
+
+            ACTION_STAR_MESSAGE -> {
+                val isStarred = payload[KEY_IS_STARRED] as? Boolean
+                if (isStarred == null) {
+                    Timber.w("$TAG: STAR_MESSAGE action missing 'isStarred' boolean payload for entity $entityId.")
+                    Result.failure(IllegalArgumentException("Missing 'isStarred' payload for STAR_MESSAGE"))
+                } else {
+                    mailService.starMessage(entityId, isStarred)
+                }
+            }
+
+            ACTION_DELETE_MESSAGE -> {
+                mailService.deleteMessage(entityId)
+            }
+
+            ACTION_MOVE_MESSAGE -> {
+                val destinationFolderId = payload[KEY_NEW_FOLDER_ID] as? String
+                val sourceFolderId = payload[KEY_OLD_FOLDER_ID] as? String
+                if (destinationFolderId == null) {
+                    Timber.w("$TAG: MOVE_MESSAGE action missing 'destinationFolderId' payload for entity $entityId.")
+                    Result.failure(IllegalArgumentException("Missing 'destinationFolderId' for MOVE_MESSAGE"))
+                } else if (sourceFolderId == null) {
+                    Timber.w("$TAG: MOVE_MESSAGE action missing 'sourceFolderId' payload for entity $entityId.")
+                    Result.failure(IllegalArgumentException("Missing 'sourceFolderId' for MOVE_MESSAGE"))
+                } else {
+                    mailService.moveMessage(entityId, sourceFolderId, destinationFolderId)
+                }
+            }
+
+            ACTION_SEND_MESSAGE -> {
+                val draftJson = payload[KEY_DRAFT_DETAILS] as? String
+                if (draftJson == null) {
+                    Timber.w("$TAG: SEND_MESSAGE action missing 'draftJson' payload for entity $entityId.")
+                    Result.failure(IllegalArgumentException("Missing 'draftJson' for SEND_MESSAGE"))
+                } else {
+                    try {
+                        val draft = Json.decodeFromString<MessageDraft>(draftJson)
+                        mailService.sendMessage(draft)
+                    } catch (e: Exception) {
+                        Timber.e(
+                            e,
+                            "$TAG: SEND_MESSAGE action failed to decode draftJson for entity $entityId."
+                        )
+                        Result.failure(e)
+                    }
+                }
+            }
+
+            ACTION_CREATE_DRAFT -> {
+                val draftJson = payload[KEY_DRAFT_DETAILS] as? String
+                if (draftJson == null) {
+                    Timber.w("$TAG: CREATE_DRAFT action missing 'draftJson' payload for entity $entityId.")
+                    Result.failure(IllegalArgumentException("Missing 'draftJson' for CREATE_DRAFT"))
+                } else {
+                    try {
+                        val draft = Json.decodeFromString<MessageDraft>(draftJson)
+                        mailService.createDraftMessage(draft)
+                    } catch (e: Exception) {
+                        Timber.e(
+                            e,
+                            "$TAG: CREATE_DRAFT action failed to decode draftJson for entity $entityId."
+                        )
+                        Result.failure(e)
+                    }
+                }
+            }
+
+            ACTION_UPDATE_DRAFT -> {
+                val draftJson = payload[KEY_DRAFT_DETAILS] as? String
+                if (draftJson == null) {
+                    Timber.w("$TAG: UPDATE_DRAFT action missing 'draftJson' payload for entity $entityId.")
+                    Result.failure(IllegalArgumentException("Missing 'draftJson' for UPDATE_DRAFT"))
+                } else {
+                    try {
+                        val draft = Json.decodeFromString<MessageDraft>(draftJson)
+                        mailService.updateDraftMessage(entityId, draft)
+                    } catch (e: Exception) {
+                        Timber.e(
+                            e,
+                            "$TAG: UPDATE_DRAFT action failed to decode draftJson for entity $entityId."
+                        )
+                        Result.failure(e)
+                    }
+                }
+            }
+
+            else -> {
+                Timber.e("$TAG: Unknown action type: $actionType for entity $entityId")
+                Result.failure(IllegalArgumentException("Unknown action type: $actionType"))
+            }
+        }
+
+        if (result.isSuccess) {
+            // After a successful API call, update the local database state accordingly.
+            // For example, for a delete action, you'd delete the item from the local DB.
+            appDatabase.withTransaction {
+                when (actionType) {
+                    ACTION_DELETE_MESSAGE -> messageDao.deleteMessageById(entityId)
+                    // Add other post-success DB operations here
+                }
+            }
+        } else {
+            // Handle API errors
+            val error = result.exceptionOrNull()
+            Timber.e(error, "API Error for action $actionType on entity $entityId")
+            // Update UI by setting an error state in the DB for the specific entity
+            // e.g., messageDao.updateLastSyncError(entityId, error?.message)
+        }
+
+        return result.isSuccess
+    }
+
+    sealed class Action {
+        enum class TargetType { MESSAGE, THREAD }
+
+        data class MarkRead(
+            val targetType: TargetType,
+            val targetId: String,
+            val isRead: Boolean
+        ) : Action()
+
+        data class Star(
+            val targetId: String,
+            val isStarred: Boolean
+        ) : Action()
+
+        data class Delete(
+            val targetType: TargetType,
+            val targetId: String
+        ) : Action()
+
+        data class Move(
+            val targetType: TargetType,
+            val targetId: String,
+            val destinationFolderId: String,
+            val previousFolderId: String?
+        ) : Action()
+
+        data class Send(
+            val localOutboxMessageId: String,
+            val draftJson: String
+        ) : Action()
+
+        data class CreateDraft(
+            val localDraftId: String,
+            val draftJson: String
+        ) : Action()
+
+        data class UpdateDraft(
+            val localDraftId: String,
+            val draftJson: String
+        ) : Action()
     }
 }

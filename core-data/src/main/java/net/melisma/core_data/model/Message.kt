@@ -8,6 +8,8 @@ import java.time.OffsetDateTime
  * subject, date, preview, and read status.
  *
  * @property id The unique identifier of the message provided by the backend service.
+ * @property accountId The unique identifier of the account associated with the message.
+ * @property folderId The unique identifier of the folder associated with the message.
  * @property receivedDateTime The date and time the message was received, typically in ISO 8601 format string.
  * @property sentDateTime The date and time the message was sent, typically in ISO 8601 format string.
  * @property subject The subject line of the message. Can be null or empty.
@@ -23,9 +25,12 @@ import java.time.OffsetDateTime
  * @property timestamp The received date and time as a Unix timestamp (milliseconds UTC).
  * @property body Full body of the message, typically fetched on demand.
  * @property bodyContentType The content type of the message body, e.g., "text/plain" or "text/html".
+ * @property attachments List of attachments associated with the message.
  */
 data class Message(
     val id: String,
+    val accountId: String,
+    val folderId: String,
     val threadId: String?,
     val receivedDateTime: String,
     val sentDateTime: String?,
@@ -42,7 +47,8 @@ data class Message(
     val recipientAddresses: List<String>? = null,
     val isStarred: Boolean = false,
     val hasAttachments: Boolean = false,
-    val timestamp: Long = 0L // Derived from receivedDateTime, default to 0 or handle parsing in constructor/factory
+    val timestamp: Long = 0L, // Derived from receivedDateTime, default to 0 or handle parsing in constructor/factory
+    val attachments: List<Attachment> = emptyList()
 ) {
     companion object
     // Secondary constructor or init block could parse receivedDateTime to timestamp if needed here
@@ -52,6 +58,8 @@ data class Message(
 // Consider a factory function if complex initialization/derivation is needed for timestamp
 fun Message.Companion.fromApi(
     id: String,
+    accountId: String,
+    folderId: String,
     threadId: String?,
     receivedDateTime: String,
     sentDateTime: String?,
@@ -65,7 +73,8 @@ fun Message.Companion.fromApi(
     recipientNames: List<String>? = null,
     recipientAddresses: List<String>? = null,
     isStarred: Boolean = false,
-    hasAttachments: Boolean = false
+    hasAttachments: Boolean = false,
+    attachments: List<Attachment> = emptyList()
 ): Message {
     val derivedTimestamp = try {
         OffsetDateTime.parse(receivedDateTime).toInstant().toEpochMilli()
@@ -74,6 +83,8 @@ fun Message.Companion.fromApi(
     }
     return Message(
         id = id,
+        accountId = accountId,
+        folderId = folderId,
         threadId = threadId,
         receivedDateTime = receivedDateTime,
         sentDateTime = sentDateTime,
@@ -88,6 +99,7 @@ fun Message.Companion.fromApi(
         recipientAddresses = recipientAddresses,
         isStarred = isStarred,
         hasAttachments = hasAttachments,
-        timestamp = derivedTimestamp
+        timestamp = derivedTimestamp,
+        attachments = attachments
     )
 }

@@ -9,12 +9,19 @@ import kotlinx.serialization.Serializable
 
 @Serializable
 data class MessageDraft(
-    val to: List<String> = emptyList(),
-    val cc: List<String>? = null,
-    val bcc: List<String>? = null,
-    val subject: String? = null,
-    val body: String? = null, // Could be plain text or HTML
-    val originalMessageId: String? = null, // For replies/forwards, references the ID of the source message
-    val type: DraftType,
-    val attachments: List<String> = emptyList() // Placeholder for attachment identifiers if needed during compose
+    val existingMessageId: String? = null, // The local ID of the message if it's an existing draft
+    val inReplyTo: String? = null, // The remote ID of the message being replied to
+    val to: List<EmailAddress> = emptyList(),
+    val cc: List<EmailAddress> = emptyList(),
+    val bcc: List<EmailAddress> = emptyList(),
+    val subject: String = "",
+    val body: String = "",
+    val attachments: List<Attachment> = emptyList(),
+    val type: DraftType = DraftType.NEW // Default to new
+)
+
+@Serializable
+data class EmailAddress(
+    val emailAddress: String,
+    val displayName: String? = null
 ) 

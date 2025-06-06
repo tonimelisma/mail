@@ -25,6 +25,12 @@ interface FolderDao {
     @Query("SELECT * FROM folders WHERE id = :folderId")
     suspend fun getFolderByIdSuspend(folderId: String): FolderEntity?
 
+    @Query("SELECT * FROM folders WHERE id = :folderId")
+    fun getFolderByIdFlow(folderId: String): Flow<FolderEntity?>
+
+    @Query("SELECT * FROM folders WHERE accountId = :accountId AND type = :type LIMIT 1")
+    suspend fun getFolderIdByType(accountId: String, type: String): FolderEntity?
+
     @Query("UPDATE folders SET nextPageToken = :nextPageToken, lastFullContentSyncTimestamp = :lastFullContentSyncTimestamp WHERE id = :folderId")
     suspend fun updatePagingTokens(
         folderId: String,

@@ -1,0 +1,276 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<issues name="AGP (8.9.3)" by="lint 8.9.3" client="gradle" dependencies="false" format="6"
+    type="baseline" variant="all" version="8.9.3">
+
+    <issue errorLine1="                Result.failure(ApiServiceException(mappedDetails))"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+        id="SuspiciousIndentation"
+        message="Suspicious indentation: This is indented but is not continuing the previous expression (`val mappedDetails = `...)">
+        <location column="17" file="src/main/java/net/melisma/backend_google/GmailApiHelper.kt"
+            line="529" />
+        <location column="13" file="src/main/java/net/melisma/backend_google/GmailApiHelper.kt"
+            line="528" message="Previous statement here" />
+    </issue>
+
+    <issue errorLine1="                Result.failure(ApiServiceException(mappedDetails))"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+        id="SuspiciousIndentation"
+        message="Suspicious indentation: This is indented but is not continuing the previous expression (`val mappedDetails = `...)">
+        <location column="17" file="src/main/java/net/melisma/backend_google/GmailApiHelper.kt"
+            line="533" />
+        <location column="13" file="src/main/java/net/melisma/backend_google/GmailApiHelper.kt"
+            line="532" message="Previous statement here" />
+    </issue>
+
+    <issue errorLine1="                Result.failure(ApiServiceException(mappedDetails))"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+        id="SuspiciousIndentation"
+        message="Suspicious indentation: This is indented but is not continuing the previous expression (`val mappedDetails = `...)">
+        <location column="17" file="src/main/java/net/melisma/backend_google/GmailApiHelper.kt"
+            line="604" />
+        <location column="13" file="src/main/java/net/melisma/backend_google/GmailApiHelper.kt"
+            line="603" message="Previous statement here" />
+    </issue>
+
+    <issue errorLine1="                Result.failure(ApiServiceException(mappedDetails))"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+        id="SuspiciousIndentation"
+        message="Suspicious indentation: This is indented but is not continuing the previous expression (`val mappedDetails = `...)">
+        <location column="17" file="src/main/java/net/melisma/backend_google/GmailApiHelper.kt"
+            line="608" />
+        <location column="13" file="src/main/java/net/melisma/backend_google/GmailApiHelper.kt"
+            line="607" message="Previous statement here" />
+    </issue>
+
+    <issue errorLine1="                Result.failure(ApiServiceException(mappedDetails))"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+        id="SuspiciousIndentation"
+        message="Suspicious indentation: This is indented but is not continuing the previous expression (`val mappedDetails = `...)">
+        <location column="17" file="src/main/java/net/melisma/backend_google/GmailApiHelper.kt"
+            line="997" />
+        <location column="13" file="src/main/java/net/melisma/backend_google/GmailApiHelper.kt"
+            line="996" message="Previous statement here" />
+    </issue>
+
+    <issue errorLine1="                Result.failure(ApiServiceException(mappedDetails))"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+        id="SuspiciousIndentation"
+        message="Suspicious indentation: This is indented but is not continuing the previous expression (`val mappedDetails = `...)">
+        <location column="17" file="src/main/java/net/melisma/backend_google/GmailApiHelper.kt"
+            line="1001" />
+        <location column="13" file="src/main/java/net/melisma/backend_google/GmailApiHelper.kt"
+            line="1000" message="Previous statement here" />
+    </issue>
+
+    <issue errorLine1="                Result.failure(ApiServiceException(mappedDetails))"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+        id="SuspiciousIndentation"
+        message="Suspicious indentation: This is indented but is not continuing the previous expression (`val mappedDetails = `...)">
+        <location column="17" file="src/main/java/net/melisma/backend_google/GmailApiHelper.kt"
+            line="1144" />
+        <location column="13" file="src/main/java/net/melisma/backend_google/GmailApiHelper.kt"
+            line="1143" message="Previous statement here" />
+    </issue>
+
+    <issue errorLine1="                Result.failure(ApiServiceException(mappedDetails))"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+        id="SuspiciousIndentation"
+        message="Suspicious indentation: This is indented but is not continuing the previous expression (`val mappedDetails = `...)">
+        <location column="17" file="src/main/java/net/melisma/backend_google/GmailApiHelper.kt"
+            line="1148" />
+        <location column="13" file="src/main/java/net/melisma/backend_google/GmailApiHelper.kt"
+            line="1147" message="Previous statement here" />
+    </issue>
+
+    <issue errorLine1="agp = &quot;8.9.3&quot; # Assuming this is your AGP version, adjust if different"
+        errorLine2="      ~~~~~~~"
+        id="AndroidGradlePluginVersion"
+        message="A newer version of com.android.application than 8.9.3 is available: 8.10.1">
+        <location column="7" file="$HOME/Development/Mail/gradle/libs.versions.toml" line="4" />
+    </issue>
+
+    <issue errorLine1="agp = &quot;8.9.3&quot; # Assuming this is your AGP version, adjust if different"
+        errorLine2="      ~~~~~~~"
+        id="AndroidGradlePluginVersion"
+        message="A newer version of com.android.application than 8.9.3 is available: 8.10.1">
+        <location column="7" file="$HOME/Development/Mail/gradle/libs.versions.toml" line="4" />
+    </issue>
+
+    <issue errorLine1="agp = &quot;8.9.3&quot; # Assuming this is your AGP version, adjust if different"
+        errorLine2="      ~~~~~~~"
+        id="AndroidGradlePluginVersion"
+        message="A newer version of com.android.application than 8.9.3 is available: 8.10.1">
+        <location column="7" file="$HOME/Development/Mail/gradle/libs.versions.toml" line="4" />
+    </issue>
+
+    <issue errorLine1="agp = &quot;8.9.3&quot; # Assuming this is your AGP version, adjust if different"
+        errorLine2="      ~~~~~~~"
+        id="AndroidGradlePluginVersion"
+        message="A newer version of com.android.library than 8.9.3 is available: 8.10.1">
+        <location column="7" file="$HOME/Development/Mail/gradle/libs.versions.toml" line="4" />
+    </issue>
+
+    <issue errorLine1="agp = &quot;8.9.3&quot; # Assuming this is your AGP version, adjust if different"
+        errorLine2="      ~~~~~~~"
+        id="AndroidGradlePluginVersion"
+        message="A newer version of com.android.library than 8.9.3 is available: 8.10.1">
+        <location column="7" file="$HOME/Development/Mail/gradle/libs.versions.toml" line="4" />
+    </issue>
+
+    <issue errorLine1="agp = &quot;8.9.3&quot; # Assuming this is your AGP version, adjust if different"
+        errorLine2="      ~~~~~~~"
+        id="AndroidGradlePluginVersion"
+        message="A newer version of com.android.library than 8.9.3 is available: 8.10.1">
+        <location column="7" file="$HOME/Development/Mail/gradle/libs.versions.toml" line="4" />
+    </issue>
+
+    <issue errorLine1="lifecycle = &quot;2.9.0&quot;"
+        errorLine2="            ~~~~~~~"
+        id="GradleDependency" message="A newer version of androidx.lifecycle:lifecycle-runtime-compose than 2.9.0 is available: 2.9.1">
+        <location column="13" file="$HOME/Development/Mail/gradle/libs.versions.toml" line="12" />
+    </issue>
+
+    <issue errorLine1="lifecycle = &quot;2.9.0&quot;"
+        errorLine2="            ~~~~~~~"
+        id="GradleDependency" message="A newer version of androidx.lifecycle:lifecycle-runtime-compose than 2.9.0 is available: 2.9.1">
+        <location column="13" file="$HOME/Development/Mail/gradle/libs.versions.toml" line="12" />
+    </issue>
+
+    <issue errorLine1="lifecycle = &quot;2.9.0&quot;"
+        errorLine2="            ~~~~~~~"
+        id="GradleDependency" message="A newer version of androidx.lifecycle:lifecycle-runtime-compose than 2.9.0 is available: 2.9.1">
+        <location column="13" file="$HOME/Development/Mail/gradle/libs.versions.toml" line="12" />
+    </issue>
+
+    <issue errorLine1="lifecycle = &quot;2.9.0&quot;"
+        errorLine2="            ~~~~~~~"
+        id="GradleDependency" message="A newer version of androidx.lifecycle:lifecycle-runtime-ktx than 2.9.0 is available: 2.9.1">
+        <location column="13" file="$HOME/Development/Mail/gradle/libs.versions.toml" line="12" />
+    </issue>
+
+    <issue errorLine1="lifecycle = &quot;2.9.0&quot;"
+        errorLine2="            ~~~~~~~"
+        id="GradleDependency" message="A newer version of androidx.lifecycle:lifecycle-runtime-ktx than 2.9.0 is available: 2.9.1">
+        <location column="13" file="$HOME/Development/Mail/gradle/libs.versions.toml" line="12" />
+    </issue>
+
+    <issue errorLine1="lifecycle = &quot;2.9.0&quot;"
+        errorLine2="            ~~~~~~~"
+        id="GradleDependency" message="A newer version of androidx.lifecycle:lifecycle-runtime-ktx than 2.9.0 is available: 2.9.1">
+        <location column="13" file="$HOME/Development/Mail/gradle/libs.versions.toml" line="12" />
+    </issue>
+
+    <issue errorLine1="lifecycle = &quot;2.9.0&quot;"
+        errorLine2="            ~~~~~~~"
+        id="GradleDependency" message="A newer version of androidx.lifecycle:lifecycle-viewmodel-compose than 2.9.0 is available: 2.9.1">
+        <location column="13" file="$HOME/Development/Mail/gradle/libs.versions.toml" line="12" />
+    </issue>
+
+    <issue errorLine1="lifecycle = &quot;2.9.0&quot;"
+        errorLine2="            ~~~~~~~"
+        id="GradleDependency" message="A newer version of androidx.lifecycle:lifecycle-viewmodel-compose than 2.9.0 is available: 2.9.1">
+        <location column="13" file="$HOME/Development/Mail/gradle/libs.versions.toml" line="12" />
+    </issue>
+
+    <issue errorLine1="lifecycle = &quot;2.9.0&quot;"
+        errorLine2="            ~~~~~~~"
+        id="GradleDependency" message="A newer version of androidx.lifecycle:lifecycle-viewmodel-compose than 2.9.0 is available: 2.9.1">
+        <location column="13" file="$HOME/Development/Mail/gradle/libs.versions.toml" line="12" />
+    </issue>
+
+    <issue errorLine1="composeBom = &quot;2025.05.01&quot;"
+        errorLine2="             ~~~~~~~~~~~~"
+        id="GradleDependency" message="A newer version of androidx.compose:compose-bom than 2025.05.01 is available: 2025.06.00">
+        <location column="14" file="$HOME/Development/Mail/gradle/libs.versions.toml" line="14" />
+    </issue>
+
+    <issue errorLine1="composeBom = &quot;2025.05.01&quot;"
+        errorLine2="             ~~~~~~~~~~~~"
+        id="GradleDependency" message="A newer version of androidx.compose:compose-bom than 2025.05.01 is available: 2025.06.00">
+        <location column="14" file="$HOME/Development/Mail/gradle/libs.versions.toml" line="14" />
+    </issue>
+
+    <issue errorLine1="composeBom = &quot;2025.05.01&quot;"
+        errorLine2="             ~~~~~~~~~~~~"
+        id="GradleDependency" message="A newer version of androidx.compose:compose-bom than 2025.05.01 is available: 2025.06.00">
+        <location column="14" file="$HOME/Development/Mail/gradle/libs.versions.toml" line="14" />
+    </issue>
+
+    <issue errorLine1="appcompatViews = &quot;1.7.0&quot; # Added for traditional views"
+        errorLine2="                 ~~~~~~~"
+        id="GradleDependency"
+        message="A newer version of androidx.appcompat:appcompat than 1.7.0 is available: 1.7.1">
+        <location column="18" file="$HOME/Development/Mail/gradle/libs.versions.toml" line="35" />
+    </issue>
+
+    <issue errorLine1="appcompatViews = &quot;1.7.0&quot; # Added for traditional views"
+        errorLine2="                 ~~~~~~~"
+        id="GradleDependency"
+        message="A newer version of androidx.appcompat:appcompat than 1.7.0 is available: 1.7.1">
+        <location column="18" file="$HOME/Development/Mail/gradle/libs.versions.toml" line="35" />
+    </issue>
+
+    <issue errorLine1="appcompatViews = &quot;1.7.0&quot; # Added for traditional views"
+        errorLine2="                 ~~~~~~~"
+        id="GradleDependency"
+        message="A newer version of androidx.appcompat:appcompat than 1.7.0 is available: 1.7.1">
+        <location column="18" file="$HOME/Development/Mail/gradle/libs.versions.toml" line="35" />
+    </issue>
+
+    <issue errorLine1="workmanager = &quot;2.9.0&quot; # Added WorkManager version"
+        errorLine2="              ~~~~~~~"
+        id="GradleDependency"
+        message="A newer version of androidx.work:work-runtime-ktx than 2.9.0 is available: 2.10.1">
+        <location column="15" file="$HOME/Development/Mail/gradle/libs.versions.toml" line="45" />
+    </issue>
+
+    <issue errorLine1="workmanager = &quot;2.9.0&quot; # Added WorkManager version"
+        errorLine2="              ~~~~~~~"
+        id="GradleDependency"
+        message="A newer version of androidx.work:work-runtime-ktx than 2.9.0 is available: 2.10.1">
+        <location column="15" file="$HOME/Development/Mail/gradle/libs.versions.toml" line="45" />
+    </issue>
+
+    <issue errorLine1="workmanager = &quot;2.9.0&quot; # Added WorkManager version"
+        errorLine2="              ~~~~~~~"
+        id="GradleDependency"
+        message="A newer version of androidx.work:work-runtime-ktx than 2.9.0 is available: 2.10.1">
+        <location column="15" file="$HOME/Development/Mail/gradle/libs.versions.toml" line="45" />
+    </issue>
+
+    <issue errorLine1="                            Timber.tag(TAG)" errorLine2="                            ^"
+        id="ThrowableNotAtBeginning"
+        message="Throwable should be first argument">
+        <location
+            column="29"
+            file="src/main/java/net/melisma/backend_google/auth/GoogleTokenPersistenceService.kt" line="321" />
+    </issue>
+
+    <issue errorLine1="            Uri.parse(&quot;https://accounts.google.com/o/oauth2/v2/auth&quot;),  // authorization endpoint" errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+        id="UseKtx"
+        message="Use the KTX extension function `String.toUri` instead?">
+        <location column="13"
+            file="src/main/java/net/melisma/backend_google/auth/AppAuthHelperService.kt" line="62" />
+    </issue>
+
+    <issue errorLine1="            Uri.parse(&quot;https://oauth2.googleapis.com/token&quot;),        // token endpoint" errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+        id="UseKtx"
+        message="Use the KTX extension function `String.toUri` instead?">
+        <location column="13"
+            file="src/main/java/net/melisma/backend_google/auth/AppAuthHelperService.kt" line="63" />
+    </issue>
+
+    <issue errorLine1="                val redirectUri = Uri.parse(&quot;net.melisma.mail:/oauth2redirect&quot;)" errorLine2="                                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+        id="UseKtx"
+        message="Use the KTX extension function `String.toUri` instead?">
+        <location column="35"
+            file="src/main/java/net/melisma/backend_google/auth/GoogleAuthManager.kt" line="124" />
+    </issue>
+
+    <issue errorLine1="    implementation(&quot;com.auth0.android:jwtdecode:2.0.2&quot;) // Or latest stable version" errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~"
+        id="UseTomlInstead"
+        message="Use version catalog instead">
+        <location column="20" file="build.gradle.kts" line="101" />
+    </issue>
+
+</issues>

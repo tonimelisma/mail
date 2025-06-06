@@ -59,7 +59,7 @@ class FolderContentSyncWorker @AssistedInject constructor(
                 folderId = folderRemoteId,
                 activity = null,
                 maxResults = 25,
-                pageToken = folderEntity?.nextPageTokenForWorker
+                pageToken = folderEntity?.nextPageToken
             )
 
             if (messagesResult.isSuccess) {
@@ -78,7 +78,12 @@ class FolderContentSyncWorker @AssistedInject constructor(
                     System.currentTimeMillis(),
                     SyncStatus.SYNCED
                 )
-                Timber.d("Updated folder $folderId sync status to SYNCED.")
+                folderDao.updatePagingTokens(
+                    folderId = folderId,
+                    nextPageToken = pagedResponse.nextPageToken,
+                    lastFullContentSyncTimestamp = if (pagedResponse.nextPageToken == null) System.currentTimeMillis() else folderEntity?.lastFullContentSyncTimestamp
+                )
+                Timber.d("Updated folder $folderId sync status to SYNCED and nextPageToken to ${pagedResponse.nextPageToken}.")
                 return Result.success()
             } else {
                 val exception = messagesResult.exceptionOrNull()

@@ -31,6 +31,7 @@ import net.melisma.core_data.auth.TokenProviderException
 import net.melisma.core_data.datasource.MailApiService
 import net.melisma.core_data.di.ApplicationScope
 import net.melisma.core_data.di.AuthConfigProvider
+import net.melisma.core_data.di.DispatchersModule
 import net.melisma.core_data.errors.ErrorMapperService
 import timber.log.Timber
 import java.util.concurrent.TimeUnit
@@ -43,7 +44,7 @@ annotation class MicrosoftGraphHttpClient
 
 // Module for providing concrete instances and map contributions.
 // We've consolidated bindings here using @Provides for map entries.
-@Module
+@Module(includes = [DispatchersModule::class])
 @InstallIn(SingletonComponent::class)
 abstract class BackendMicrosoftModule {
 

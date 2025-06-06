@@ -41,30 +41,43 @@ class MessageBodyDownloadWorker @AssistedInject constructor(
             val mailService = mailApiServiceSelector.getServiceByAccountId(accountId)
             if (mailService == null) {
                 Timber.e("MailService not found for account $accountId. Failing message body download.")
-                messageBodyDao.updateSyncStatusAndError(
-                    messageId,
-                    SyncStatus.ERROR,
-                    "Mail service not found"
-                )
+                var errorEntity = messageBodyDao.getMessageBodyByIdSuspend(messageId)
+                if (errorEntity == null) {
+                    errorEntity = MessageBodyEntity(
+                        messageId = messageId,
+                        content = null,
+                        syncStatus = SyncStatus.ERROR,
+                        lastSyncError = "Mail service not found",
+                        lastSyncAttemptTimestamp = System.currentTimeMillis()
+                    )
+                } else {
+                    errorEntity = errorEntity.copy(
+                        content = null,
+                        syncStatus = SyncStatus.ERROR,
+                        lastSyncError = "Mail service not found",
+                        lastSyncAttemptTimestamp = System.currentTimeMillis()
+                    )
+                }
+                messageBodyDao.insertOrUpdateMessageBody(errorEntity)
                 return Result.failure()
             }
 
             // Update MessageBodyEntity status to PENDING_DOWNLOAD before API call
-            // Fetch existing to update it, or prepare for insert if it doesn't exist
             var bodyEntityToUpdate = messageBodyDao.getMessageBodyByIdSuspend(messageId)
             if (bodyEntityToUpdate == null) {
                 bodyEntityToUpdate = MessageBodyEntity(
                     messageId = messageId,
-                    content = null, // Content will be fetched
-                    contentType = null, // ContentType will be fetched
-                    lastFetchedTimestamp = System.currentTimeMillis(), // Placeholder, will be updated on success
+                    content = null,
                     syncStatus = SyncStatus.PENDING_DOWNLOAD,
-                    lastSyncAttemptTimestamp = System.currentTimeMillis()
+                    lastSyncAttemptTimestamp = System.currentTimeMillis(),
+                    lastSuccessfulSyncTimestamp = null,
+                    lastSyncError = null
                 )
             } else {
                 bodyEntityToUpdate = bodyEntityToUpdate.copy(
+                    content = if (bodyEntityToUpdate.syncStatus != SyncStatus.SYNCED) null else bodyEntityToUpdate.content,
                     syncStatus = SyncStatus.PENDING_DOWNLOAD,
-                    lastSyncError = null, // Clear previous error
+                    lastSyncError = null,
                     lastSyncAttemptTimestamp = System.currentTimeMillis()
                 )
             }
@@ -72,28 +85,64 @@ class MessageBodyDownloadWorker @AssistedInject constructor(
             Timber.d("Set message body $messageId status to PENDING_DOWNLOAD.")
 
             // Fetch message body for messageId from API.
-            val bodyResult = mailService.getMessageBody(messageId, accountId)
+            val bodyResult =
+                mailService.getMessageContent(messageId) // Corrected method call, removed accountId
 
             if (bodyResult.isSuccess) {
-                val (bodyContent, contentType) = bodyResult.getOrThrow()
+                val messageWithBody = bodyResult.getOrThrow() // Get the Message object
+                val bodyContent = messageWithBody.body // Access body property
+                val contentType = messageWithBody.bodyContentType // Access bodyContentType property
                 Timber.d("Fetched body for message $messageId. ContentType: $contentType")
 
-                val bodyEntity = MessageBodyEntity(
-                    messageId = messageId,
-                    content = bodyContent,
-                    contentType = contentType ?: "text/plain", // Default if null
-                    lastFetchedTimestamp = System.currentTimeMillis(),
-                    syncStatus = SyncStatus.SYNCED,
-                    lastSuccessfulSyncTimestamp = System.currentTimeMillis()
-                )
-                messageBodyDao.insertOrUpdateMessageBody(bodyEntity)
+                // Create a new entity or update existing one with fetched content
+                var successEntity = messageBodyDao.getMessageBodyByIdSuspend(messageId)
+                if (successEntity == null) {
+                    successEntity = MessageBodyEntity(
+                        messageId = messageId,
+                        content = bodyContent,
+                        contentType = contentType ?: "TEXT",
+                        lastFetchedTimestamp = System.currentTimeMillis(),
+                        syncStatus = SyncStatus.SYNCED,
+                        lastSuccessfulSyncTimestamp = System.currentTimeMillis(),
+                        lastSyncAttemptTimestamp = System.currentTimeMillis(),
+                        lastSyncError = null
+                    )
+                } else {
+                    successEntity = successEntity.copy(
+                        content = bodyContent,
+                        contentType = contentType ?: "TEXT",
+                        lastFetchedTimestamp = System.currentTimeMillis(),
+                        syncStatus = SyncStatus.SYNCED,
+                        lastSuccessfulSyncTimestamp = System.currentTimeMillis(),
+                        lastSyncAttemptTimestamp = System.currentTimeMillis(),
+                        lastSyncError = null
+                    )
+                }
+                messageBodyDao.insertOrUpdateMessageBody(successEntity)
                 Timber.d("Saved message body for $messageId to DB.")
                 return Result.success()
             } else {
                 val exception = bodyResult.exceptionOrNull()
                 val errorMessage = exception?.message ?: "Failed to fetch message body"
                 Timber.e(exception, "Failed to fetch body for message $messageId: $errorMessage")
-                messageBodyDao.updateSyncStatusAndError(messageId, SyncStatus.ERROR, errorMessage)
+                var failureEntity = messageBodyDao.getMessageBodyByIdSuspend(messageId)
+                if (failureEntity == null) {
+                    failureEntity = MessageBodyEntity(
+                        messageId = messageId,
+                        content = null,
+                        syncStatus = SyncStatus.ERROR,
+                        lastSyncError = errorMessage,
+                        lastSyncAttemptTimestamp = System.currentTimeMillis()
+                    )
+                } else {
+                    failureEntity = failureEntity.copy(
+                        content = null,
+                        syncStatus = SyncStatus.ERROR,
+                        lastSyncError = errorMessage,
+                        lastSyncAttemptTimestamp = System.currentTimeMillis()
+                    )
+                }
+                messageBodyDao.insertOrUpdateMessageBody(failureEntity)
 
                 if (exception is ApiServiceException && exception.errorDetails.isNeedsReAuth) {
                     Timber.w("$TAG: Marking account $accountId for re-authentication due to message body download failure.")
@@ -111,15 +160,24 @@ class MessageBodyDownloadWorker @AssistedInject constructor(
 
         } catch (e: Exception) {
             Timber.e(e, "Error downloading message body for accountId: $accountId, messageId: $messageId")
-            // Update sync metadata to reflect error for this message body.
-            // This is already handled in the 'else' branch of bodyResult.isSuccess if the specific API call failed.
-            // However, if another exception occurs (e.g., before API call, or DB issue after),
-            // ensure the status is ERROR.
-            messageBodyDao.updateSyncStatusAndError(
-                messageId,
-                SyncStatus.ERROR,
-                e.message ?: "Unknown error in worker"
-            )
+            var generalErrorEntity = messageBodyDao.getMessageBodyByIdSuspend(messageId)
+            if (generalErrorEntity == null) {
+                generalErrorEntity = MessageBodyEntity(
+                    messageId = messageId,
+                    content = null,
+                    syncStatus = SyncStatus.ERROR,
+                    lastSyncError = e.message ?: "Unknown error in worker",
+                    lastSyncAttemptTimestamp = System.currentTimeMillis()
+                )
+            } else {
+                generalErrorEntity = generalErrorEntity.copy(
+                    content = null,
+                    syncStatus = SyncStatus.ERROR,
+                    lastSyncError = e.message ?: "Unknown error in worker",
+                    lastSyncAttemptTimestamp = System.currentTimeMillis()
+                )
+            }
+            messageBodyDao.insertOrUpdateMessageBody(generalErrorEntity)
 
             if (e is ApiServiceException && e.errorDetails.isNeedsReAuth) {
                 Timber.w("$TAG: Marking account $accountId for re-authentication due to outer exception during message body download.")

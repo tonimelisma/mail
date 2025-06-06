@@ -9,6 +9,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.flow.first
 import net.melisma.core_data.connectivity.NetworkMonitor
 import net.melisma.core_data.datasource.MailApiService
+import net.melisma.core_data.model.MessageSyncState
 import net.melisma.core_data.model.PagedMessagesResponse
 import net.melisma.core_db.AppDatabase
 import net.melisma.core_db.entity.MessageEntity
@@ -24,7 +25,8 @@ class MessageRemoteMediator(
     private val database: AppDatabase,
     private val mailApiService: MailApiService,
     private val networkMonitor: NetworkMonitor,
-    private val ioDispatcher: CoroutineDispatcher
+    private val ioDispatcher: CoroutineDispatcher,
+    private val onSyncStateChanged: (MessageSyncState) -> Unit
 ) : RemoteMediator<Int, MessageEntity>() {
 
     private val messageDao = database.messageDao()
@@ -40,6 +42,7 @@ class MessageRemoteMediator(
         state: PagingState<Int, MessageEntity>
     ): MediatorResult {
         Timber.i("load() called. LoadType: $loadType, Account: $accountId, Folder: $folderId, ConfigPageSize: ${state.config.pageSize}")
+        onSyncStateChanged(MessageSyncState.Syncing(accountId, folderId))
 
         try {
             if (loadType != LoadType.REFRESH && !networkMonitor.isOnline.first()) {
@@ -121,14 +124,35 @@ class MessageRemoteMediator(
                 val exception = apiResponseResult.exceptionOrNull()
                     ?: IOException("Unknown API error during $loadType for $accountId/$folderId")
                 Timber.e(exception, "load() ($loadType) for $accountId/$folderId: API call failed.")
+                onSyncStateChanged(
+                    MessageSyncState.SyncError(
+                        accountId,
+                        folderId,
+                        exception.message ?: "Unknown API Error"
+                    )
+                )
                 return MediatorResult.Error(exception)
             }
 
         } catch (e: IOException) {
             Timber.e(e, "IOException during load ($loadType for $accountId/$folderId)")
+            onSyncStateChanged(
+                MessageSyncState.SyncError(
+                    accountId,
+                    folderId,
+                    e.message ?: "IO Exception"
+                )
+            )
             return MediatorResult.Error(e)
         } catch (e: Exception) {
             Timber.e(e, "Generic exception during load ($loadType for $accountId/$folderId)")
+            onSyncStateChanged(
+                MessageSyncState.SyncError(
+                    accountId,
+                    folderId,
+                    e.message ?: "Generic Exception"
+                )
+            )
             return MediatorResult.Error(e)
         }
     }

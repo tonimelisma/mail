@@ -22,6 +22,7 @@ import net.melisma.core_data.datasource.MailApiService
 import net.melisma.core_data.di.Dispatcher
 import net.melisma.core_data.di.MailDispatchers
 import net.melisma.core_data.errors.ApiServiceException
+import net.melisma.core_data.model.ErrorDetails
 import net.melisma.core_data.model.MailFolder
 import net.melisma.core_data.model.Message
 import net.melisma.core_data.model.MessageDraft
@@ -232,11 +233,17 @@ class GraphApiHelper @Inject constructor(
     }
 
     // Mapper for Ktor-parsed KtorGraphMessage to domain Message using fromApi factory
-    private fun mapKtorGraphMessageToDomainMessage(ktorGraphMessage: KtorGraphMessage): Message? {
+    private fun mapKtorGraphMessageToDomainMessage(
+        ktorGraphMessage: KtorGraphMessage,
+        accountId: String,
+        folderId: String
+    ): Message? {
         val receivedDateTimeStr = ktorGraphMessage.receivedDateTime ?: return null
 
         return Message.fromApi(
             id = ktorGraphMessage.id,
+            accountId = accountId,
+            folderId = folderId,
             threadId = ktorGraphMessage.conversationId ?: ktorGraphMessage.id,
             receivedDateTime = receivedDateTimeStr,
             sentDateTime = ktorGraphMessage.sentDateTime,
@@ -264,6 +271,19 @@ class GraphApiHelper @Inject constructor(
     ): Result<PagedMessagesResponse> = withContext(ioDispatcher) {
         Timber.d("getMessagesForFolder Ktor: folderId='$folderId', pageToken='$pageToken'")
         try {
+            val activeAccountId = credentialStore.getActiveAccountId()
+            if (activeAccountId == null) {
+                Timber.e("No active account ID found. Cannot fetch messages for folder $folderId")
+                return@withContext Result.failure(
+                    ApiServiceException(
+                        ErrorDetails(
+                            message = "No active account found to fetch messages.",
+                            code = "AUTH_NO_ACTIVE_ACCOUNT"
+                        )
+                    )
+                )
+            }
+
             val actualMaxResults = maxResults ?: DEFAULT_MAX_RESULTS
             val requestUrl =
                 pageToken ?: "$MS_GRAPH_ROOT_ENDPOINT/me/mailFolders/$folderId/messages"
@@ -295,8 +315,13 @@ class GraphApiHelper @Inject constructor(
             val ktorGraphMessages = graphResponse.value
             val nextLinkForNextPage = graphResponse.nextLink
 
-            val domainMessages =
-                ktorGraphMessages.mapNotNull { mapKtorGraphMessageToDomainMessage(it) }
+            val domainMessages = ktorGraphMessages.mapNotNull {
+                mapKtorGraphMessageToDomainMessage(
+                    it,
+                    activeAccountId,
+                    folderId
+                )
+            }
             Result.success(
                 PagedMessagesResponse(
                     messages = domainMessages,

@@ -43,27 +43,38 @@ class AttachmentDownloadWorker @AssistedInject constructor(
             val mailService = mailApiServiceSelector.getServiceByAccountId(accountId)
             if (mailService == null) {
                 Timber.e("MailService not found for account $accountId. Failing download.")
-                attachmentDao.updateDownloadStatus(
-                    attachmentId,
-                    false,
-                    null,
-                    null,
-                    "Mail service not found",
-                    SyncStatus.ERROR
-                )
+                val existingEntity = attachmentDao.getAttachmentByIdSuspend(attachmentId)
+                if (existingEntity != null) {
+                    val updatedEntity = existingEntity.copy(
+                        isDownloaded = false,
+                        localFilePath = null,
+                        downloadTimestamp = null, // Explicitly null for consistency
+                        lastSyncError = "Mail service not found",
+                        syncStatus = SyncStatus.ERROR
+                    )
+                    attachmentDao.updateAttachment(updatedEntity)
+                } else {
+                    Timber.w("$TAG: AttachmentEntity $attachmentId not found to update status after mailService was null.")
+                }
                 return Result.failure()
             }
 
             // Set status to PENDING_DOWNLOAD before attempting download
-            attachmentDao.updateDownloadStatus(
-                attachmentId = attachmentId,
-                isDownloaded = false,
-                localFilePath = null, // Keep localFilePath as is, or clear if re-downloading
-                timestamp = null, // Don't update timestamp yet
-                error = null, // Clear previous error
-                syncStatus = SyncStatus.PENDING_DOWNLOAD
-            )
-            Timber.d("Set attachment $attachmentId status to PENDING_DOWNLOAD.")
+            var entityToUpdate = attachmentDao.getAttachmentByIdSuspend(attachmentId)
+            if (entityToUpdate != null) {
+                entityToUpdate = entityToUpdate.copy(
+                    isDownloaded = false,
+                    localFilePath = entityToUpdate.localFilePath, // Preserve existing path if any, or nullify if fresh download
+                    downloadTimestamp = null, // Reset timestamp for new attempt
+                    lastSyncError = null, // Clear previous error
+                    syncStatus = SyncStatus.PENDING_DOWNLOAD
+                )
+                attachmentDao.updateAttachment(entityToUpdate)
+                Timber.d("Set attachment $attachmentId status to PENDING_DOWNLOAD.")
+            } else {
+                Timber.w("$TAG: AttachmentEntity $attachmentId not found to set as PENDING_DOWNLOAD.")
+                // Optionally, handle this as a failure if entity *must* exist
+            }
 
             // Fetch attachment data for attachmentId from API.
             val downloadResult = mailService.downloadAttachment(messageId, attachmentId)
@@ -82,28 +93,36 @@ class AttachmentDownloadWorker @AssistedInject constructor(
                 localFile.outputStream().use { it.write(attachmentData) }
                 Timber.i("Attachment $attachmentName saved to ${localFile.absolutePath}")
 
-                attachmentDao.updateDownloadStatus(
-                    attachmentId = attachmentId,
-                    isDownloaded = true,
-                    localFilePath = localFile.absolutePath,
-                    timestamp = System.currentTimeMillis(),
-                    error = null,
-                    syncStatus = SyncStatus.SYNCED
-                )
-                Timber.d("Worker finished successfully for attachment $attachmentId")
-                return Result.success()
+                entityToUpdate = attachmentDao.getAttachmentByIdSuspend(attachmentId)
+                if (entityToUpdate != null) {
+                    entityToUpdate = entityToUpdate.copy(
+                        isDownloaded = true,
+                        localFilePath = localFile.absolutePath,
+                        downloadTimestamp = System.currentTimeMillis(),
+                        lastSyncError = null,
+                        syncStatus = SyncStatus.SYNCED
+                    )
+                    attachmentDao.updateAttachment(entityToUpdate)
+                    Timber.d("Worker finished successfully for attachment $attachmentId")
+                    return Result.success()
+                } else {
+                    Timber.e("$TAG: AttachmentEntity $attachmentId not found to mark as SYNCED. This is unexpected after successful download.")
+                    return Result.failure() // Should not happen if previous steps worked
+                }
             } else {
                 val exception = downloadResult.exceptionOrNull()
                 val errorMessage = exception?.message ?: "Failed to download attachment"
                 Timber.e(exception, "Failed to download attachment $attachmentId: $errorMessage")
-                attachmentDao.updateDownloadStatus(
-                    attachmentId,
-                    false,
-                    null,
-                    null,
-                    errorMessage,
-                    SyncStatus.ERROR
-                )
+                entityToUpdate = attachmentDao.getAttachmentByIdSuspend(attachmentId)
+                if (entityToUpdate != null) {
+                    entityToUpdate = entityToUpdate.copy(
+                        isDownloaded = false,
+                        lastSyncError = errorMessage,
+                        syncStatus = SyncStatus.ERROR
+                        // localFilePath and downloadTimestamp might remain as they were or be nulled
+                    )
+                    attachmentDao.updateAttachment(entityToUpdate)
+                }
 
                 if (exception is ApiServiceException && exception.errorDetails.isNeedsReAuth) {
                     Timber.w("$TAG: Marking account $accountId for re-authentication due to attachment download failure.")
@@ -121,14 +140,15 @@ class AttachmentDownloadWorker @AssistedInject constructor(
         } catch (e: Exception) {
             Timber.e(e, "Error downloading attachment $attachmentId for message $messageId")
             // Update AttachmentEntity sync metadata to reflect error.
-            attachmentDao.updateDownloadStatus(
-                attachmentId,
-                false,
-                null,
-                null,
-                e.message ?: "Unknown error during download",
-                SyncStatus.ERROR
-            )
+            val existingEntityOnError = attachmentDao.getAttachmentByIdSuspend(attachmentId)
+            if (existingEntityOnError != null) {
+                val updatedEntityOnError = existingEntityOnError.copy(
+                    isDownloaded = false,
+                    lastSyncError = e.message ?: "Unknown error during download",
+                    syncStatus = SyncStatus.ERROR
+                )
+                attachmentDao.updateAttachment(updatedEntityOnError)
+            }
             // Check if this exception implies re-auth
             if (e is ApiServiceException && e.errorDetails.isNeedsReAuth) {
                 Timber.w("$TAG: Marking account $accountId for re-authentication due to outer exception during attachment download.")

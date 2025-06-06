@@ -27,6 +27,9 @@ import net.melisma.core_data.di.MailDispatchers
 import net.melisma.core_data.errors.ErrorMapperService
 import net.melisma.core_data.model.Account
 import net.melisma.core_data.model.FolderFetchState
+import net.melisma.core_data.model.MailFolder
+import net.melisma.core_data.model.MailThread
+import net.melisma.core_data.model.Message
 import net.melisma.core_data.repository.FolderRepository
 import net.melisma.core_db.dao.AccountDao
 import net.melisma.core_db.dao.FolderDao
@@ -209,7 +212,7 @@ class DefaultFolderRepository @Inject constructor(
 
 
     override suspend fun refreshFoldersForAccount(accountId: String, activity: Activity?) {
-        val accountEntity = accountDao.getAccountById(accountId).first() // Get from DB
+        val accountEntity = accountDao.getAccountByIdSuspend(accountId) // Get from DB
         if (accountEntity == null) {
             Timber.w("Account $accountId not found in DB for refresh.")
             _folderStates.update { it + (accountId to FolderFetchState.Error("Account not found")) }
@@ -240,26 +243,40 @@ class DefaultFolderRepository @Inject constructor(
         }
     }
 
+    override fun getThreadsInFolder(
+        accountId: String,
+        folderId: String
+    ): Flow<List<MailThread>> {
+        TODO("Not yet implemented")
+    }
 
-    // --- Stub implementations for other FolderRepository methods ---
+    override fun getMessagesInFolder(
+        accountId: String,
+        folderId: String
+    ): Flow<List<Message>> {
+        TODO("Not yet implemented")
+    }
+
     override suspend fun syncFolderContents(accountId: String, folderId: String): Result<Unit> {
         Timber.d("DefaultFolderRepository: syncFolderContents for account $accountId, folder $folderId. Delegating to SyncEngine.")
         // In a full implementation, you might need the remoteFolderId.
         // For now, assume folderId is sufficient or can be looked up by SyncEngine/worker.
         val folder = folderDao.getFolderByIdSuspend(folderId)
         if (folder?.remoteId == null) {
-            Timber.w("Cannot sync folder contents for $folderId, remoteId is null.")
-            return Result.failure(IllegalArgumentException("Folder remote ID not found for $folderId"))
+            val errorMessage =
+                "Cannot sync folder contents: remoteId is null for local folderId $folderId"
+            Timber.e(errorMessage)
+            return Result.failure(IllegalArgumentException(errorMessage))
         }
-        syncEngine.syncFolderContent(accountId, folderId, folder.remoteId!!)
+        syncEngine.syncFolderContent(accountId, folder.id, folder.remoteId!!)
         return Result.success(Unit)
     }
 
-    override fun getFolderById(folderId: String): Flow<net.melisma.core_data.model.MailFolder?> {
+    override fun getFolderById(folderId: String): Flow<MailFolder?> {
         return folderDao.getFolderByIdFlow(folderId).map { it?.toDomainModel() }
     }
 
-    override suspend fun getFolderByIdSuspend(folderId: String): net.melisma.core_data.model.MailFolder? {
+    override suspend fun getFolderByIdSuspend(folderId: String): MailFolder? {
         return folderDao.getFolderByIdSuspend(folderId)?.toDomainModel()
     }
 }

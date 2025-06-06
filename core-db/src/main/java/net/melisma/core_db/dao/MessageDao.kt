@@ -84,8 +84,14 @@ interface MessageDao {
     @Query("UPDATE messages SET isRead = :isRead, syncStatus = :syncStatus WHERE messageId = :messageId")
     suspend fun updateReadState(messageId: String, isRead: Boolean, syncStatus: SyncStatus)
 
+    @Query("UPDATE messages SET isRead = :isRead WHERE messageId = :messageId")
+    suspend fun updateReadStatus(messageId: String, isRead: Boolean)
+
     @Query("UPDATE messages SET isStarred = :isStarred, syncStatus = :syncStatus WHERE messageId = :messageId")
     suspend fun updateStarredState(messageId: String, isStarred: Boolean, syncStatus: SyncStatus)
+
+    @Query("UPDATE messages SET isStarred = :isStarred WHERE messageId = :messageId")
+    suspend fun updateStarredStatus(messageId: String, isStarred: Boolean)
 
     @Query("UPDATE messages SET isLocallyDeleted = :isLocallyDeleted, syncStatus = :syncStatus, lastSyncError = NULL WHERE messageId = :messageId")
     suspend fun markAsLocallyDeleted(
@@ -93,6 +99,9 @@ interface MessageDao {
         isLocallyDeleted: Boolean = true,
         syncStatus: SyncStatus = SyncStatus.PENDING_UPLOAD
     )
+
+    @Query("DELETE FROM messages WHERE messageId = :messageId")
+    suspend fun deleteMessageById(messageId: String)
 
     @Query("DELETE FROM messages WHERE messageId = :messageId")
     suspend fun deletePermanentlyById(messageId: String)
@@ -104,6 +113,9 @@ interface MessageDao {
         syncStatus: SyncStatus,
         lastSyncError: String?
     )
+
+    @Query("UPDATE messages SET folderId = :newFolderId WHERE messageId = :messageId")
+    suspend fun updateFolderId(messageId: String, newFolderId: String)
 
     // For worker to update folderId and clear sync state on successful API move
     @Query("UPDATE messages SET folderId = :newFolderId, syncStatus = 'SYNCED', lastSyncError = NULL WHERE messageId = :messageId")
@@ -205,4 +217,11 @@ interface MessageDao {
         newFolderId: String,
         syncStatus: SyncStatus
     )
+
+    @Query("SELECT * FROM messages WHERE accountId = :accountId AND (subject LIKE :query OR snippet LIKE :query) AND (:folderId IS NULL OR folderId = :folderId) ORDER BY timestamp DESC")
+    fun searchMessages(
+        query: String,
+        accountId: String,
+        folderId: String?
+    ): Flow<List<MessageEntity>>
 }

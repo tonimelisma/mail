@@ -29,7 +29,7 @@ local data to provide a rich offline experience while respecting device storage 
 8. **Intelligent Data Management:** Implement clear policies for initial data synchronization, cache
    eviction, and attachment handling to balance offline availability with resource constraints.
 
-## **2\. Current State, Technical Debt & Key Assumptions (Revised October 2023 - Updated by AI
+## **2\. Current State, Technical Debt & Key Assumptions (Revised November 2023 - Updated by AI
 Assistant)**
 
 **Current Implemented State (Summary):**
@@ -37,89 +37,93 @@ Assistant)**
 * **Phase 0 (Foundation & Critical Bug Fixes):**
     * MessageBodyEntity persistence bug: **ADDRESSED**.
     * Room Entities enhanced with sync metadata (SyncStatus, timestamps, etc.): **COMPLETED**.
-    * Account/AccountEntity refactor (displayName/emailAddress): **IMPLEMENTED** (as per original
-      doc).
-* **Sprint/Phase 1.A (Fix `MailApiService` Pagination & `MessageRemoteMediator` - Code
-  Implementation):**
-    * `PagedMessagesResponse.kt` in `core-data`: **CREATED and DEFINED.**
-    * `MailApiService.kt` interface in `core-data`: `getMessagesForFolder` signature **UPDATED** for
-      pagination.
-    * `GmailApiHelper.kt` in `backend-google`: `getMessagesForFolder` **REFACTORED** for pagination
-      using Ktor (removed GMS batching for this method as a shortcut to resolve type issues),
-      `DEFAULT_MAX_RESULTS` added. DI constructor **UPDATED**.
-    * `GraphApiHelper.kt` in `backend-microsoft`: `getMessagesForFolder` **REFACTORED** for
-      pagination.
-    * `RemoteKeyEntity.kt` and `RemoteKeyDao.kt` in `core-db`: **CREATED and ADDED** to
-      `AppDatabase.kt` (DB version incremented, migration added).
-    * `MessageRemoteMediator.kt` in `data`: **REFACTORED** to use `RemoteKeyDao` and new pagination
-      logic.
-    * `BackendGoogleModule.kt`: DI providers for `CoroutineDispatcher` and `Gmail?` service (
-      nullable placeholder) **ADDED**. `GmailApiHelper` provider **UPDATED** with new dependencies.
-      `GoogleAuthManager` correctly injected.
-    * `ErrorDetails.kt` in `core-data`: **UPDATED** with `isNeedsReAuth` and `isConnectivityIssue`
-      parameters, resolving `GoogleErrorMapper.kt` issues.
-    * `GmailApiHelperTest.kt`: **UPDATED** to provide new mocked dependencies for `GmailApiHelper`
-      constructor.
-* **Build System & Core Libraries Fixes (Partial - As of Last AI Build Attempt):**
-    * **`core-data/src/main/java/net/melisma/core_data/datasource/MailApiService.kt`**: Removed
-      unused imports for `MessageBodyTuple` and `MessageIdWithBody`.
-    * **`backend-google/build.gradle.kts`**: Added
-      `implementation("com.google.apis:google-api-services-gmail:v1-rev20220404-2.0.0")`.
-    * **`core-db/src/main/java/net/melisma/core_db/dao/FolderDao.kt`**: Added missing `SyncStatus`
-      import and corrected SQL query.
-    * **`core-data/src/main/AndroidManifest.xml`**: Created missing file, added network permission.
-    * **IMPORTANT NOTE:** The project **IS NOT CURRENTLY BUILDING**. The last build attempt failed
-      with KSP errors in the `backend-microsoft` module:
-      `InjectProcessingStep was unable to process 'GraphApiHelper(...)' because 'CoroutineDispatcher' could not be resolved.`
-      This is despite `:core-data` providing the qualified dispatcher and `backend-microsoft`
-      depending on it.
+  * Account/AccountEntity refactor (displayName/emailAddress): **IMPLEMENTED**.
+* **Build System & Core Libraries Fixes (Largely Addressed):**
+    * **KSP Hilt `CoroutineDispatcher` Resolution:** **FIXED**. The original build blocker in the
+      `backend-microsoft` module was resolved by explicitly including the `DispatchersModule` from
+      `core-data` in the `BackendMicrosoftModule` via
+      `@Module(includes = [DispatchersModule::class])`.
+    * **Data Layer Compilation Cascade:** **LARGELY FIXED**. A significant number of compilation
+      errors in
+      the `:data` module (`DefaultMessageRepository`, `DefaultFolderRepository`, various Workers)
+      and `:core-db`
+      module (various DAOs) were resolved. This involved:
+        * Adding missing methods to DAO interfaces (`FolderDao`, `MessageDao`, `AttachmentDao`,
+          `MessageBodyDao`, `AccountDao`).
+        * Correcting mismatched method signatures between repositories and their interfaces.
+        * Fixing unresolved references by aligning method calls with their new definitions.
+        * Updating data model classes (`MessageDraft`, `Attachment`, `Message`, `MessageEntity`,
+          `FolderEntity`, `MessageBodyEntity`, `EmailAddress`)
+          to include missing properties or align existing ones.
+        * Adding new mapper files (`AttachmentMapper.kt`) and correcting existing ones.
+        * Refactoring Worker classes to correctly parse action payloads and interact with DAOs and
+          API services.
+        * **OUTSTANDING ISSUE:** Persistent, unusual compiler errors in
+          `data/src/main/java/net/melisma/data/mapper/MessageMappers.kt` ("No value passed for
+          parameter 'id'/'body'" on the function signature line) despite the constructor call
+          appearing correct.
+    * **Room Foreign Key Constraint:** **FIXED**. A KSP error in `:core-db` related to a missing
+      unique index for a foreign key in `MessageBodyEntity` was resolved by updating the entity's
+      schema definition.
+    * **API Helper and Worker Implementation Progress (Partial):**
+        * `GraphApiHelper.kt`: Initial `accountId`/`folderId` constructor fix for `Message.fromApi`,
+          `ErrorDetails` import/usage corrected.
+        * `GmailApiHelper.kt`: Linting fix applied. **STILL A PRIMARY BUILD BLOCKER** due to
+          outdated constructor calls for `Message` and `Attachment`.
+        * `DefaultMessageRepository.kt`: Resolved issues with `MessageEntity.toDomainModel()`
+          arguments, `PagedMessagesResponse` usage, `EmailAddress` import and mapping, and
+          `SyncStatus` enum usage.
+        * `ActionUploadWorker.kt`: Corrected `MailApiServiceSelector` usage, `moveMessage`
+          parameters, and switched to `kotlin.Result`. The `markMessageAsRead` call is **temporarily
+          commented out** due to an unresolved reference error specific to it.
+        * `AttachmentDownloadWorker.kt`: Refactored DAO interactions to use a fetch-update-save
+          pattern with `AttachmentEntity` and `AttachmentDao.updateAttachment()`.
+        * `FolderContentSyncWorker.kt`: Corrected `nextPageToken` field usage from `FolderEntity`
+          and implemented saving of the new page token via `FolderDao.updatePagingTokens()`.
+        * `FolderListSyncWorker.kt`: Fixed `workerParams` access, `MailApiServiceSelector` usage,
+          `withTransaction` import, lambda parameter typing for `MailFolder.toEntity()`, and
+          `FolderDao/AccountDao` method calls.
+        * `MessageBodyDownloadWorker.kt`: Refactored `MessageBodyDao` interactions to
+          fetch-update/create-insert `MessageBodyEntity`, corrected
+          `MailApiService.getMessageContent()` call, and adjusted `Message` result handling.
 * **Phase 1 (Decoupling Read Path & Initial Sync Workers - Original State):**
     * Repository Read Methods (DB-Centric): **PARTIALLY IMPLEMENTED**.
         * **CRITICAL ISSUE (PENDING VERIFICATION AFTER SPRINT 1.A FIXES):**
           `DefaultMessageRepository`'s usage of `MessageRemoteMediator` previously resulted in only
           the first page loading. This should be re-evaluated once the build is successful.
-    * `SyncEngine` and Initial SyncWorkers: Skeletons exist, **NEED FULL IMPLEMENTATION.**
+  * `SyncEngine` and Initial SyncWorkers: Skeletons exist, significant progress made in making them
+    compile, but **NEED FULL LOGIC IMPLEMENTATION.**
 * **Phase 2 (Decoupling Write Path - Queuing Offline Actions - Original State):** **NOT STARTED.**
 * **Phase 3 (Building a Robust Sync Engine & Advanced Features - Original State):** **NOT STARTED.**
 
 **Key Technical Debt & Immediate Concerns (Updated):**
 
-1. **KSP Resolution for Qualified `CoroutineDispatcher` (TOP PRIORITY BUILD BLOCKER):**
-    * **Problem:** KSP in `backend-microsoft` module fails to resolve
-      `@Dispatcher(MailDispatchers.IO) CoroutineDispatcher` provided by `core-data` module for
-      `GraphApiHelper` constructor.
-    * **Impact:** Project cannot build.
-    * **Root Cause:** Likely a build tooling issue (KSP/Hilt caching or inter-module processing) as
-      definitions and dependencies appear correct.
-2. **`MessageRemoteMediator` Full Offline Incapability (Addressed by Sprint 1.A code changes,
-   pending successful build & testing):**
-    * **Problem:** Previously only loaded the first page.
-    * **Impact:** Limited offline access.
-    * **Resolution Attempted:** Sprint 1.A refactored `MessageRemoteMediator` and `MailApiService`
-      implementations to support proper pagination.
-3. **Incomplete `MailApiService` Pagination & Integration (Addressed by Sprint 1.A code changes):**
-    * `getMessagesForFolder` in both `GmailApiHelper.kt` and `GraphApiHelper.kt` updated for
-      pagination.
-    * **Shortcut/Change for `GmailApiHelper.kt`**: The previous GMS SDK batching logic within
-      `getMessagesForFolder` was removed. The method now uses Ktor to list message IDs and then
-      Ktor-based `fetchRawGmailMessage` for individual message details. This resolved compilation
-      issues with GMS batching types and simplified the pagination logic for this specific method.
-      Other methods in `GmailApiHelper` might still use `gmailService`.
-4. **Dependency Injection (Hilt) Misconfiguration for `GmailApiHelper` (Addressed by Sprint 1.A code
-   changes):**
-    * `BackendGoogleModule.kt` now provides `ioDispatcher`, a nullable `gmailService`, and
-      `GoogleAuthManager` to `GmailApiHelper`.
-5. **Unresolved Types & Constants in `GmailApiHelper.kt` (Addressed by Sprint 1.A code changes):**
-    * The problematic GMS batch processing logic in `getMessagesForFolder` was removed, thus
-      resolving related type issues (e.g., `JsonBatchCallback`, `MessageModel` alias).
-      `DEFAULT_MAX_RESULTS` constant was added.
-6. **Unresolved Parameters in `GoogleErrorMapper.kt` (Addressed by Sprint 1.A code changes):**
-    * `ErrorDetails.kt` (in `core-data`) was updated to include `isNeedsReAuth` and
-      `isConnectivityIssue`, resolving the constructor/parameter issues when `GoogleErrorMapper`
-      creates `ErrorDetails` instances.
-7. **Incomplete Sync Workers:** All sync workers still require full implementation.
-8. **Basic `SyncEngine`:** Still requires significant work.
-9. **Delta Sync for Deletions:** Not implemented.
+1. **`GmailApiHelper.kt` Constructor Calls (TOP PRIORITY BUILD BLOCKER):**
+    * **Problem:** The `GmailApiHelper.kt` in the `backend-google` module is not updated to use the
+      current constructors of `Message` and `Attachment` from `core-data`, which now require
+      additional parameters (e.g., `accountId`, `folderId`).
+    * **Impact:** Project cannot build if this file is included in the build process.
+    * **Root Cause:** Incomplete refactoring.
+2. **Anomalous Compiler Errors in `MessageMappers.kt`:**
+    * **Problem:** Persistent compiler errors ("No value passed for parameter 'id'/'body'") on the
+      function signature line of `MessageEntity.toDomainModel()` in `MessageMappers.kt`. The
+      constructor call within the function appears correct.
+    * **Impact:** This is currently preventing a successful build of the `:data` module.
+    * **Root Cause:** Unknown; potentially a subtle compiler issue, build configuration problem, or
+      a very opaque coding error.
+3. **`ActionUploadWorker.kt` - `markMessageAsRead` issue:**
+    * **Problem:** The call to `mailService.markMessageAsRead()` is unresolved despite a matching
+      signature in `MailApiService`. It is currently commented out.
+    * **Impact:** "Mark as read" action will not work via this worker until resolved.
+4. **Incomplete `MailApiService` Pagination & Integration (Partially Addressed, Blocked by Build):**
+    * The `getMessagesForFolder` signature has been updated in the interface and
+      `GraphApiHelper.kt`. Full verification of `GmailApiHelper.kt`'s implementation is pending a
+      successful build.
+5. **Incomplete Sync Workers & `SyncEngine`:** Foundational work and compilation fixes are done for
+   many workers, but the core logic for all workers and the orchestration logic in `SyncEngine` is
+   not implemented. This is the main next step after the build is fixed.
+6. **Delta Sync for Deletions:** Not implemented. This is a critical feature for a good offline
+   experience.
 
 **Original Key Assumptions (Still Mostly Valid, with Caveats):**
 
@@ -127,133 +131,48 @@ Assistant)**
   VALID)**
 * WorkManager is the chosen framework. **(VALID)**
 * Existing MailApiService implementations are functional for backend communication (now enhanced for
-  pagination). **(VALID - Pagination implemented)**
+  pagination). **(PARTIALLY VALID - Blocked by `GmailApiHelper.kt` compilation
+  and `MessageMappers.kt` mystery)**
 * UI will be made fully reactive. **(ASSUMED, NEEDS VERIFICATION)**
 * Server is the ultimate source of truth. **(VALID)**
 * Server APIs provide mechanisms for delta sync (needs to be leveraged). **(ASSUMED, NEEDS
   IMPLEMENTATION)**
 
-## **3\. Phased Implementation Plan (Revised & Detailed - Strategy 1: Enhanced Current Path)**
+## **3\. Phased Implementation Plan (Revised & Detailed)**
 
-This plan adopts the **"Enhanced Current Path"** strategy, focusing on making
-`MessageRemoteMediator` fully functional and building out the `SyncEngine` and workers as
-envisioned.
-
-**Overall Goal:** Achieve reliable, paginated fetching of all messages for a folder via
-`MessageRemoteMediator`, and implement foundational sync workers and action queuing.
+This plan focuses on fixing the build and then continuing with the phased implementation.
 
 ---
 
-**Sprint/Phase 1.A: Fix `MailApiService` Pagination & `MessageRemoteMediator` (The Critical Hurdle)
-**
+**Sprint/Phase 1.A: Fix Build & Stabilize Data Layer (The Critical Hurdle)**
 
-**Objective:** Enable `MessageRemoteMediator` to load *all* messages for a folder with proper
-pagination.
+**Objective:** Get the project into a buildable and runnable state to enable further development.
 
-* **Task 1.A.1: Define `PagedMessagesResponse` in `core-data`**
+* **Task 1.A.1: Fix KSP/Hilt `CoroutineDispatcher` error in `backend-microsoft`**
     * **Status: COMPLETED.**
-    * **File:** `core-data/src/main/java/net/melisma/core_data/model/PagedMessagesResponse.kt`
-    * **Content:**
-      ```kotlin
-      package net.melisma.core_data.model // Or appropriate sub-package
+  * **Resolution:** Explicitly included `DispatchersModule` in `BackendMicrosoftModule`.
 
-      data class PagedMessagesResponse(
-          val messages: List<Message>,
-          val nextPageToken: String? // Token for the next page, null if no more pages
-      )
-      ```
-    * **DoD:** File created, data class defined.
+* **Task 1.A.2: Resolve Compilation Cascade in `:data` and `:core-db`**
+    * **Status: LARGELY COMPLETED.** Significant progress in `DefaultMessageRepository`,
+      `DefaultFolderRepository`, DAOs, and Worker classes.
+    * **Remaining:** Resolve `MessageMappers.kt` compiler errors.
 
-* **Task 1.A.2: Update `MailApiService` Interface**
+* **Task 1.A.3: Fix Room Foreign Key KSP Error**
     * **Status: COMPLETED.**
-    * **File:** `core-data/src/main/java/net/melisma/core_data/datasource/MailApiService.kt`
-    * **Change:** Modified `getMessagesForFolder` signature:
-      ```kotlin
-      suspend fun getMessagesForFolder(
-          folderId: String,
-          activity: android.app.Activity? = null,
-          maxResults: Int? = null, 
-          pageToken: String? = null // New parameter for pagination
-      ): Result<PagedMessagesResponse> // Return type changed
-      ```
-    * **DoD:** Interface updated.
+  * **Resolution:** Corrected the foreign key reference in `MessageBodyEntity`.
 
-* **Task 1.A.3: Implement Pagination in `GmailApiHelper.kt`**
-    * **Status: COMPLETED.**
-    * **File:** `backend-google/src/main/java/net/melisma/backend_google/GmailApiHelper.kt`
-    * **Function:** `getMessagesForFolder`
-    * **Logic:**
-        1. Function uses `pageToken: String?` parameter.
-        2. **Shortcut/Change:** Uses Ktor for listing message IDs and then Ktor-based
-           `fetchRawGmailMessage` for individual message details. The previous GMS SDK batching
-           logic and its unresolved types/constants (`JsonBatchCallback`, `MessageModel`,
-           `HttpHeaders`, `GoogleJsonError`, `toDomainMessage()`) for *this specific method* were
-           removed to resolve compilation blockers and simplify pagination integration. Other
-           methods in `GmailApiHelper` might still use the `gmailService` instance.
-        3. Maps API response messages to `List<Message>`.
-        4. Extracts `nextPageToken` from the API list response.
-        5. Returns `Result.success(PagedMessagesResponse(mappedMessages, extractedNextPageToken))`.
-        6. Handles API errors.
-        7. Defined `DEFAULT_MAX_RESULTS` in companion object.
-    * **DoD:** `getMessagesForFolder` correctly uses `pageToken`, returns `PagedMessagesResponse`
-      with Ktor.
+* **Task 1.A.4: Fix Compilation Errors in `GmailApiHelper.kt`**
+    * **Status: BLOCKED (Primary Blocker for Full Project Build).**
+    * **Objective:** Update `GmailApiHelper` to correctly use the updated `Message` and `Attachment`
+      data models.
 
-* **Task 1.A.4: Implement Pagination in `GraphApiHelper.kt` (Microsoft)**
-    * **Status: COMPLETED.**
-    * **File:** `backend-microsoft/src/main/java/net/melisma/backend_microsoft/GraphApiHelper.kt`
-    * **Function:** `getMessagesForFolder`
-    * **Logic:**
-        1. Accepts `pageToken: String?` (which is the full `@odata.nextLink` from a previous
-           response).
-        2. If `pageToken` (nextLink) is provided, the request is made to this full URL. If null, it
-           constructs the initial URL.
-        3. Query parameters (`$top`, `$select`) are added only for the initial request (when
-           `pageToken` is null).
-        4. Parses the response, extracts messages and the new `@odata.nextLink`.
-        5. The new `@odata.nextLink` is used as the `nextPageToken` for `PagedMessagesResponse`.
-        6. Maps Graph API messages to `List<Message>`.
-        7. Returns `Result.success(PagedMessagesResponse(mappedMessages, newNextLink))`.
-    * **DoD:** `getMessagesForFolder` implemented, uses `pageToken` (nextLink), returns
-      `PagedMessagesResponse`.
+* **Task 1.A.5: Resolve `markMessageAsRead` in `ActionUploadWorker.kt`**
+    * **Status: PENDING.** The call is currently commented out.
+    * **Objective:** Investigate and fix the "Unresolved reference" error.
 
-* **Task 1.A.5: Create `RemoteKeys` Entity and DAO**
-    * **Status: COMPLETED.**
-    * **Directory:** `core-db/src/main/java/net/melisma/core_db/entity/` and
-      `core-db/src/main/java/net/melisma/core_db/dao/`
-    * **Entity (`RemoteKeyEntity.kt`):** Defined as specified.
-    * **DAO (`RemoteKeyDao.kt`):** Defined as specified.
-    * Added to `AppDatabase.kt`, DB version incremented to 11, migration `MIGRATION_10_11` added.
-    * **DoD:** Entity, DAO created, added to `AppDatabase`.
-
-* **Task 1.A.6: Refactor `MessageRemoteMediator.kt`**
-    * **Status: COMPLETED.**
-    * **File:** `data/src/main/java/net/melisma/data/paging/MessageRemoteMediator.kt`
-    * **Inject:** `AppDatabase`, `MailApiService`, `NetworkMonitor`, `CoroutineDispatcher`. Removed
-      `FolderDao`, `AccountDao`.
-    * **`initialize()`:** Returns `InitializeAction.LAUNCH_INITIAL_REFRESH`.
-    * **`load()` method:** Implemented as specified for `REFRESH` and `APPEND` using `RemoteKeyDao`,
-      `mailApiService.getMessagesForFolder`, and `state.config.pageSize`. `PREPEND` returns success
-      with `endOfPaginationReached = true`.
-    * **DoD:** `MessageRemoteMediator` correctly pages using `RemoteKeyEntity`.
-
-* **Task 1.A.7: Fix DI for `GmailApiHelper` and `GoogleErrorMapper` (Build Fix Block)**
-    * **Status: PARTIALLY COMPLETED (New Blocker Identified).**
-    * **File:** `backend-google/src/main/java/net/melisma/backend_google/di/BackendGoogleModule.kt`
-        * Provider for `CoroutineDispatcher` (non-qualified `Dispatchers.IO`): **COMPLETED.**
-        * Provider for `com.google.api.services.gmail.Gmail?` (nullable placeholder): **COMPLETED.**
-        * `provideGmailApiHelper` updated with all new dependencies including `GoogleAuthManager`: *
-          *COMPLETED.**
-    * **File:** `core-data/src/main/java/net/melisma/core_data/model/ErrorDetails.kt`
-        * `ErrorDetails` data class updated with `isNeedsReAuth` and `isConnectivityIssue`
-          parameters. This resolved issues in `GoogleErrorMapper.kt`. **COMPLETED.**
-    * **File:** `backend-google/src/test/java/net/melisma/backend_google/GmailApiHelperTest.kt`
-        * Updated to provide new mocked dependencies to `GmailApiHelper` constructor. **COMPLETED.**
-    * **NEW BUILD BLOCKER:** KSP error in `backend-microsoft` module:
-      `InjectProcessingStep was unable to process 'GraphApiHelper(...)' because 'CoroutineDispatcher' could not be resolved.`
-      This is for the `@Dispatcher(MailDispatchers.IO) CoroutineDispatcher`.
-    * **DoD:** Original `GmailApiHelper` and `GoogleErrorMapper` DI issues are resolved.
-      `GmailApiHelperTest.kt` updated. Application still **DOES NOT BUILD** due to new KSP error in
-      `backend-microsoft`.
+* **Task 1.A.6: Verify `MessageRemoteMediator` and Pagination**
+    * **Status: NOT STARTED (Blocked by Build).**
+    * **Objective:** Once the application builds, verify `MessageRemoteMediator` pages correctly.
 
 ---
 
@@ -261,28 +180,15 @@ pagination.
 
 **Objective:** Get foundational data synced without user interaction.
 
-* **Task 1.B.1: Implement `FolderListSyncWorker.kt`**
-    * **File:** `data/src/main/java/net/melisma/data/sync/workers/FolderListSyncWorker.kt`
-    * **InputData:** `accountId: String`.
-    * **Logic:**
-        1. Retrieve `accountId`. Get `MailApiService`.
-        2. Call `mailService.getMailFolders(accountId = accountId, activity = null)`.
-        3. On success (`List<MailFolder>`): Map to `List<FolderEntity>`, set
-           `syncStatus = SyncStatus.SYNCED`, `lastSuccessfulSyncTimestamp`.
-           `folderDao.insertOrUpdateFolders(folderEntities)`. Update
-           `AccountEntity.lastFolderListSyncTimestamp`. Return `Result.success()`.
-        4. On failure: Log, update `AccountEntity.lastFolderListSyncError`. Return
-           `Result.retry()/failure()`.
-    * **DoD:** Worker fetches and stores folders.
+* **Task 1.B.1: Finalize `FolderListSyncWorker.kt`**
+    * **Status: SIGNIFICANT PROGRESS MADE (Compiles).** Needs full logic implementation and testing.
 
-* **Task 1.B.2: Implement `SyncEngine.kt` (Basic Folder Sync Scheduling)**
-    * **File:** `data/src/main/java/net/melisma/data/sync/SyncEngine.kt`
-    * **Inject:** `WorkManager`.
-    * **Method:** `fun requestFolderListSync(accountId: String, force: Boolean = false)`: Enqueues
-      `FolderListSyncWorker` (unique one-time work).
-    * **Method:** `fun schedulePeriodicFolderSync(accountId: String)`: Enqueues
-      `FolderListSyncWorker` (unique periodic work).
-    * **DoD:** `SyncEngine` can schedule folder syncs.
+* **Task 1.B.2: Finalize `FolderContentSyncWorker.kt`**
+    * **Status: SIGNIFICANT PROGRESS MADE (Compiles).** Needs full logic implementation and testing.
+
+* **Task 1.B.3: Implement `SyncEngine.kt` (Basic Folder & Content Sync Scheduling)**
+    * **Status: NOT STARTED.**
+    * **DoD:** `SyncEngine` can schedule folder list and folder content syncs.
 
 ---
 
@@ -290,49 +196,96 @@ pagination.
 
 **Objective:** Allow on-demand download of message bodies and attachments.
 
-* **Task 1.C.1: Implement `MessageBodyDownloadWorker.kt`**
-    * **File:** `data/src/main/java/net/melisma/data/sync/workers/MessageBodyDownloadWorker.kt`
-    * **InputData:** `accountId: String`, `messageId: String`.
-    * **Logic:** Get params, `MailApiService`. Optimistically update `MessageBodyEntity` to
-      `DOWNLOADING`. Call `mailService.getMessageContent(messageId)`. On success, update
-      `MessageBodyEntity` (content, `SYNCED`). On failure, update status to `ERROR`.
-    * **DoD:** Worker downloads and saves message body.
+* **Task 1.C.1: Finalize `MessageBodyDownloadWorker.kt`**
+    * **Status: SIGNIFICANT PROGRESS MADE (Compiles).** Needs full logic implementation and testing.
 
-* **Task 1.C.2: Implement `AttachmentDownloadWorker.kt`**
-    * **File:** `data/src/main/java/net/melisma/data/sync/workers/AttachmentDownloadWorker.kt`
-    * **InputData:** `accountId: String`, `messageId: String`, `attachmentId: String` (local DB ID),
-      `attachmentRemoteId: String` (API ID), `attachmentName: String`.
-    * **Logic:** Get params, `MailApiService`. Optimistically update `AttachmentEntity`. Call
-      `mailService.downloadAttachment(messageId, attachmentRemoteId)`. On success (`ByteArray`),
-      save to file, update `AttachmentEntity` (`localFilePath`, `isDownloaded = true`, `SYNCED`). On
-      failure, update status to `ERROR`.
-    * **DoD:** Worker downloads and saves attachment.
+* **Task 1.C.2: Finalize `AttachmentDownloadWorker.kt`**
+    * **Status: SIGNIFICANT PROGRESS MADE (Compiles).** Needs full logic implementation and testing.
 
 * **Task 1.C.3: `SyncEngine` Methods for On-Demand Downloads**
-    * **File:** `data/src/main/java/net/melisma/data/sync/SyncEngine.kt`
-    * **Method:** `fun requestMessageBodyDownload(accountId: String, messageId: String)`: Enqueues
-      `MessageBodyDownloadWorker`.
-    * **Method:**
-      `fun requestAttachmentDownload(accountId: String, messageId: String, attachmentId: String, attachmentRemoteId: String, attachmentName: String)`:
-      Enqueues `AttachmentDownloadWorker`.
+    * **Status: NOT STARTED.**
     * **DoD:** `SyncEngine` can trigger these downloads.
 
 ---
-**Soft Spots & Research Areas (Reiteration for this plan):**
 
-* **`MessageRemoteMediator` Full Pagination:** Conditional clearing on `REFRESH` vs. merging.
-  Reliable page token management.
-* **Delta Sync (especially Deletions):** How to efficiently detect and apply server-side deletions.
-* **`GmailApiHelper.getMessagesForFolder`:** Reconciling its current Java SDK batching approach with
-  the need to support simple `pageToken` input and `PagedMessagesResponse` output for
-  `RemoteMediator`. It might be simpler to have a separate, Ktor-based paged list method if the
-  batching one is too complex to adapt quickly.
-* **Error Handling & Retries in Workers:** Robustly distinguishing error types.
-* **`SyncEngine` Orchestration:** Complex interactions, priorities, and overall state.
-* **Conflict Resolution:** For now, the plan is mostly optimistic local updates + server overwrite.
-  True conflict resolution (e.g., user moves email offline, server also moves it elsewhere) is not
-  deeply covered yet.
+**Sprint/Phase 1.D: Action Upload Worker & Offline Queuing Foundation**
 
-This detailed plan prioritizes getting the read path (full folder content) working correctly,
-followed by reliable offline action processing. Subsequent phases would build upon this to implement
-full delta sync, cache management, and more advanced features.
+**Objective:** Enable basic offline actions to be queued and synced.
+
+* **Task 1.D.1: Finalize `ActionUploadWorker.kt`**
+    * **Status: SIGNIFICANT PROGRESS MADE (Compiles, `markMessageAsRead` pending).** Needs full
+      logic implementation for all actions and testing.
+
+* **Task 1.D.2: Design and Implement Offline Action Queueing Mechanism**
+    * **Status: NOT STARTED.**
+    * **Details:** Define how actions are stored locally (e.g., separate Room table) and how
+      `ActionUploadWorker` consumes them.
+
+* **Task 1.D.3: `SyncEngine` Integration for Action Uploads**
+    * **Status: NOT STARTED.**
+    * **DoD:** `SyncEngine` can trigger action uploads.
+
+---
+
+## 4\. Next Steps & Current Build Status
+
+### Current Build Status: FAILED
+
+The project currently **does not build** if all modules are included. The primary blocker for a full
+project build is `backend-google/src/main/java/net/melisma/backend_google/GmailApiHelper.kt`.
+However, the immediate blocker for the current set of changes in the `:data` module is the errors in
+`MessageMappers.kt`.
+
+**Errors in `:data` module:**
+
+* `MessageMappers.kt:50:9 No value passed for parameter 'id'.`
+* `MessageMappers.kt:50:9 No value passed for parameter 'body'.`
+
+**Errors in `backend-google` module (if compiled):**
+
+* Multiple "No value passed for parameter" errors when creating `Message` and `Attachment` objects (
+  e.g., `accountId`, `folderId`, `messageId`, `localUri`).
+
+### Immediate Priorities:
+
+1. **Resolve `MessageMappers.kt` Errors:**
+    * **The Problem:** The compiler reports missing parameters for the `Message` constructor on the
+      `MessageEntity.toDomainModel()` function signature line, despite the constructor call within
+      the function appearing correct.
+    * **What Needs to Be Done:** This requires a deeper investigation. Since direct fixes to the
+      constructor call and even using fully qualified names haven't resolved it, the issue might be
+      more subtle. Possibilities include:
+        * An obscure interaction with other mappers or extension functions.
+        * A problem in the `Message.kt` data class itself that's manifesting indirectly here.
+        * Build configuration or compiler environment issues (though less likely given other files
+          compile).
+    * **Next Step:** Systematically re-examine `Message.kt` for any unusual constructor logic,
+      `init` blocks, or default parameter interactions. Then, analyze the usage of
+      `MessageEntity.toDomainModel()` throughout the `:data` module to see if any call site could be
+      providing misleading type information.
+2. **Uncomment and Fix `markMessageAsRead` in `ActionUploadWorker.kt`:**
+    * Once the `:data` module builds, uncomment the
+      `mailService.markMessageAsRead(entityId, isRead)` line and address the "Unresolved reference"
+      error. This might involve checking type inference again or looking for subtle differences in
+      that specific call compared to other `mailService` calls.
+3. **Fix `GmailApiHelper.kt` (Primary Project Build Blocker):**
+    * **The Problem:** The `mapGmailMessageToMessage` and other methods inside `GmailApiHelper.kt`
+      are attempting to create instances of `net.melisma.core_data.model.Message` and
+      `net.melisma.core_data.model.Attachment` using outdated constructors.
+    * **What Needs to Be Done:** Update all `Message` and `Attachment` instantiation points in
+      `GmailApiHelper.kt` to provide the new required parameters (e.g., `accountId`, `folderId` for
+      `Message`; `messageId`, `accountId`, `downloadStatus` for `Attachment`). Values need to be
+      sourced from available data (e.g., `accountId` from method scope) or sensible defaults.
+
+### Path to Vision (Post-Build Fixes)
+
+1. **Verify Pagination:** Run the app and test `MessageRemoteMediator`.
+2. **Implement Sync Workers Logic:** Complete the actual synchronization logic within all the worker
+   classes.
+3. **Implement `SyncEngine` Orchestration:** Build out the `SyncEngine` to manage and trigger sync
+   tasks effectively.
+4. **Implement Offline Actions & Queuing:** Develop the system for storing and syncing user actions
+   performed offline.
+5. **Refine and Test:** Continuously test the offline experience, refine sync logic, and handle edge
+   cases and errors.
+6. **Address Delta Sync for Deletions.**

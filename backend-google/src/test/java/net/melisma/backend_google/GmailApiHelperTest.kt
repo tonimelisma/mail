@@ -27,7 +27,6 @@ import kotlinx.serialization.json.Json
 import net.melisma.backend_google.auth.GoogleAuthManager
 import net.melisma.backend_google.errors.GoogleErrorMapper
 import net.melisma.core_data.model.ErrorDetails
-import net.melisma.core_data.model.GenericAuthErrorType
 import org.junit.AfterClass
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -218,58 +217,15 @@ class GmailApiHelperTest {
         mockAuthManager = mockk<GoogleAuthManager>(relaxed = true)
 
         coEvery { mockErrorMapper.mapExceptionToErrorDetails(any()) } answers {
-            val exception = arg<Throwable?>(0)
-            val defaultMessage = "An unexpected error occurred with Google services."
-            GenericAuthErrorType.UNKNOWN_ERROR
-            val defaultCode = exception?.javaClass?.simpleName ?: "UnknownThrowable"
-
-            when (exception) {
-                is io.ktor.client.plugins.ClientRequestException -> {
-                    /* MappedErrorDetails(
-                        message = exception.message
-                            ?: "Ktor Client Request Failed (${exception.response.status.value})",
-                        type = GenericAuthErrorType.NETWORK_ERROR, // Or more specific based on status
-                        providerSpecificErrorCode = "Ktor-${exception.response.status.value}"
-                    ) */
-                    // Placeholder for updated error mapping if tests are uncommented
-                    ErrorDetails(
-                        message = exception.message
-                            ?: "Ktor Client Request Failed (${exception.response.status.value})",
-                        code = "Ktor-${exception.response.status.value}",
-                        cause = exception
-                    )
-                }
-
-                is IOException -> /* MappedErrorDetails(
-                    message = exception.message ?: "A network error occurred with Google services.",
-                    type = GenericAuthErrorType.NETWORK_ERROR,
-                    providerSpecificErrorCode = "IOException"
-                ) */
-                    ErrorDetails(
-                        message = exception.message
-                            ?: "A network error occurred with Google services.",
-                        code = "IOException",
-                        cause = exception
-                )
-
-                else -> /* MappedErrorDetails(
-                    message = exception?.message?.takeIf { it.isNotBlank() } ?: defaultMessage,
-                    type = defaultType,
-                    providerSpecificErrorCode = defaultCode
-                ) */
-                    ErrorDetails(
-                        message = exception?.message?.takeIf { it.isNotBlank() } ?: defaultMessage,
-                        code = defaultCode,
-                        cause = exception
-                )
-            }
+            val exception = arg<Exception>(0)
+            ErrorDetails(message = exception.message ?: "Mocked error")
         }
 
         mockEngine = MockEngine { request ->
-            this.requestHandler(request)
+            requestHandler(this, request)
         }
 
-        val httpClient = HttpClient(mockEngine) {
+        val mockHttpClient = HttpClient(mockEngine) {
             install(ContentNegotiation) {
                 json(this@GmailApiHelperTest.json)
             }
@@ -277,7 +233,7 @@ class GmailApiHelperTest {
 
         // Updated instantiation of GmailApiHelper
         gmailApiHelper = GmailApiHelper(
-            httpClient = httpClient,
+            httpClient = mockHttpClient,
             errorMapper = mockErrorMapper,
             ioDispatcher = mockIoDispatcher,
             authManager = mockAuthManager

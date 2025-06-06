@@ -18,6 +18,9 @@ interface AttachmentDao {
     suspend fun getAttachmentsForMessageSuspend(messageId: String): List<AttachmentEntity>
 
     @Query("SELECT * FROM attachments WHERE attachmentId = :attachmentId")
+    fun getAttachmentById(attachmentId: String): Flow<AttachmentEntity?>
+
+    @Query("SELECT * FROM attachments WHERE attachmentId = :attachmentId")
     suspend fun getAttachmentByIdSuspend(attachmentId: String): AttachmentEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
