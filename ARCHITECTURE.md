@@ -1,7 +1,7 @@
 # **Melisma Mail \- Architectural Design & Developer Guide**
 
 Version: 2.3 (Offline-First Enhancements)  
-Date: June 1, 2025
+Date: July 1, 2025
 
 ## **1\. Introduction & Project Vision**
 
@@ -23,14 +23,13 @@ a focus on modern Android development practices and a robust offline-first archi
 * **Modularity:** Maintain a well-defined, modular codebase for better maintainability, scalability,
   and testability.
 * **Data Transparency & Control:** Provide clear feedback on synchronization status, errors, and
-  offer users reasonable control over data caching and offline behavior.
+  offer users reasonable control over data caching (including configurable size limits and accurate accounting of message bodies and attachments) and offline behavior.
 
 ### **1.3. Key Technologies**
 
 * **UI:** Jetpack Compose
 * **Architecture:** Offline-First MVVM with a Domain Layer (Use Cases)
-* **Local Storage:** Room (with FTS for local search, and lastAccessedTimestamp for intelligent
-  caching)
+* **Local Storage:** Room (with FTS for local search, and `lastAccessedTimestamp`, `MessageBodyEntity.sizeInBytes`, `AttachmentEntity.size` for intelligent caching and accurate size tracking)
 * **Background Processing:** WorkManager
 * **Asynchronous Programming:** Kotlin Coroutines & Flow
 * **Dependency Injection:** Hilt
@@ -47,20 +46,20 @@ a focus on modern Android development practices and a robust offline-first archi
 
 Melisma Mail employs a layered architecture designed for an offline-first experience:
 
-* **UI Layer (:app module):** Responsible for presenting data to the user. Interacts exclusively
+* **UI Layer (:mail module, formerly :app):** Responsible for presenting data to the user. Interacts exclusively
   with the local database via ViewModels and Use Cases. Handles user interactions like
-  pull-to-refresh.
+  pull-to-refresh. Contains `SettingsScreen.kt` for user preferences including cache size.
 * **Domain Layer (:domain module):** Contains discrete business logic in the form of Use Cases.
-* **Data Layer (:data module):** Implements repository interfaces. Its primary role is to act as a *
-  *synchronizer** between network data sources (APIs) and the local database, managing data
+* **Data Layer (:data module):** Implements repository interfaces. Its primary role is to act as a
+  **synchronizer** between network data sources (APIs) and the local database, managing data
   fetching, caching (initial sync, delta sync), action queuing, and local search. Orchestrated by a
-  SyncEngine.
+  `SyncEngine`. Includes `UserPreferencesRepository` for managing user settings like cache limits, and workers like `MessageBodyDownloadWorker` (calculates body size) and `CacheCleanupWorker` (uses preferences and accurate sizing).
 * **Database Layer (:core-db module):** Defines the Room database schema, entities (with sync
-  metadata like SyncStatus, lastSuccessfulSyncTimestamp, lastAccessedTimestamp, and FTS
-  capabilities), and Data Access Objects (DAOs).
+  metadata like SyncStatus, lastSuccessfulSyncTimestamp, lastAccessedTimestamp, `MessageBodyEntity.sizeInBytes`, and FTS
+  capabilities), and Data Access Objects (DAOs). Current DB version is 15.
 * **Backend/Provider Layer (:backend-google, :backend-microsoft modules):** Handles all
   provider-specific API communication, including support for delta queries.
-* **Contracts Layer (:core-data module):** Defines interfaces and data models for the application.
+* **Contracts Layer (:core-data module):** Defines interfaces and data models for the application, including `CacheSizePreference` enum.
 
 ### **2.2. Offline-First and Single Source of Truth**
 
@@ -71,8 +70,8 @@ for synchronization with the server. The local database, defined in :core-db, is
 of truth** for the entire application state. Key entities like folders (`FolderEntity`) are
 identified internally by a consistent local UUID primary key, with functional types (e.g., Inbox,
 Drafts) managed by a dedicated `wellKnownType: WellKnownFolderType` enum, ensuring robust and
-provider-agnostic referencing. Data management policies (initial sync, cache size
-limits, eviction rules based on age and recent access) ensure a balance between offline availability
+provider-agnostic referencing. Data management policies (initial sync, user-configurable cache size
+limits based on `CacheSizePreference`, eviction rules based on age and recent access using `lastAccessedTimestamp` and accurate sizing from `MessageBodyEntity.sizeInBytes` and `AttachmentEntity.size`) ensure a balance between offline availability
 and device resource usage.
 
 ### **2.3. MVVM (Model-View-ViewModel)**
@@ -81,9 +80,9 @@ The UI layer utilizes the MVVM pattern.
 
 * **Views (Composables):** Observe state changes from ViewModels and render the UI. They delegate
   user actions to ViewModels and present sync status/error information.
-* **ViewModels:** Prepare and manage UI-related data (state) for the Views. They delegate all
-  business logic and data operations to Use Cases and manage UI feedback for sync operations.
-* **Models:** Represent the data structures (e.g., Account, Message, MailFolder).
+* **ViewModels (`MainViewModel`):** Prepare and manage UI-related data (state) for the Views, including `currentCacheSizePreference` and `availableCacheSizes`. They delegate all
+  business logic and data operations to Use Cases and manage UI feedback for sync operations, including updating cache preferences via `UserPreferencesRepository`.
+* **Models:** Represent the data structures (e.g., Account, Message, MailFolder, `UserPreferences`).
 
 ### **2.4. Domain Layer & Use Cases**
 
@@ -109,13 +108,11 @@ Hilt is used for managing dependencies throughout the application.
 ### **2.8. Asynchronous Operations & Sync Strategy**
 
 The application uses a multi-faceted strategy for data synchronization, managed primarily by a
-SyncEngine orchestrating WorkManager tasks.
+`SyncEngine` orchestrating WorkManager tasks, including periodic scheduling of `CacheCleanupWorker`.
 
 1. **Initial Account Sync:**
     * A one-time WorkManager job (InitialAccountSyncWorker) triggered on new account login.
-    * Downloads message headers, bodies, and attachments for the last 90 days (configurable), capped
-      at 0.5GB total. Individual attachments over 25MB are skipped for this bulk download (metadata
-      only).
+    * Downloads message headers, bodies (calculating `sizeInBytes`), and attachments (using `AttachmentEntity.size`) for a user-configurable duration (options: 30 Days, 90 Days (default), 6 Months, All Time, managed via `UserPreferencesRepository` and `SettingsScreen.kt`), capped at a user-defined overall cache limit (default 0.5GB, options: 0.5GB, 1GB, 2GB, 5GB via `CacheSizePreference`). `FolderContentSyncWorker` reads this preference and instructs the `GmailApiHelper` or `GraphApiHelper` to filter messages accordingly. Individual attachments over 25MB are skipped for this bulk download (metadata only).
 2. **Periodic Background Sync:**
     * A recurring PeriodicWorkRequest via WorkManager (e.g., FolderContentSyncWorker) to check for
       new mail and other updates at user-defined intervals (e.g., every 15 minutes), ensuring
@@ -146,16 +143,26 @@ SyncEngine orchestrating WorkManager tasks.
 
 ### **2.9. Data Caching and Eviction**
 
-* **Overall Cache Size Limit:** 0.5 GB default (configurable: 0.5GB, 1GB, 2GB, 5GB).
-* **Eviction Policy (CacheCleanupWorker):**
-    * **Exclusions:** Items pending sync actions; messages (bodies, attachments) accessed within the
-      last 90 days.
-    * **Priority:** If cache exceeds limit, evict to 80% of limit:
-        1. Data (attachments, then bodies, then headers) for messages older than 90 days, oldest
-           first.
-        2. If needed, data for messages within 90 days but not recently accessed, oldest/least
-           recently accessed first.
-* lastAccessedTimestamp field in MessageEntity tracks user interaction for eviction decisions.
+* **Overall Cache Size Limit:** User-configurable via `SettingsScreen.kt` and `UserPreferencesRepository`. Options: `CacheSizePreference.MB_500` (500MB, default), `CacheSizePreference.GB_1` (1GB), `CacheSizePreference.GB_2` (2GB), `CacheSizePreference.GB_5` (5GB).
+* **Accurate Size Tracking:** The system now accurately tracks the size of cached data:
+    * `AttachmentEntity.size` (Long): Stores the size of downloaded attachments, populated from API metadata or file system.
+    * `MessageBodyEntity.sizeInBytes` (Long): Stores the size of the downloaded message body content (UTF-8 bytes), calculated by `MessageBodyDownloadWorker`.
+* **Eviction Policy (`CacheCleanupWorker`):**
+    * **Trigger:** Runs periodically (scheduled by `SyncEngine`) and when the calculated total cache size (sum of `AttachmentEntity.size` for all downloaded attachments and `MessageBodyEntity.sizeInBytes` for all downloaded bodies) exceeds the user-configured limit.
+    * **Exclusions:**
+        *   Items with a `syncStatus` indicating a pending upload or download.
+        *   Messages associated with an active `PendingActionEntity` (status PENDING or RETRY).
+        *   Messages (including their bodies and attachments) whose `lastAccessedTimestamp` is within the last 90 days.
+    * **Priority:** If cache exceeds limit, evict to 80% of limit, applying the following tiered logic:
+        1.  **Tier 1 (Old Messages):** Target messages whose own `timestamp` (creation/reception date) is older than 90 days.
+            *   **Order:** Processed oldest message first (by `timestamp`), then by `lastAccessedTimestamp` (oldest access first).
+            *   **Eviction within message:** Attachments first, then message body, then message header (if attachments and body are gone).
+        2.  **Tier 2 (Recent but Unaccessed Messages):** If the target cache size is still not met, target messages whose own `timestamp` is *not* older than 90 days, but whose `lastAccessedTimestamp` is older than 90 days (or null, meaning never accessed).
+            *   **Order:** Processed by `lastAccessedTimestamp` (least recently accessed first), then by `timestamp` (oldest message first).
+            *   **Eviction within message:** Attachments first, then message body, then message header (if attachments and body are gone).
+    *   The `MessageDao.getCacheEvictionCandidates` query provides an initial list of candidates (not draft/outbox, appropriate `syncStatus`, and not accessed within the last 90 days). The `CacheCleanupWorker` then applies further filtering (e.g., for active `PendingActionEntity`s) and the tiered sorting and processing logic.
+* `lastAccessedTimestamp` field in `MessageEntity` tracks user interaction for eviction decisions.
+ `CacheCleanupWorker` uses `MessageBodyDao.getAllMessageBodies()` to fetch all body entities for size calculation and potential eviction.
 
 ### **2.10. Error Handling and UX**
 
@@ -173,33 +180,32 @@ SyncEngine orchestrating WorkManager tasks.
 
 ## **3\. Module Architecture Deep Dive**
 
-### **3.1. :app Module**
+### **3.1. :mail Module (formerly :app Module)**
 
 * **Purpose & Scope:** UI, navigation, user interaction handling, display of sync status.
-* **Key Components & Classes:** MainActivity.kt, ViewModels, UI Composables (including settings for
-  sync/cache).
+* **Key Components & Classes:** `MainActivity.kt`, `MainViewModel.kt`, UI Composables (including `SettingsScreen.kt` for
+  sync/cache preferences like `CacheSizePreference`).
 
 ### **3.2. :core-data Module**
 
 * **Purpose & Scope:** Defines contracts (interfaces) and core data models.
-* **Key Components & Classes:** Repository Interfaces, Domain Models, Service Interfaces, SyncStatus
+* **Key Components & Classes:** Repository Interfaces (`UserPreferencesRepository`), Domain Models (`UserPreferences`, `CacheSizePreference`), Service Interfaces, SyncStatus
   enum.
 
 ### **3.3. :data Module**
 
 * **Purpose & Scope:** Implements repository interfaces. Orchestrates data synchronization via
-  SyncEngine, WorkManager workers (InitialAccountSyncWorker, FolderContentSyncWorker,
-  ActionUploadWorker, CacheCleanupWorker, etc.), manages delta sync, local search queries.
-* **Key Components & Classes:** Default...Repository implementations, SyncEngine.kt.
+  `SyncEngine`, WorkManager workers (`InitialAccountSyncWorker`, `FolderContentSyncWorker`,
+  `ActionUploadWorker`, `CacheCleanupWorker`, `MessageBodyDownloadWorker`), manages delta sync, local search queries.
+* **Key Components & Classes:** `Default...Repository` implementations, `SyncEngine.kt`, `UserPreferencesRepository.kt`, `CacheCleanupWorker.kt`, `MessageBodyDownloadWorker.kt`.
 
 ### **3.4. :core-db Module**
 
-* **Purpose & Scope:** Defines Room database schema, entities (with syncStatus,
-  lastAccessedTimestamp, etc.), DAOs, FTS tables for messages.
-* **Key Components & Classes:** AppDatabase.kt, Entity classes (e.g., `FolderEntity` now uses a
+* **Purpose & Scope:** Defines Room database schema, entities (with `syncStatus`,
+  `lastAccessedTimestamp`, `MessageBodyEntity.sizeInBytes`, etc.), DAOs, FTS tables for messages. Database version is 15.
+* **Key Components & Classes:** `AppDatabase.kt`, Entity classes (e.g., `FolderEntity` now uses a
   local UUID `id` as its primary key and includes a `wellKnownType: WellKnownFolderType` enum to
-  identify its functional type, replacing the previous string-based `type` and mixed PK strategy),
-  DAO interfaces.
+  identify its functional type, replacing the previous string-based `type` and mixed PK strategy; `MessageBodyEntity` now includes `sizeInBytes`), DAO interfaces (`MessageBodyDao` includes `getAllMessageBodies()`).
 
 ### **3.5. :backend-microsoft Module**
 

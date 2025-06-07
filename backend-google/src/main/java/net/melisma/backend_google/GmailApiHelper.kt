@@ -1617,9 +1617,10 @@ class GmailApiHelper @Inject constructor(
         folderId: String,
         activity: android.app.Activity?,
         maxResults: Int?,
-        pageToken: String?
+        pageToken: String?,
+        earliestTimestampEpochMillis: Long? // New parameter
     ): Result<PagedMessagesResponse> = withContext(ioDispatcher) {
-        Timber.d("getMessagesForFolder: folderId='$folderId', maxResults=$maxResults, pageToken='$pageToken'")
+        Timber.d("getMessagesForFolder: folderId='$folderId', maxResults=$maxResults, pageToken='$pageToken', earliestTimestampEpochMillis=$earliestTimestampEpochMillis")
         try {
             val accountId = getCurrentAccountId()
             val actualMaxResults = maxResults ?: DEFAULT_MAX_RESULTS.toInt()
@@ -1630,6 +1631,13 @@ class GmailApiHelper @Inject constructor(
                 parameter("maxResults", actualMaxResults)
                 if (pageToken != null) {
                     parameter("pageToken", pageToken)
+                }
+                if (earliestTimestampEpochMillis != null && earliestTimestampEpochMillis > 0 && pageToken == null) { // Apply only on the first page request
+                    val timestampSeconds = earliestTimestampEpochMillis / 1000
+                    // Ensure 'q' parameter doesn't conflict with other potential uses if any in future.
+                    // Current use is solely for this date filter.
+                    parameter("q", "after:$timestampSeconds")
+                    Timber.d("Applying date filter to Gmail messages.list: q=after:$timestampSeconds")
                 }
             }
 
@@ -1759,9 +1767,13 @@ class GmailApiHelper @Inject constructor(
     override suspend fun syncMessagesForFolder(
         folderId: String,
         syncToken: String?, // This is the startHistoryId for delta, or null to get a fresh historyId for future deltas
-        maxResultsFromInterface: Int? // Hint, may be used for internal API call limits if applicable
+        maxResultsFromInterface: Int?, // Hint, may be used for internal API call limits if applicable
+        earliestTimestampEpochMillis: Long? // New parameter
     ): Result<DeltaSyncResult<Message>> = withContext(ioDispatcher) {
-        Timber.i("syncMessagesForFolder called for folderId: $folderId. SyncToken (startHistoryId): $syncToken")
+        Timber.i("syncMessagesForFolder called for folderId: $folderId. SyncToken (startHistoryId): $syncToken, earliestTimestamp: $earliestTimestampEpochMillis")
+        if (earliestTimestampEpochMillis != null) {
+            Timber.w("syncMessagesForFolder (Gmail): earliestTimestampEpochMillis ($earliestTimestampEpochMillis) is provided but currently unused by the history-based delta sync logic.")
+        }
         var localAccountIdForLogging: String? = null // For logging in catch blocks
         try {
             val accountId = getCurrentAccountId()

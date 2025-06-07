@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
@@ -22,13 +23,47 @@ enum class MailViewModePreference {
     THREADS, MESSAGES
 }
 
+enum class CacheSizePreference(val bytes: Long) {
+    MB_500(500L * 1024L * 1024L),
+    GB_1(1L * 1024L * 1024L * 1024L),
+    GB_2(2L * 1024L * 1024L * 1024L),
+    GB_5(5L * 1024L * 1024L * 1024L);
+
+    companion object {
+        fun fromBytes(bytes: Long): CacheSizePreference {
+            return entries.find { it.bytes == bytes } ?: MB_500 // Default to 500MB
+        }
+    }
+}
+
+enum class InitialSyncDurationPreference(val durationInDays: Long, val displayName: String) {
+    DAYS_30(30L, "30 Days"),
+    DAYS_90(90L, "90 Days"), // Default
+    MONTHS_6(180L, "6 Months"),
+    ALL_TIME(Long.MAX_VALUE, "All Time"); // Represents indefinite history
+
+    companion object {
+        fun fromDays(days: Long): InitialSyncDurationPreference {
+            // For ALL_TIME, Long.MAX_VALUE might be stored.
+            // Find exact match, or default if no match (e.g., if stored value is legacy/corrupt)
+            return entries.find { it.durationInDays == days } ?: DAYS_90
+        }
+
+        fun defaultPreference(): InitialSyncDurationPreference = DAYS_90
+    }
+}
+
 data class UserPreferences(
-    val mailViewMode: MailViewModePreference
+    val mailViewMode: MailViewModePreference,
+    val cacheSizeLimitBytes: Long,
+    val initialSyncDurationDays: Long
 )
 
 interface UserPreferencesRepository {
     val userPreferencesFlow: Flow<UserPreferences>
     suspend fun updateMailViewMode(mailViewMode: MailViewModePreference)
+    suspend fun updateCacheSizeLimit(cacheSizePreference: CacheSizePreference)
+    suspend fun updateInitialSyncDuration(durationPreference: InitialSyncDurationPreference)
 }
 
 @Singleton
@@ -39,6 +74,8 @@ class DefaultUserPreferencesRepository @Inject constructor(
     private object PreferencesKeys {
         // Store as boolean: true for THREADS, false for MESSAGES (or use string if more modes anticipated)
         val IS_THREAD_VIEW_MODE = booleanPreferencesKey("is_thread_view_mode")
+        val CACHE_SIZE_LIMIT_BYTES = longPreferencesKey("cache_size_limit_bytes")
+        val INITIAL_SYNC_DURATION_DAYS = longPreferencesKey("initial_sync_duration_days")
     }
 
     override val userPreferencesFlow: Flow<UserPreferences> = context.dataStore.data
@@ -55,13 +92,32 @@ class DefaultUserPreferencesRepository @Inject constructor(
                 ?: true // Default to true (Threads)
             val mailViewMode =
                 if (isThreadMode) MailViewModePreference.THREADS else MailViewModePreference.MESSAGES
-            UserPreferences(mailViewMode)
+
+            val cacheLimit = preferences[PreferencesKeys.CACHE_SIZE_LIMIT_BYTES]
+                ?: CacheSizePreference.MB_500.bytes // Default to 500MB
+
+            val initialSyncDays = preferences[PreferencesKeys.INITIAL_SYNC_DURATION_DAYS]
+                ?: InitialSyncDurationPreference.defaultPreference().durationInDays
+
+            UserPreferences(mailViewMode, cacheLimit, initialSyncDays)
         }
 
     override suspend fun updateMailViewMode(mailViewMode: MailViewModePreference) {
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.IS_THREAD_VIEW_MODE] =
                 (mailViewMode == MailViewModePreference.THREADS)
+        }
+    }
+
+    override suspend fun updateCacheSizeLimit(cacheSizePreference: CacheSizePreference) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.CACHE_SIZE_LIMIT_BYTES] = cacheSizePreference.bytes
+        }
+    }
+
+    override suspend fun updateInitialSyncDuration(durationPreference: InitialSyncDurationPreference) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.INITIAL_SYNC_DURATION_DAYS] = durationPreference.durationInDays
         }
     }
 } 

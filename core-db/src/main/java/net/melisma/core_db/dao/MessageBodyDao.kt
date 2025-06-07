@@ -23,7 +23,10 @@ interface MessageBodyDao {
     suspend fun getMessageBodyByIdSuspend(messageId: String): MessageBodyEntity?
 
     @Query("DELETE FROM message_bodies WHERE message_id = :messageId")
-    suspend fun deleteMessageBody(messageId: String)
+    suspend fun deleteMessageBody(messageId: String): Int
+
+    @Query("SELECT * FROM message_bodies")
+    suspend fun getAllMessageBodies(): List<MessageBodyEntity>
 
     // You might add queries to get bodies that haven't been fetched recently, etc.
     // For now, basic CRUD operations.

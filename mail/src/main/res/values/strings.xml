@@ -128,4 +128,24 @@
     <string name="action_load_full_message">Load full message</string>
     <string name="error_loading_message_body">Error loading message body: %1$s</string>
 
+    <!-- Cache Settings -->
+    <string name="settings_cache_preferences_header">Cache Settings</string>
+    <string name="settings_cache_size_title">Storage Cache Size</string>
+    <string name="settings_cache_size_dialog_title">Select Cache Size</string>
+    <string name="cache_size_gb">%1$d GB</string>
+    <string name="cache_size_mb">%1$d MB</string>
+    <string name="cache_size_bytes">%1$d Bytes</string>
+
+    <string name="settings_cache_size_limit_dialog_title">Set Cache Size Limit</string>
+    <string name="settings_cache_size_limit_dialog_desc">Select the maximum local storage for email bodies and attachments. Older items may be removed if this limit is exceeded.</string>
+    <string name="settings_cache_size_current_label">Current limit: %s</string>
+
+    <!-- New Strings for Initial Sync Duration -->
+    <string name="settings_initial_sync_duration_title">Initial Email Sync</string>
+    <string name="settings_initial_sync_duration_dialog_title">Set Initial Sync Duration</string>
+    <string name="settings_initial_sync_duration_dialog_desc">Select how far back to sync emails when adding a new account. Choosing \"All Time\" may take longer and use more data initially.</string>
+    <string name="settings_about_header">About</string>
+
+    <string name="search_hint">Search mail</string>
+
 </resources>

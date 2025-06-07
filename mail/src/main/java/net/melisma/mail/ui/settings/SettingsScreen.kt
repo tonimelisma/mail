@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -47,12 +48,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
 import net.melisma.core_data.model.Account
+import net.melisma.core_data.preferences.CacheSizePreference
 import net.melisma.core_data.preferences.MailViewModePreference
+import net.melisma.core_data.preferences.InitialSyncDurationPreference
 import net.melisma.mail.MainViewModel
+import net.melisma.mail.MainScreenState
 import net.melisma.mail.R
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -68,6 +73,8 @@ fun SettingsScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     // State for the confirmation dialog, holding the generic Account to remove
     var showRemoveDialog by remember { mutableStateOf<Account?>(null) }
+    var showCacheSizeDialog by remember { mutableStateOf(false) } // New state for cache size dialog
+    var showInitialSyncDurationDialog by remember { mutableStateOf(false) } // New state
 
     // Observe toast message changes (remains the same)
     LaunchedEffect(state.toastMessage) {
@@ -251,9 +258,51 @@ fun SettingsScreen(
             }
             // END NEW VIEW PREFERENCES SECTION
 
-            item { Spacer(modifier = Modifier.height(120.dp)) } // For padding at the bottom
+            // NEW CACHE SETTINGS SECTION
+            item {
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                Text(
+                    text = stringResource(R.string.settings_cache_preferences_header), // Placeholder: "Cache Settings"
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+            }
 
-        } // End LazyColumn
+            item {
+                val currentCacheSizePref = state.currentCacheSizePreference
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.settings_cache_size_title)) }, // Placeholder: "Storage Cache Size"
+                    supportingContent = {
+                        Text(
+                            // Format the byte value into a readable string (e.g., "500 MB", "1 GB")
+                            text = formatCacheSize(currentCacheSizePref.bytes) // Placeholder: will create formatCacheSize helper
+                        )
+                    },
+                    modifier = Modifier.clickable { showCacheSizeDialog = true }
+                )
+                HorizontalDivider(modifier = Modifier.padding(start = 16.dp))
+            }
+
+            // Initial Sync Duration Preference Item
+            item {
+                InitialSyncDurationPreferenceItem(state = state, onClick = { showInitialSyncDurationDialog = true })
+            }
+
+            // ABOUT SECTION (Example - could be more elaborate)
+            item {
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                Text(
+                    text = stringResource(R.string.settings_about_header), // New String Resource
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+            }
+
+            // Spacer for FAB
+            item {
+                Spacer(modifier = Modifier.height(80.dp))
+            }
+        }
 
         // Confirmation Dialog uses the generic Account stored in showRemoveDialog state
         if (showRemoveDialog != null) {
@@ -284,5 +333,135 @@ fun SettingsScreen(
                 }
             )
         }
-    } // End Scaffold
+    }
+
+    if (showCacheSizeDialog) {
+        CacheSizeSelectionDialog(
+            availableSizes = state.availableCacheSizes,
+            currentSize = state.currentCacheSizePreference,
+            onDismiss = { showCacheSizeDialog = false },
+            onSizeSelected = {
+                viewModel.setCacheSizePreference(it)
+                showCacheSizeDialog = false
+            }
+        )
+    }
+
+    if (showInitialSyncDurationDialog) { // New Dialog instance
+        InitialSyncDurationSelectionDialog(
+            currentPreference = state.currentInitialSyncDurationPreference,
+            availableDurations = state.availableInitialSyncDurations,
+            onDismiss = { showInitialSyncDurationDialog = false },
+            onSelected = {
+                viewModel.setInitialSyncDurationPreference(it)
+                showInitialSyncDurationDialog = false
+            }
+        )
+    }
+}
+
+@Composable
+fun CacheSizeSelectionDialog(
+    availableSizes: List<CacheSizePreference>,
+    currentSize: CacheSizePreference,
+    onDismiss: () -> Unit,
+    onSizeSelected: (CacheSizePreference) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.settings_cache_size_dialog_title)) }, // Placeholder: "Select Cache Size"
+        text = {
+            Column {
+                availableSizes.forEach { sizeOption ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .clickable { onSizeSelected(sizeOption) }
+                            .padding(vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = formatCacheSize(sizeOption.bytes),
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = if (sizeOption == currentSize) FontWeight.Bold else FontWeight.Normal
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(android.R.string.cancel))
+            }
+        }
+    )
+}
+
+// Helper function to format cache size in bytes to a readable string
+@Composable
+fun formatCacheSize(bytes: Long): String {
+    return when {
+        bytes >= 1024 * 1024 * 1024 -> {
+            val gb = bytes / (1024 * 1024 * 1024)
+            stringResource(R.string.cache_size_gb, gb) // Placeholder: "%1$d GB"
+        }
+        bytes >= 1024 * 1024 -> {
+            val mb = bytes / (1024 * 1024)
+            stringResource(R.string.cache_size_mb, mb) // Placeholder: "%1$d MB"
+        }
+        else -> {
+            stringResource(R.string.cache_size_bytes, bytes) // Placeholder: "%1$d Bytes"
+        }
+    }
+}
+
+@Composable
+fun InitialSyncDurationPreferenceItem(state: MainScreenState, onClick: () -> Unit) {
+    ListItem(
+        headlineContent = { Text(stringResource(R.string.settings_initial_sync_duration_title)) },
+        supportingContent = { Text(state.currentInitialSyncDurationPreference.displayName) },
+        modifier = Modifier
+            .clickable(onClick = onClick)
+            .fillMaxWidth(),
+        colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface)
+    )
+}
+
+@Composable
+fun InitialSyncDurationSelectionDialog(
+    currentPreference: InitialSyncDurationPreference,
+    availableDurations: List<InitialSyncDurationPreference>,
+    onDismiss: () -> Unit,
+    onSelected: (InitialSyncDurationPreference) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.settings_initial_sync_duration_dialog_title)) }, // Needs new string
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(android.R.string.cancel))
+            }
+        },
+        dismissButton = null, // Options are presented in the item list
+        text = { // Moved LazyColumn to the text parameter
+            LazyColumn(modifier = Modifier.padding(top = 8.dp)) {
+                items(availableDurations) { duration ->
+                    TextButton(
+                        onClick = { onSelected(duration) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                duration.displayName,
+                                style = if (duration == currentPreference) MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold) else MaterialTheme.typography.bodyLarge
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    )
 }

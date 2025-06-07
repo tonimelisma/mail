@@ -33,6 +33,9 @@ data class MessageBodyEntity(
     @ColumnInfo(name = "content", typeAffinity = ColumnInfo.TEXT)
     val content: String?, // Full message body content
 
+    @ColumnInfo(name = "size_in_bytes", defaultValue = "0")
+    val sizeInBytes: Long = 0L, // Size of the content string in bytes
+
     @ColumnInfo(name = "last_fetched_ts", defaultValue = "0")
     val lastFetchedTimestamp: Long = 0L, // When was this body last fetched/updated
 

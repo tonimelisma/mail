@@ -34,6 +34,10 @@ import net.melisma.core_data.model.fromApi
 import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
+import java.util.TimeZone
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 
 @Serializable
@@ -294,9 +298,10 @@ class GraphApiHelper @Inject constructor(
         folderId: String,
         activity: android.app.Activity?,
         maxResults: Int?,
-        pageToken: String?
+        pageToken: String?,
+        earliestTimestampEpochMillis: Long?
     ): Result<PagedMessagesResponse> = withContext(ioDispatcher) {
-        Timber.d("getMessagesForFolder Ktor: folderId='$folderId', pageToken='$pageToken'")
+        Timber.d("getMessagesForFolder Ktor: folderId='$folderId', pageToken='$pageToken', earliestTimestamp='$earliestTimestampEpochMillis'")
         try {
             val activeAccountId = credentialStore.getActiveAccountId()
             if (activeAccountId == null) {
@@ -320,6 +325,14 @@ class GraphApiHelper @Inject constructor(
                     url {
                         parameters.append("\$top", actualMaxResults.toString())
                         parameters.append("\$select", MESSAGE_DEFAULT_SELECT_FIELDS)
+                        if (earliestTimestampEpochMillis != null && earliestTimestampEpochMillis > 0) {
+                            // Format epoch millis to ISO 8601 UTC string (e.g., "2023-10-27T10:00:00Z")
+                            val isoFormatter = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
+                            isoFormatter.timeZone = TimeZone.getTimeZone("UTC")
+                            val isoDateString = isoFormatter.format(Date(earliestTimestampEpochMillis))
+                            parameters.append("\$filter", "receivedDateTime ge $isoDateString")
+                            Timber.d("Applying date filter to Graph messages: \$filter=receivedDateTime ge $isoDateString")
+                        }
                     }
                 }
                 accept(ContentType.Application.Json)
@@ -540,9 +553,13 @@ class GraphApiHelper @Inject constructor(
     override suspend fun syncMessagesForFolder(
         folderId: String,
         syncToken: String?,
-        maxResultsFromInterface: Int?
+        maxResultsFromInterface: Int?,
+        earliestTimestampEpochMillis: Long?
     ): Result<DeltaSyncResult<Message>> = withContext(ioDispatcher) {
-        Timber.i("syncMessagesForFolder (Graph) called for folderId: $folderId. SyncToken (deltaLink): $syncToken")
+        Timber.i("syncMessagesForFolder (Graph) called for folderId: $folderId. SyncToken (deltaLink): $syncToken, earliestTimestamp: $earliestTimestampEpochMillis")
+        if (earliestTimestampEpochMillis != null) {
+            Timber.w("syncMessagesForFolder (Graph): earliestTimestampEpochMillis ($earliestTimestampEpochMillis) is provided but currently unused by the deltaLink-based sync logic.")
+        }
         try {
             val accountId = credentialStore.getActiveAccountId() ?: throw ApiServiceException(
                 errorMapper.mapExceptionToErrorDetails(IllegalStateException("No active Microsoft account found for syncMessagesForFolder"))

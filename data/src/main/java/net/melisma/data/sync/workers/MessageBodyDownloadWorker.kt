@@ -103,6 +103,8 @@ class MessageBodyDownloadWorker @AssistedInject constructor(
                 val contentType = messageWithBody.bodyContentType // Access bodyContentType property
                 Timber.d("Fetched body for message $messageId. ContentType: $contentType")
 
+                val bodySizeInBytes = bodyContent?.toByteArray(Charsets.UTF_8)?.size?.toLong() ?: 0L
+
                 // Create a new entity or update existing one with fetched content
                 var successEntity = messageBodyDao.getMessageBodyByIdSuspend(messageId)
                 if (successEntity == null) {
@@ -110,6 +112,7 @@ class MessageBodyDownloadWorker @AssistedInject constructor(
                         messageId = messageId,
                         content = bodyContent,
                         contentType = contentType ?: "TEXT",
+                        sizeInBytes = bodySizeInBytes,
                         lastFetchedTimestamp = System.currentTimeMillis(),
                         syncStatus = SyncStatus.SYNCED,
                         lastSuccessfulSyncTimestamp = System.currentTimeMillis(),
@@ -120,6 +123,7 @@ class MessageBodyDownloadWorker @AssistedInject constructor(
                     successEntity = successEntity.copy(
                         content = bodyContent,
                         contentType = contentType ?: "TEXT",
+                        sizeInBytes = bodySizeInBytes,
                         lastFetchedTimestamp = System.currentTimeMillis(),
                         syncStatus = SyncStatus.SYNCED,
                         lastSuccessfulSyncTimestamp = System.currentTimeMillis(),
@@ -139,6 +143,7 @@ class MessageBodyDownloadWorker @AssistedInject constructor(
                     failureEntity = MessageBodyEntity(
                         messageId = messageId,
                         content = null,
+                        sizeInBytes = 0L,
                         syncStatus = SyncStatus.ERROR,
                         lastSyncError = errorMessage,
                         lastSyncAttemptTimestamp = System.currentTimeMillis()
@@ -146,6 +151,7 @@ class MessageBodyDownloadWorker @AssistedInject constructor(
                 } else {
                     failureEntity = failureEntity.copy(
                         content = null,
+                        sizeInBytes = if (failureEntity.content == null) 0L else failureEntity.sizeInBytes,
                         syncStatus = SyncStatus.ERROR,
                         lastSyncError = errorMessage,
                         lastSyncAttemptTimestamp = System.currentTimeMillis()
@@ -174,6 +180,7 @@ class MessageBodyDownloadWorker @AssistedInject constructor(
                 generalErrorEntity = MessageBodyEntity(
                     messageId = messageId,
                     content = null,
+                    sizeInBytes = 0L,
                     syncStatus = SyncStatus.ERROR,
                     lastSyncError = e.message ?: "Unknown error in worker",
                     lastSyncAttemptTimestamp = System.currentTimeMillis()
@@ -181,6 +188,7 @@ class MessageBodyDownloadWorker @AssistedInject constructor(
             } else {
                 generalErrorEntity = generalErrorEntity.copy(
                     content = null,
+                    sizeInBytes = if (generalErrorEntity.content == null) 0L else generalErrorEntity.sizeInBytes,
                     syncStatus = SyncStatus.ERROR,
                     lastSyncError = e.message ?: "Unknown error in worker",
                     lastSyncAttemptTimestamp = System.currentTimeMillis()

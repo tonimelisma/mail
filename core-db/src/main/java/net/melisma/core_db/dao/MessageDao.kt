@@ -101,7 +101,7 @@ interface MessageDao {
     )
 
     @Query("DELETE FROM messages WHERE messageId = :messageId")
-    suspend fun deleteMessageById(messageId: String)
+    suspend fun deleteMessageById(messageId: String): Int
 
     @Query("DELETE FROM messages WHERE messageId = :messageId")
     suspend fun deletePermanentlyById(messageId: String)
@@ -231,4 +231,17 @@ interface MessageDao {
 
     @Query("UPDATE messages SET lastAccessedTimestamp = :timestamp WHERE id = :messageDboId")
     suspend fun updateLastAccessedTimestamp(messageDboId: String, timestamp: Long)
+
+    @Query("""
+        SELECT * FROM messages
+        WHERE (lastAccessedTimestamp IS NULL OR lastAccessedTimestamp < :maxLastAccessedTimestampMillis)
+        AND syncStatus NOT IN (:excludedSyncStates)
+        AND isDraft = 0 
+        AND isOutbox = 0
+        ORDER BY lastAccessedTimestamp ASC, timestamp ASC
+    """)
+    suspend fun getCacheEvictionCandidates(
+        maxLastAccessedTimestampMillis: Long,
+        excludedSyncStates: List<String>
+    ): List<MessageEntity>
 }

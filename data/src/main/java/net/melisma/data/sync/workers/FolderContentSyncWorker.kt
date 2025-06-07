@@ -16,6 +16,11 @@ import net.melisma.core_db.dao.RemoteKeyDao
 import net.melisma.core_db.entity.RemoteKeyEntity
 import net.melisma.data.mapper.toEntity
 import timber.log.Timber
+import net.melisma.core_data.preferences.UserPreferencesRepository
+import net.melisma.core_data.preferences.InitialSyncDurationPreference
+import kotlinx.coroutines.flow.first
+import java.util.Calendar
+import java.util.Date
 
 @HiltWorker
 class FolderContentSyncWorker @AssistedInject constructor(
@@ -25,7 +30,8 @@ class FolderContentSyncWorker @AssistedInject constructor(
     private val folderDao: FolderDao,
     private val mailApiServiceSelector: MailApiServiceSelector,
     private val accountDao: AccountDao,
-    private val remoteKeyDao: RemoteKeyDao
+    private val remoteKeyDao: RemoteKeyDao,
+    private val userPreferencesRepository: UserPreferencesRepository
 ) : CoroutineWorker(appContext, workerParams) {
 
     private val TAG = "FolderContentSyncWorker"
@@ -78,7 +84,7 @@ class FolderContentSyncWorker @AssistedInject constructor(
                 val messagesDeltaResult = mailService.syncMessagesForFolder(
                     folderId = apiFolderIdToFetch,
                     syncToken = currentMessageListSyncToken,
-                    maxResults = 25 // Max results for delta might be handled differently by API
+                    maxResultsFromInterface = 25 // Changed parameter name to maxResultsFromInterface
                 )
 
                 if (messagesDeltaResult.isSuccess) {
@@ -152,10 +158,26 @@ class FolderContentSyncWorker @AssistedInject constructor(
                 // --- FULL/PAGED SYNC PATH (Initial sync or if no delta token) ---
                 Timber.tag(TAG)
                     .d("Attempting FULL/PAGED sync for folder $apiFolderIdToFetch. Page token from FolderEntity: ${localFolder.nextPageToken}")
+
+                // Fetch user preference for initial sync duration
+                val userPrefs = userPreferencesRepository.userPreferencesFlow.first()
+                val initialSyncDays = userPrefs.initialSyncDurationDays
+                var earliestTimestampForFilter: Long? = null
+
+                if (initialSyncDays != InitialSyncDurationPreference.ALL_TIME.durationInDays) {
+                    val calendar = Calendar.getInstance()
+                    calendar.add(Calendar.DAY_OF_YEAR, -initialSyncDays.toInt())
+                    earliestTimestampForFilter = calendar.timeInMillis
+                    Timber.tag(TAG).d("Initial sync duration set to $initialSyncDays days. Fetching messages after: ${Date(earliestTimestampForFilter)}")
+                } else {
+                    Timber.tag(TAG).d("Initial sync duration set to ALL TIME. No date filter will be applied.")
+                }
+
                 val messagesResult = mailService.getMessagesForFolder(
                     folderId = apiFolderIdToFetch,
                     maxResults = 25,
-                    pageToken = localFolder.nextPageToken // Use folder's current page token for initial/paged sync
+                    pageToken = localFolder.nextPageToken, // Use folder's current page token for initial/paged sync
+                    earliestTimestampEpochMillis = earliestTimestampForFilter // Pass the calculated timestamp
                 )
 
                 if (messagesResult.isSuccess) {

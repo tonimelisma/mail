@@ -27,13 +27,6 @@ fun IAccount.toDomainAccount(): Account {
     // IAccount.username is often the UserPrincipalName (UPN), which is typically an email.
     // preferredUsername claim is also a good candidate for email.
     val email = preferredUsername ?: this.username
-    if (email == null) {
-        // This case should be rare with MSAL accounts but needs handling if possible.
-        // Throwing an error or using a placeholder might be options.
-        // For now, let's assume 'this.username' (UPN) is reliably present if 'preferredUsername' is not.
-        // If 'this.username' can also be null, this mapping is problematic for non-nullable emailAddress.
-        throw IllegalStateException("Could not determine a valid email address for the Microsoft account: ${this.id}")
-    }
 
     return Account(
         id = accountId,

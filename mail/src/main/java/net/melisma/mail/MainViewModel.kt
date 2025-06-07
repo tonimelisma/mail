@@ -34,8 +34,10 @@ import net.melisma.core_data.model.Message
 import net.melisma.core_data.model.MessageSyncState
 import net.melisma.core_data.model.ThreadDataState
 import net.melisma.core_data.model.WellKnownFolderType
+import net.melisma.core_data.preferences.CacheSizePreference
 import net.melisma.core_data.preferences.MailViewModePreference
 import net.melisma.core_data.preferences.UserPreferencesRepository
+import net.melisma.core_data.preferences.InitialSyncDurationPreference
 import net.melisma.core_data.repository.FolderRepository
 import net.melisma.core_data.repository.MessageRepository
 import net.melisma.core_data.repository.OverallApplicationAuthState
@@ -59,6 +61,10 @@ data class MainScreenState(
     val messageSyncState: MessageSyncState = MessageSyncState.Idle,
     val threadDataState: ThreadDataState = ThreadDataState.Initial,
     val currentViewMode: ViewMode = MailViewModePreference.THREADS,
+    val currentCacheSizePreference: CacheSizePreference = CacheSizePreference.MB_500,
+    val availableCacheSizes: List<CacheSizePreference> = CacheSizePreference.entries.toList(),
+    val currentInitialSyncDurationPreference: InitialSyncDurationPreference = InitialSyncDurationPreference.defaultPreference(),
+    val availableInitialSyncDurations: List<InitialSyncDurationPreference> = InitialSyncDurationPreference.entries.toList(),
     val toastMessage: String? = null
 ) {
     val isAnyFolderLoading: Boolean
@@ -317,24 +323,16 @@ class MainViewModel @Inject constructor(
     }
 
     private fun observeUserPreferences() {
-        viewModelScope.launch {
-            userPreferencesRepository.userPreferencesFlow.collect { preferences ->
-                Timber.d("User preference for ViewMode loaded: ${preferences.mailViewMode}")
-                val currentUiStateViewMode = _uiState.value.currentViewMode
-                if (currentUiStateViewMode != preferences.mailViewMode) {
-                    _uiState.update { it.copy(currentViewMode = preferences.mailViewMode) }
-                    _uiState.value.selectedFolder?.let { folder ->
-                        _uiState.value.accounts.find { it.id == _uiState.value.selectedFolderAccountId }
-                            ?.let { account ->
-                                Timber.d(
-                                    "Preference changed, re-selecting folder ${folder.displayName} for new view mode ${preferences.mailViewMode}"
-                                )
-                                selectFolder(folder, account)
-                            }
-                    }
+        userPreferencesRepository.userPreferencesFlow
+            .onEach { preferences ->
+                _uiState.update {
+                    it.copy(
+                        currentViewMode = preferences.mailViewMode,
+                        currentCacheSizePreference = CacheSizePreference.fromBytes(preferences.cacheSizeLimitBytes),
+                        currentInitialSyncDurationPreference = InitialSyncDurationPreference.fromDays(preferences.initialSyncDurationDays)
+                    )
                 }
-            }
-        }
+            }.launchIn(viewModelScope)
     }
 
     fun signIn(activity: Activity, providerType: String, loginHint: String? = null) {
@@ -629,30 +627,21 @@ class MainViewModel @Inject constructor(
                 capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
     }
 
-    fun setViewModePreference(newMode: ViewMode) {
-        Timber.i("setViewModePreference called with new mode: $newMode")
-        if (_uiState.value.currentViewMode == newMode) {
-            Timber.d("setViewModePreference: View mode is already $newMode. No change.")
-            return
-        }
-
+    fun setViewModePreference(viewMode: MailViewModePreference) {
         viewModelScope.launch {
-            userPreferencesRepository.updateMailViewMode(newMode)
-            _uiState.update { currentState ->
-                currentState.copy(
-                    currentViewMode = newMode,
-                    messageSyncState = if (newMode == ViewMode.THREADS && currentState.messageSyncState !is MessageSyncState.Idle) {
-                        MessageSyncState.Idle
-                    } else {
-                        currentState.messageSyncState
-                    },
-                    threadDataState = if (newMode == ViewMode.MESSAGES && currentState.threadDataState !is ThreadDataState.Initial) {
-                        ThreadDataState.Initial
-                    } else {
-                        currentState.threadDataState
-                    }
-                )
-            }
+            userPreferencesRepository.updateMailViewMode(viewMode)
+        }
+    }
+
+    fun setCacheSizePreference(preference: CacheSizePreference) {
+        viewModelScope.launch {
+            userPreferencesRepository.updateCacheSizeLimit(preference)
+        }
+    }
+
+    fun setInitialSyncDurationPreference(preference: InitialSyncDurationPreference) {
+        viewModelScope.launch {
+            userPreferencesRepository.updateInitialSyncDuration(preference)
         }
     }
 

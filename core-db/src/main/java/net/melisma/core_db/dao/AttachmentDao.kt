@@ -58,4 +58,13 @@ interface AttachmentDao {
 
     @Query("SELECT COUNT(*) FROM attachments WHERE messageId = :messageId")
     suspend fun getAttachmentCountForMessage(messageId: String): Int
+
+    @Query("SELECT * FROM attachments WHERE isDownloaded = 1 AND localFilePath IS NOT NULL")
+    suspend fun getAllDownloadedAttachments(): List<AttachmentEntity>
+
+    @Query("SELECT * FROM attachments WHERE messageId = :messageId AND isDownloaded = 1 AND localFilePath IS NOT NULL")
+    suspend fun getDownloadedAttachmentsForMessage(messageId: String): List<AttachmentEntity>
+
+    @Query("UPDATE attachments SET isDownloaded = 0, localFilePath = NULL, downloadTimestamp = NULL, syncStatus = :newSyncStatus, lastSyncError = NULL WHERE attachmentId = :attachmentId")
+    suspend fun resetDownloadStatus(attachmentId: String, newSyncStatus: String)
 }

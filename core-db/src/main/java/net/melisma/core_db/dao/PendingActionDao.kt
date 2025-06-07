@@ -36,4 +36,6 @@ interface PendingActionDao {
     @Query("SELECT * FROM pending_actions WHERE accountId = :accountId AND entityId = :entityId AND actionType = :actionType AND (status = :pendingStatus OR status = :retryStatus) ORDER BY createdAt DESC")
     suspend fun findSimilarPendingAction(accountId: String, entityId: String, actionType: String, pendingStatus: PendingActionStatus = PendingActionStatus.PENDING, retryStatus: PendingActionStatus = PendingActionStatus.RETRY): PendingActionEntity?
 
+    @Query("SELECT DISTINCT entityId FROM pending_actions WHERE status IN (:statuses)")
+    suspend fun getActiveActionEntityIds(statuses: List<PendingActionStatus>): List<String>
 } 

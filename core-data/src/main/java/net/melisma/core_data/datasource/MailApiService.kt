@@ -37,13 +37,15 @@ interface MailApiService {
      * @param activity The optional Activity context, which might be needed for auth flows by some providers.
      * @param maxResults Maximum number of messages to return (pagination limit)
      * @param pageToken Token for next page
+     * @param earliestTimestampEpochMillis Optional earliest timestamp for initial sync duration
      * @return Result containing the list of messages or an error
      */
     suspend fun getMessagesForFolder(
         folderId: String,
         activity: android.app.Activity? = null,
         maxResults: Int? = null,
-        pageToken: String? = null
+        pageToken: String? = null,
+        earliestTimestampEpochMillis: Long? = null
     ): Result<PagedMessagesResponse>
 
     /**
@@ -242,12 +244,14 @@ interface MailApiService {
      * @param folderId The remote ID of the folder to sync messages for.
      * @param syncToken The token from the previous sync operation. Null for an initial full sync.
      * @param maxResults Optional maximum number of messages to return per page during the sync.
+     * @param earliestTimestampEpochMillis Optional earliest timestamp for initial sync duration
      * @return Result containing a DeltaSyncResult with new/updated messages, deleted message IDs, and the next sync token.
      */
     suspend fun syncMessagesForFolder(
         folderId: String,
         syncToken: String?,
-        maxResults: Int? = null
+        maxResultsFromInterface: Int? = null,
+        earliestTimestampEpochMillis: Long? = null
     ): Result<DeltaSyncResult<Message>>
 
     // Future methods to consider:

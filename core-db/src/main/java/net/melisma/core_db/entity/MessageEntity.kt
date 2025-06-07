@@ -65,5 +65,6 @@ data class MessageEntity(
     val lastSuccessfulSyncTimestamp: Long? = null,
     // lastSyncError is already present above
     val isLocalOnly: Boolean = false,
-    val needsFullSync: Boolean = false
+    val needsFullSync: Boolean = false,
+    val lastAccessedTimestamp: Long? = null // Added for cache eviction policy
 ) 

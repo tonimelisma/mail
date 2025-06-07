@@ -27,9 +27,9 @@ local data to provide a rich offline experience while respecting device storage 
 7. **Scalable & Maintainability:** The new architecture should be easier to maintain and extend with
    new features.
 8. **Intelligent Data Management:** Implement clear policies for initial data synchronization, cache
-   eviction, and attachment handling to balance offline availability with resource constraints.
+   eviction, and attachment handling to balance offline availability with resource constraints. This includes user-configurable cache size limits and accurate accounting of stored data (message bodies, attachments).
 
-## **2\. Current State, Technical Debt & Key Assumptions (Updated by AI Assistant - June 2025)**
+## **2\. Current State, Technical Debt & Key Assumptions (Updated by AI Assistant - July 2025)**
 
 **Current Implemented State (Summary):**
 
@@ -68,8 +68,8 @@ local data to provide a rich offline experience while respecting device storage 
       in favor of the more robust token-based delta approach.
 
 * **Phase 1.C (On-Demand and Action-Based Workers): COMPLETED.**
-    * `MessageBodyDownloadWorker.kt` was finalized and now checks if content is already synced
-      before downloading.
+    * `MessageBodyDownloadWorker.kt` was finalized, now checks if content is already synced
+      before downloading, and accurately calculates and stores the `sizeInBytes` of the downloaded body in `MessageBodyEntity`.
     * `ActionUploadWorker.kt` was finalized. Build issues were resolved (KSP, type ambiguities related to `kotlin.Result` vs. `androidx.work.ListenableWorker.Result`, and incorrect DAO method calls),
       and it now robustly handles local database updates after successful API calls for mark
       read/unread, star, move, and send actions. Draft creation/update logic was also refined to
@@ -87,9 +87,9 @@ local data to provide a rich offline experience while respecting device storage 
       `wellKnownType: WellKnownFolderType?` added, `messageListSyncToken` field added. An
       `@Index(value = ["accountId", "remoteId"], unique = true)` was added to prevent duplicate
       local folders for the same remote folder.
-    * `AppDatabase.kt` version incremented to 13 to reflect schema changes.
-      `fallbackToDestructiveMigration()` is confirmed to be in use, addressing crashes due to
-      schema changes on development builds (app reinstall may be needed for existing builds).
+    * `AppDatabase.kt` version incremented (currently 15, reflecting addition of `sizeInBytes` to `MessageBodyEntity`). The `DatabaseModule.kt`
+      now uses `.fallbackToDestructiveMigrationFrom(true, 1, ..., 14)`
+      addressing crashes due to schema changes on development builds.
     * `FolderDao.kt` refactored: `insertOrUpdateFolders` now uses a `@Transaction` and manually
       checks for existing folders by `accountId` and `remoteId` to update them in place, preserving
       the local `id` and respecting the unique constraint. `getFolderByWellKnownType` and other
@@ -101,7 +101,7 @@ local data to provide a rich offline experience while respecting device storage 
       `wellKnownType`, and to perform a full folder refresh, deleting local folders not present
       in the server response to handle stale data. It also processes `deltaData.deletedItemIds`.
     * `SyncEngine.kt` updated to use `workManager.enqueueUniqueWork` with
-      `ExistingWorkPolicy.KEEP` for `FolderListSyncWorker` to prevent redundant sync runs. A diagnostic log has been added to `syncFolderContent` to help trace instances where `FolderContentSyncWorker` might be enqueued with incorrect parameters (using remoteId instead of local UUID for FOLDER_ID).
+      `ExistingWorkPolicy.KEEP` for `FolderListSyncWorker` to prevent redundant sync runs. The diagnostic log in `syncFolderContent` was removed as obsolete. It also now schedules `CacheCleanupWorker` periodically.
     * `FolderContentSyncWorker.kt` refactored to utilize these new delta sync structures,
       including processing deleted item IDs from `DeltaSyncResult`.
     * UI layer (`Util.kt`, `MailDrawerContent.kt`, `UtilTest.kt`) updated for `WellKnownFolderType`
@@ -114,11 +114,28 @@ local data to provide a rich offline experience while respecting device storage 
     * `FolderDao` uses `wellKnownType` for lookups.
     * All layers (Data, UI) consistently use this new approach, enhancing provider-agnosticism
       and data integrity for folder identification.
-    * Database migration uses `fallbackToDestructiveMigration()` for this development phase.
 
-* **UI Stability Fixes (Message Loading & Settings):**
-    * **Message Display:** Resolved an issue where messages wouldn't load and "Parent folder not found" errors occurred. This was due to `MessageRemoteMediator` receiving the folder's `remoteId` instead of its local UUID. The fix involved correcting `FolderMappers.kt` to ensure `MailFolder.id` (domain model) uses the local UUID from `FolderEntity.id`.
-    * **Settings Screen Buttons (Google Sign-In Cancellation):** Addressed an issue where "Add Account" buttons could remain disabled after cancelling a Google sign-in attempt. The fix involved adding a `.catch` block in `DefaultAccountRepository.handleAuthenticationResult` for Google. This ensures that an `AuthorizationException` from a user cancellation is caught and correctly propagates a `GenericAuthResult.Error` to the `MainViewModel`. The ViewModel can then reset its `isLoadingAccountAction` state, re-enabling the buttons.
+* **UI Stability Fixes (Message Loading & Settings): COMPLETED.**
+    * **Message Display:** Resolved an issue where messages wouldn't load and "Parent folder not found" errors occurred.
+    * **Settings Screen Buttons (Google Sign-In Cancellation):** Addressed an issue where "Add Account" buttons could remain disabled after cancelling a Google sign-in attempt.
+
+* **Phase 4.A (Cache Configuration & Accurate Sizing Foundation): COMPLETED.**
+    * `UserPreferencesRepository` updated to manage user-configurable cache size limits (options: 500MB, 1GB, 2GB, 5GB; default: 500MB).
+    * `MessageBodyEntity` now includes a `sizeInBytes` field.
+    * `MessageBodyDownloadWorker` calculates and stores `sizeInBytes` for fetched message bodies.
+    * `CacheCleanupWorker` now:
+        * Reads the cache size limit from `UserPreferencesRepository`.
+        * Accurately calculates current cache size by summing `AttachmentEntity.size` and `MessageBodyEntity.sizeInBytes`.
+        * Correctly subtracts `MessageBodyEntity.sizeInBytes` when evicting a message body.
+    * `SettingsScreen.kt` in the `:mail` module now provides UI for users to select their preferred cache size limit.
+    * `AppDatabase` version incremented to 15 to reflect schema changes in `MessageBodyEntity`.
+
+* **Phase 4.B (Initial Sync Configuration): COMPLETED.**
+    * **REQ-INIT-001: Configurable Initial Sync Duration:** Users can now select how far back emails are synced when an account is first added (options: 30 Days, 90 Days (default), 6 Months, All Time).
+        * `UserPreferencesRepository` updated to store `InitialSyncDurationPreference`.
+        * `FolderContentSyncWorker` now reads this preference and applies it by passing an `earliestTimestampEpochMillis` to the `MailApiService.getMessagesForFolder` method.
+        * `GmailApiHelper` and `GraphApiHelper` updated to use this timestamp to filter messages via API query parameters (`q=after:` for Gmail, `$filter=receivedDateTime ge` for Graph) on the initial fetch for a folder.
+        * `SettingsScreen.kt` in the `:mail` module now provides UI for users to select their preferred initial sync duration.
 
 **Key Technical Debt & Immediate Concerns (Revised):**
 
@@ -149,20 +166,24 @@ local data to provide a rich offline experience while respecting device storage 
 2. **Room Database Schema Migration Crash (ADDRESSED):**
     * **Problem:** The application crashed on initial startup after the unique index was added to
       `FolderEntity` due to a Room schema change without a specific migration path defined for
-      that version increment.
+      that version increment. (This also applies to any unhandled schema change).
     * **Impact:** Users with existing installations on development/test builds would experience a
       crash, preventing app use.
-    * **Resolution:** The `AppDatabase` version was incremented from 12 to 13. The project already
-      uses `.fallbackToDestructiveMigration()` in `DatabaseModule.kt`. This means that during
-      development, Room will clear the database if a migration is missing, resolving the crash.
-      For users with older development builds, an app uninstall and reinstall (or clearing app data)
-      was the recommended solution to ensure the new schema is correctly applied.
+    * **Resolution:** The `AppDatabase` version is currently 15. The project now uses
+      `.fallbackToDestructiveMigrationFrom(true, 1, ..., 14)`
+      in `DatabaseModule.kt`. This means that during development, Room will clear the database
+      if a migration is missing and the schema is one of the specified versions (1-14),
+      resolving the crash. For users with older development builds, an app uninstall and reinstall
+      (or clearing app data) was the recommended solution to ensure the new schema is correctly applied.
 
-3. **Pagination and `MessageRemoteMediator` Verification (Medium Priority - Unblocked):**
-    * **Problem:** While `FolderContentSyncWorker` now primes `RemoteKeyEntity`, and `MessageRemoteMediator` now receives the correct folder UUID, it remains to be thoroughly confirmed if it correctly loads and displays *all* pages of messages when a user scrolls, especially after delta sync operations might reset pagination. The critical blocker (incorrect folder ID) for `MessageRemoteMediator` is now resolved.
+3. **Pagination and `MessageRemoteMediator` Verification (COMPLETED):**
+    * **Problem:** While `FolderContentSyncWorker` now primes `RemoteKeyEntity`, and `MessageRemoteMediator` now receives the correct folder UUID, it remained to be thoroughly confirmed if it correctly loads and displays *all* pages of messages when a user scrolls, especially after delta sync operations might reset pagination.
     * **Impact:** Users may not be able to scroll through their full message history seamlessly.
-    * **Next Steps:** Thoroughly test and verify the pagination mechanism in conjunction with the
-      new delta sync flows.
+    * **Resolution (June 2025 - Phase 3):**
+        * `MessageRemoteMediator.initialize()` was changed to return `SKIP_INITIAL_REFRESH`.
+        * `MessageRemoteMediator.load()` for `LoadType.REFRESH` was modified to be a no-op (return `MediatorResult.Success(endOfPaginationReached = true)`) without clearing the database or fetching network data. This allows `FolderContentSyncWorker` to be the sole authority for data freshness and initial content loading for a folder.
+        * The `LoadType.APPEND` logic for fetching older messages (scrolling down) was preserved.
+    * **Status: COMPLETED.**
 
 4. **`SyncEngine` Robustness for `FolderContentSyncWorker` (Medium Priority - Diagnostic Added):**
     * **Problem:** Logs indicated that `SyncEngine` sometimes enqueues `FolderContentSyncWorker` with the folder's `remoteId` as the `"FOLDER_ID"` input instead of the local UUID, causing those worker instances to fail. This was likely due to concurrency or how multiple calls were handled after `FolderListSyncWorker` success. A diagnostic log was added to `SyncEngine.syncFolderContent` to detect occurrences.
@@ -190,7 +211,7 @@ local data to provide a rich offline experience while respecting device storage 
 
 ## **3\. Phased Implementation Plan (Revised & Detailed)**
 
-With the build stabilized and critical crash mitigated, the plan focuses on robust synchronization.
+With the build stabilized and critical crash mitigated, the plan focuses on robust synchronization and intelligent data management.
 
 ---
 
@@ -230,7 +251,7 @@ With the build stabilized and critical crash mitigated, the plan focuses on robu
 * **Task 1.B.3: Enhance `FolderListSyncWorker.kt` & `FolderContentSyncWorker.kt`**
     * **Status: SIGNIFICANTLY ADDRESSED.**
     * **Details:** Workers enhanced for initial sync. `FolderContentSyncWorker` now uses
-      `messageListSyncToken` to decide between delta or paged sync. Foundational support for
+      `messageListSyncToken` to decide between delta or paged sync, and for paged sync, it respects the user-configured initial sync duration. Foundational support for
       delta sync (tokens, DAO methods for deletions) added.
 
 ---
@@ -240,12 +261,12 @@ With the build stabilized and critical crash mitigated, the plan focuses on robu
 **Objective:** Allow on-demand download of full message bodies and enable a more robust offline
 action queue, orchestrated by `SyncEngine`.
 
-* **Task 1.C.1: Finalize `MessageBodyDownloadWorker.kt` (Integrated with `SyncEngine`)**
+* **Task 1.C.1: Finalize `MessageBodyDownloadWorker.kt`**
     * **Status: COMPLETED.**
     * **Details:** Worker logic enhanced to check if the message body is already synced before
       attempting download.
 
-* **Task 1.C.2: Finalize `ActionUploadWorker.kt` (Integrated with `SyncEngine`)**
+* **Task 1.C.2: Finalize `ActionUploadWorker.kt`**
     * **Status: COMPLETED.**
     * **Details:** Resolved KSP build errors and type ambiguities. Implemented local database
       updates
@@ -268,7 +289,7 @@ action queue.
           `GmailApiHelper.kt` and `GraphApiHelper.kt` for both folder and message synchronization.**
         * Added `folderListSyncToken` to `AccountEntity`, `messageListSyncToken` and unique index
           (`accountId`, `remoteId`) to `FolderEntity`.
-        * Incremented `AppDatabase` version to 13, using `fallbackToDestructiveMigration`.
+        * Incremented `AppDatabase` version to 15, using `fallbackToDestructiveMigration`.
         * Added DAO methods for token updates, batch deletions (`deleteFoldersByRemoteIds`,
           `deleteMessagesByRemoteIds`), and refactored `FolderDao.insertOrUpdateFolders` for
           conflict resolution based on `accountId` and `remoteId`.
@@ -288,7 +309,7 @@ action queue.
     * **Details:**
         * Created `PendingActionEntity` to store action details (type, payload, status, retries) in the database.
         * Created `PendingActionDao` for DB operations on the queue.
-        * Updated `AppDatabase` (incremented to version 14) and `DatabaseModule` with the new components.
+        * Updated `AppDatabase` (incremented to version 15) and `DatabaseModule` with the new components.
         * Refactored `SyncEngine` to replace direct worker enqueuing with a `queueAction` method that saves the action to the DB and triggers a single unique `ActionUploadWorker`.
         * Removed network checks from repositories and `SyncEngine`'s queuing logic, ensuring actions are *always* saved offline.
         * Refactored `DefaultMessageRepository` and `DefaultThreadRepository` to use `SyncEngine.queueAction`.
@@ -316,36 +337,83 @@ action queue.
 
 ---
 
+**Sprint/Phase 4: Intelligent Cache Management & UI Polish (Current Focus)**
+
+**Objective:** Implement sophisticated cache management policies, provide user controls for caching, and enhance UI feedback for sync and data states.
+
+* **REQ-CACHE-001: Configurable Cache Size Limit**
+    * **Task 4.A.1: Data Layer Support for Cache Configuration.**
+        * **Status: COMPLETED.**
+        * **Details:**
+            * `UserPreferencesRepository` updated with `CacheSizePreference` enum (500MB, 1GB, 2GB, 5GB) and methods to store/retrieve the limit (in bytes). Default set to 500MB.
+            * `MessageBodyEntity` updated with `sizeInBytes: Long` field.
+            * `MessageBodyDownloadWorker` updated to calculate and store `sizeInBytes` of fetched body content.
+            * `AppDatabase` version incremented to 15; `DatabaseModule` updated with destructive migration from version 14.
+    * **Task 4.A.2: `CacheCleanupWorker` Enhancements.**
+        * **Status: COMPLETED.**
+        * **Details:**
+            * `CacheCleanupWorker` now injects `UserPreferencesRepository` and uses the configured `cacheSizeLimitBytes`.
+            * `getCurrentCacheSizeBytes()` in `CacheCleanupWorker` now sums `AttachmentEntity.size` and `MessageBodyEntity.sizeInBytes` (via new `MessageBodyDao.getAllMessageBodies()`).
+            * Eviction logic in `CacheCleanupWorker` correctly subtracts `MessageBodyEntity.sizeInBytes` when a body is deleted.
+    * **Task 4.A.3: UI for Cache Configuration.**
+        * **Status: COMPLETED.**
+        * **Details:**
+            * `MainScreenState` in `MainViewModel` updated to hold `currentCacheSizePreference` and `availableCacheSizes`.
+            * `MainViewModel` updated to load and expose these preferences, and provide `setCacheSizePreference()` method.
+            * `SettingsScreen.kt` now includes a UI section for users to select their desired cache size from the available options, displaying the current setting.
+    * **Outcome:** Users can now configure their desired local cache storage limit. The `CacheCleanupWorker` respects this limit and more accurately calculates the current cache size by including message bodies.
+
+* **REQ-CACHE-002: Advanced Cache Eviction Policy (Refined)**
+    * **Status: COMPLETED.**
+    * **Objective:** Implement the full eviction policy (exclusions, priorities) as defined in `ARCHITECTURE.MD`, using `lastAccessedTimestamp` and overall age.
+    * **Details:**
+        *   `PendingActionDao` updated with `getActiveActionEntityIds` to identify messages involved in active pending actions.
+        *   `CacheCleanupWorker.doWork()` method significantly refactored:
+            *   Injects `PendingActionDao`.
+            *   Filters initial candidates by excluding messages linked to active `PendingActionEntity`s.
+            *   Implements a two-tiered eviction strategy:
+                1.  **Tier 1:** Evicts data (attachments, then bodies, then headers) for messages whose own `timestamp` is older than 90 days AND were not accessed in the last 90 days. Sorted by message `timestamp` (oldest first), then `lastAccessedTimestamp`.
+                2.  **Tier 2 (if target cache size not met):** Evicts data (attachments, then bodies, then headers) for messages whose own `timestamp` is NOT older than 90 days BUT were not accessed in the last 90 days. Sorted by `lastAccessedTimestamp` (least recently accessed first), then by message `timestamp`.
+            *   The `MessageDao.getCacheEvictionCandidates` query continues to provide the base list of candidates (not recently accessed, not draft/outbox, correct sync status). The worker then applies the more granular filtering and tiered sorting.
+            *   Logging within the worker was improved to reflect the new tiered logic.
+    * **Outcome:** `CacheCleanupWorker` now strictly adheres to the advanced multi-priority eviction strategy defined in `ARCHITECTURE.MD`, including exclusions for recently accessed items and items with pending actions. This ensures a more intelligent and policy-compliant cache cleanup process.
+    * **Next Steps:** (Removed as this task is complete)
+
+* **REQ-INIT-001: Configurable Initial Sync Duration**
+    * **Status: Pending.**
+    * **Objective:** Allow users to choose the time window for initial full sync (e.g., 30, 60, 90 days).
+    * **Next Steps:**
+        * Add preference to `UserPreferencesRepository`.
+        * Update `InitialAccountSyncWorker` (or equivalent logic) to use this preference.
+        * Add UI in `SettingsScreen`.
+
+* **REQ-CACHE-003: Selective Offline Download (Attachments/Bodies)**
+    * **Status: Pending.**
+    * **Objective:** Allow users to configure if message bodies and/or attachments are downloaded automatically or only on demand.
+    * **Next Steps:** Design and implement.
+
+* **REQ-SYNC-005: Auto-Refresh Message on View**
+    * **Status: Partially Implemented** (Basic logic mentioned in `ARCHITECTURE.MD`, needs robust implementation).
+    * **Objective:** When a user opens a message, if online and data is potentially stale, silently refresh its content (body & attachments).
+    * **Next Steps:** Integrate this refresh trigger into `MessageDetailViewModel` or repository layer, coordinated via `SyncEngine`.
+
+---
+
 ## 4\. Next Steps & Current Build Status
 
-### Current Build Status: SUCCESSFUL & STABLE
+### Current Build Status: SUCCESSFUL & STABLE (DB Version 15)
 
-The project **builds and compiles successfully**. `SyncEngine` orchestrates initial folder list and
-key folder content sync. Delta synchronization for folders and messages, including handling of
-server-side deletions, is implemented in the API helpers and integrated into the sync workers.
-Duplicate folder issues have been resolved, and database schema changes are handled via
-`fallbackToDestructiveMigration` (DB version 14). Workers for on-demand actions and body
-downloads are functional. The offline action queue is now persistent and robust. Message pagination
-is verified and refactored to work correctly with the delta sync architecture. The `lastAccessedTimestamp`
-field in `MessageEntity` is now updated when message details are viewed, laying groundwork for
-advanced cache eviction policies outlined in `ARCHITECTURE.MD`.
+The project **builds and compiles successfully**. `SyncEngine` orchestrates initial folder list, key folder content sync, and schedules periodic cache cleanup. Delta synchronization for folders and messages, including handling of server-side deletions, is implemented in the API helpers and integrated into the sync workers. Duplicate folder issues have been resolved, and database schema changes are handled via `fallbackToDestructiveMigration` (current DB version 15). Workers for on-demand actions and body downloads are functional; `MessageBodyDownloadWorker` now records body sizes. The offline action queue is persistent and robust. Message pagination is verified. `UserPreferencesRepository` and `SettingsScreen` now support user-configurable cache size limits. `CacheCleanupWorker` now uses these settings, more accurately tracks cache usage (including message body sizes), and implements the **refined advanced eviction policy (REQ-CACHE-002) including tiered eviction and exclusion of pending actions**. The `lastAccessedTimestamp` field in `MessageEntity` is updated when message details are viewed.
 
 ### Immediate Priorities:
 
 1.  **Monitor & Refine Sync Robustness:**
-    * **The Problem:** With significant changes to sync logic, unknown edge cases or performance
-      bottlenecks might exist.
-    * **What Needs to Be Done:** Monitor application behavior, logs, and user feedback (if
-      applicable)
-      for any issues related to data consistency, sync frequency, or performance.
+    * **The Problem:** With significant changes to sync logic and new cache management, unknown edge cases or performance bottlenecks might exist.
+    * **What Needs to Be Done:** Monitor application behavior, logs, and user feedback (if applicable) for any issues related to data consistency, sync frequency, cache eviction behavior, or performance.
     * **Next Step:** Ongoing observation during testing and development.
 
-2.  **Implement Offline Actions & Queuing (Core Functionality).** **(COMPLETED)**
-3.  **Implement Delta Sync in API Helpers (`GmailApiHelper`, `GraphApiHelper`).** **(COMPLETED)**
-4.  **Refine Offline Action Queue.** **(COMPLETED)**
-5.  **Verify Pagination & `MessageRemoteMediator`** (post delta sync implementation). **(COMPLETED)**
-6.  **Refine and Test:** Continuously test the offline experience, refine sync logic, and handle edge
-   cases and errors.
+2.  **Implement REQ-INIT-001: Configurable Initial Sync Duration.**
+    * Followed by other "Pending" items in Phase 4.
 
 * **API Helpers (`GmailApiHelper`, `GraphApiHelper`)**
     *   [x] Implement `syncFolders`
@@ -355,3 +423,19 @@ advanced cache eviction policies outlined in `ARCHITECTURE.MD`.
         * Gmail: Use messages history list.
         * Graph: Use message delta query for the folder.
 * **`DeltaSyncResult<T>` (`core-data`)**
+    *   [x] Created.
+* **Database Entities & DAOs**
+    *   [x] `AccountEntity` updated (`folderListSyncToken`).
+    *   [x] `FolderEntity` updated (`messageListSyncToken`, local UUID PK, `wellKnownType`, unique index).
+    *   [x] `MessageBodyEntity` updated (`sizeInBytes`).
+    *   [x] DAOs updated for delta sync, token management, and `MessageBodyDao.getAllMessageBodies()`.
+    *   [x] `AppDatabase` version updated to 15.
+* **Sync Workers**
+    *   [x] `FolderListSyncWorker` updated.
+    *   [x] `FolderContentSyncWorker` updated.
+    *   [x] `MessageBodyDownloadWorker` updated (stores body size).
+    *   [x] `CacheCleanupWorker` updated (uses preferences, accurate sizing, advanced eviction policy REQ-CACHE-002).
+* **User Preferences & UI**
+    *   [x] `UserPreferencesRepository` updated for cache size limits.
+    *   [x] `SettingsScreen` UI added for cache size configuration.
+    *   [x] `MainViewModel` updated to manage cache size preference state.
