@@ -326,7 +326,9 @@ server-side deletions, is implemented in the API helpers and integrated into the
 Duplicate folder issues have been resolved, and database schema changes are handled via
 `fallbackToDestructiveMigration` (DB version 14). Workers for on-demand actions and body
 downloads are functional. The offline action queue is now persistent and robust. Message pagination
-is verified and refactored to work correctly with the delta sync architecture.
+is verified and refactored to work correctly with the delta sync architecture. The `lastAccessedTimestamp`
+field in `MessageEntity` is now updated when message details are viewed, laying groundwork for
+advanced cache eviction policies outlined in `ARCHITECTURE.MD`.
 
 ### Immediate Priorities:
 

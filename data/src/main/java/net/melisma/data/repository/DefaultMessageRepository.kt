@@ -344,7 +344,11 @@ class DefaultMessageRepository @Inject constructor(
         val localMessageFlow = messageDao.getMessageById(messageId)
             .map { messageEntity ->
                 if (messageEntity != null) {
-                    val messageBody = messageBodyDao.getBodyForMessage(messageId)
+                    // Update lastAccessedTimestamp when message details are successfully fetched
+                    messageDao.updateLastAccessedTimestamp(messageEntity.id, System.currentTimeMillis())
+                    Timber.d("$TAG: Updated lastAccessedTimestamp for messageId ${messageEntity.id}")
+
+                    val messageBody = messageBodyDao.getBodyForMessage(messageEntity.id)
                     messageEntity.toDomainModel().copy(
                         body = messageBody?.content,
                         bodyContentType = messageBody?.contentType

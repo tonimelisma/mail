@@ -228,4 +228,7 @@ interface MessageDao {
         accountId: String,
         folderId: String?
     ): Flow<List<MessageEntity>>
+
+    @Query("UPDATE messages SET lastAccessedTimestamp = :timestamp WHERE id = :messageDboId")
+    suspend fun updateLastAccessedTimestamp(messageDboId: String, timestamp: Long)
 }
