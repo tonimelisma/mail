@@ -30,6 +30,7 @@ import net.melisma.data.sync.workers.CacheCleanupWorker
 import net.melisma.data.sync.workers.FolderContentSyncWorker
 import net.melisma.data.sync.workers.FolderListSyncWorker
 import net.melisma.data.sync.workers.MessageBodyDownloadWorker
+import net.melisma.data.sync.workers.SingleMessageSyncWorker
 import timber.log.Timber
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
@@ -300,6 +301,43 @@ class SyncEngine @Inject constructor(
     // fun triggerFullSyncForAllAccountsOnNetworkChange() { ... }
     // fun triggerFullSyncForAllAccountsOnAppForeground() { ... }
 
+    fun refreshMessage(accountId: String, messageLocalId: String, messageRemoteId: String?) {
+        externalScope.launch(ioDispatcher) {
+            if (!networkMonitor.isOnline.first()) {
+                Timber.w("$TAG: Network offline. Skipping refreshMessage for local message ID: $messageLocalId")
+                // Optionally, update message state to indicate waiting for network if desired
+                return@launch
+            }
+
+            if (messageRemoteId == null) {
+                Timber.w("$TAG: Message remoteId is null for localId $messageLocalId. Cannot enqueue SingleMessageSyncWorker.")
+                // Optionally, update DB to reflect this error state if this sync path was critical
+                return@launch
+            }
+
+            Timber.d("$TAG: Enqueuing SingleMessageSyncWorker for account $accountId, local message $messageLocalId, remote message $messageRemoteId")
+
+            // Use the static helper from SingleMessageSyncWorker to build the data
+            val workData = SingleMessageSyncWorker.buildWorkData(
+                accountId = accountId,
+                messageLocalId = messageLocalId,
+                messageRemoteId = messageRemoteId
+            )
+
+            val workRequest = OneTimeWorkRequestBuilder<SingleMessageSyncWorker>()
+                .setInputData(workData)
+                .addTag("SingleMessageRefresh_${accountId}_${messageLocalId}")
+                .build()
+
+            // Enqueue with REPLACE policy to ensure only one refresh is pending/running for this message
+            workManager.enqueueUniqueWork(
+                "RefreshMsg_$messageLocalId", // Unique work name for this specific message
+                ExistingWorkPolicy.REPLACE,
+                workRequest
+            )
+            Timber.i("$TAG: Enqueued SingleMessageSyncWorker for $messageLocalId with ExistingWorkPolicy.REPLACE")
+        }
+    }
 
     // --- Cache Cleanup Scheduling ---
 

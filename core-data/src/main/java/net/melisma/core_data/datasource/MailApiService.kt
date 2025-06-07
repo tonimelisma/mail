@@ -248,11 +248,19 @@ interface MailApiService {
      * @return Result containing a DeltaSyncResult with new/updated messages, deleted message IDs, and the next sync token.
      */
     suspend fun syncMessagesForFolder(
-        folderId: String,
+        folderRemoteId: String,
         syncToken: String?,
-        maxResultsFromInterface: Int? = null,
+        maxResults: Int? = null,
         earliestTimestampEpochMillis: Long? = null
     ): Result<DeltaSyncResult<Message>>
+
+    /**
+     * Fetches the latest state of a single message directly from the server.
+     *
+     * @param messageRemoteId The remote/server ID of the message to fetch.
+     * @return Result containing the latest Message object or an error.
+     */
+    suspend fun getMessage(messageRemoteId: String): Result<Message>
 
     // Future methods to consider:
     // - syncFolders(syncToken) - For delta syncing with sync token

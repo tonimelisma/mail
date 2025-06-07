@@ -67,4 +67,29 @@ interface AttachmentDao {
 
     @Query("UPDATE attachments SET isDownloaded = 0, localFilePath = NULL, downloadTimestamp = NULL, syncStatus = :newSyncStatus, lastSyncError = NULL WHERE attachmentId = :attachmentId")
     suspend fun resetDownloadStatus(attachmentId: String, newSyncStatus: String)
+
+    @Query("""
+        UPDATE attachments
+        SET fileName = :newFileName,
+            size = :newSize,
+            mimeType = :newMimeType,
+            contentId = :newContentId,
+            isInline = :newIsInline,
+            syncStatus = :newSyncStatus,
+            lastSuccessfulSyncTimestamp = :newLastSuccessfulSyncTimestamp,
+            lastSyncAttemptTimestamp = :newLastAttemptTimestamp,
+            lastSyncError = NULL
+        WHERE attachmentId = :attachmentId
+    """)
+    suspend fun updateAttachmentMetadataAndSyncState(
+        attachmentId: String,
+        newFileName: String,
+        newSize: Long,
+        newMimeType: String,
+        newContentId: String?,
+        newIsInline: Boolean,
+        newSyncStatus: net.melisma.core_data.model.SyncStatus,
+        newLastSuccessfulSyncTimestamp: Long?,
+        newLastAttemptTimestamp: Long
+    )
 }

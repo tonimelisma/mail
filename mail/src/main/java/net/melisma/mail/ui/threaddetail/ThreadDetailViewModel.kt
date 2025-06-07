@@ -29,6 +29,7 @@ import net.melisma.core_data.model.ThreadDataState
 import net.melisma.core_data.preferences.DownloadPreference
 import net.melisma.core_data.preferences.UserPreferencesRepository
 import net.melisma.core_data.repository.ThreadRepository
+import net.melisma.data.sync.SyncEngine
 import net.melisma.data.sync.workers.MessageBodyDownloadWorker
 import net.melisma.domain.data.GetThreadDetailsUseCase
 import net.melisma.mail.navigation.AppRoutes
@@ -52,6 +53,7 @@ class ThreadDetailViewModel @Inject constructor(
     private val networkMonitor: NetworkMonitor,
     private val workManager: WorkManager,
     private val threadRepository: ThreadRepository,
+    private val syncEngine: SyncEngine,
     private val savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
@@ -85,73 +87,80 @@ class ThreadDetailViewModel @Inject constructor(
                 if (oldState.isOnline != online || oldState.isWifiConnected != wifi || oldState.bodyDownloadPreference != bodyPref) {
                     val currentThreadState = _uiState.value.threadLoadingState
                     if (currentThreadState is ThreadDetailUIState.Success && accountId != null) {
-                        evaluateAndTriggerDownloadsForThread(currentThreadState, accountId, bodyPref, online, wifi)
+                        evaluateAndTriggerDownloadsForThread(currentThreadState, accountId, online, wifi)
                     }
                 }
             }.launchIn(viewModelScope)
         }
 
         viewModelScope.launch {
-            threadIdFlow
-                .flatMapLatest { currentThreadId ->
-                    if (accountId.isNullOrBlank() || currentThreadId.isNullOrBlank()) {
-                        _uiState.update { it.copy(threadLoadingState = ThreadDetailUIState.Error("Account ID or Thread ID is missing")) }
-                        flowOf<Result<MailThread>>()
-                    } else {
-                        Timber.d("Thread ID changed to: $currentThreadId or initial load.")
+            threadIdFlow.combine(threadRepository.threadDataState) { id, state ->
+                Pair(id, state)
+            }.flatMapLatest { (currentThreadId, currentDataState) ->
+                if (accountId.isNullOrBlank() || currentThreadId.isNullOrBlank()) {
+                    _uiState.update { it.copy(threadLoadingState = ThreadDetailUIState.Error("Account ID or Thread ID is missing")) }
+                    flowOf(Result.failure<MailThread>(IllegalStateException("Account ID or Thread ID is missing")))
+                } else {
+                    Timber.d("Observing thread: $currentThreadId with data state: $currentDataState")
+                    if (currentDataState is ThreadDataState.Initial || currentDataState is ThreadDataState.Loading) {
                         _uiState.update { it.copy(threadLoadingState = ThreadDetailUIState.Loading) }
-                        threadRepository.threadDataState.flatMapLatest { dataState ->
-                            Timber.d("Current ThreadDataState: $dataState for threadId: $currentThreadId")
-                            getThreadDetailsUseCase(threadId = currentThreadId, currentState = dataState)
-                        }
                     }
-                }.catch { exception ->
-                    Timber.w(exception, "Error in thread details collection flow: ${exception.message}")
-                    _uiState.update {
-                        it.copy(
-                            threadLoadingState = ThreadDetailUIState.Error(
-                                exception.message ?: "Error observing thread details"
-                            )
-                        )
-                    }
-                }.collectLatest { mailThreadResult: Result<MailThread> ->
-                    mailThreadResult
-                        .onSuccess { mailThread ->
-                            if (accountId == null) {
-                                _uiState.update { it.copy(threadLoadingState = ThreadDetailUIState.Error("Account ID became null")) }
-                                return@onSuccess
-                            }
-                            val initialItems = mailThread.messages.map { msg ->
-                                ThreadMessageItem(message = msg, bodyState = determineInitialBodyState(msg))
-                            }
-                            val successState = ThreadDetailUIState.Success(
-                                threadMessages = initialItems,
-                                threadSubject = mailThread.subject,
-                                accountId = accountId,
-                                threadId = mailThread.id
-                            )
-                            _uiState.update { it.copy(threadLoadingState = successState) }
-
-                            val currentPrefs = _uiState.value
-                            evaluateAndTriggerDownloadsForThread(
-                                successState,
-                                accountId,
-                                currentPrefs.bodyDownloadPreference,
-                                currentPrefs.isOnline,
-                                currentPrefs.isWifiConnected
-                            )
-                        }
-                        .onFailure { exception ->
-                            Timber.w(exception, "Failed to get MailThread: ${exception.message}")
-                            _uiState.update {
-                                it.copy(
-                                    threadLoadingState = ThreadDetailUIState.Error(
-                                        exception.message ?: "Thread not found or error fetching"
-                                    )
-                                )
-                            }
-                        }
+                    getThreadDetailsUseCase(currentThreadId, currentDataState)
                 }
+            }.catch { exception ->
+                Timber.w(exception, "Error in thread details collection flow: ${exception.message}")
+                _uiState.update {
+                    it.copy(
+                        threadLoadingState = ThreadDetailUIState.Error(
+                            exception.message ?: "Error observing thread details"
+                        )
+                    )
+                }
+            }.collectLatest { mailThreadResult: Result<MailThread?> ->
+                mailThreadResult
+                    .onSuccess { mailThread ->
+                        if (mailThread == null) {
+                            Timber.e("CRITICAL: MailThread is null in onSuccess from GetThreadDetailsUseCase for threadId ${threadIdFlow.value}. This indicates an issue with GetThreadDetailsUseCase\'s success emission or flow typing.")
+                            _uiState.update { it.copy(threadLoadingState = ThreadDetailUIState.Error("Thread data unexpectedly null after success")) }
+                            return@onSuccess
+                        }
+                        if (accountId == null) {
+                            _uiState.update { it.copy(threadLoadingState = ThreadDetailUIState.Error("Account ID became null while processing thread")) }
+                            return@onSuccess
+                        }
+                        val initialItems = mailThread.messages.map { msg ->
+                            ThreadMessageItem(message = msg, bodyState = determineInitialBodyState(msg))
+                        }
+                        val successState = ThreadDetailUIState.Success(
+                            threadMessages = initialItems,
+                            threadSubject = mailThread.subject,
+                            accountId = accountId,
+                            threadId = mailThread.id
+                        )
+                        _uiState.update { it.copy(threadLoadingState = successState) }
+
+                        val currentScreenState = _uiState.value
+                        evaluateAndTriggerDownloadsForThread(
+                            successState,
+                            accountId,
+                            currentScreenState.isOnline,
+                            currentScreenState.isWifiConnected
+                        )
+                        successState.threadMessages.forEach { item ->
+                            triggerAutoRefreshIfNeeded(item.message, accountId, currentScreenState.isOnline)
+                        }
+                    }
+                    .onFailure { exception ->
+                        Timber.w(exception, "Failed to get MailThread: ${exception.message}")
+                        _uiState.update {
+                            it.copy(
+                                threadLoadingState = ThreadDetailUIState.Error(
+                                    exception.message ?: "Thread not found or error fetching"
+                                )
+                            )
+                        }
+                    }
+            }
         }
     }
 
@@ -166,21 +175,19 @@ class ThreadDetailViewModel @Inject constructor(
     private fun evaluateAndTriggerDownloadsForThread(
         threadSuccessState: ThreadDetailUIState.Success,
         currentAccountId: String,
-        bodyPref: DownloadPreference,
         isOnline: Boolean,
         isWifi: Boolean
     ) {
+        val bodyPref = _uiState.value.bodyDownloadPreference
         val updatedMessages = threadSuccessState.threadMessages.map { item ->
             if (item.message.body.isNullOrBlank() && item.bodyState !is BodyLoadingState.Loaded && item.bodyState !is BodyLoadingState.Loading) {
                 if (isOnline) {
-                    if (bodyPref == DownloadPreference.ALWAYS ||
-                        bodyPref == DownloadPreference.ON_WIFI ||
-                        bodyPref == DownloadPreference.ON_DEMAND) {
-                        enqueueMessageBodyDownload(item.message.id, currentAccountId)
-                        item.copy(bodyState = BodyLoadingState.Loading)
-                    } else {
-                        item.copy(bodyState = BodyLoadingState.NotLoadedWillDownloadWhenOnline)
+                    Timber.i("TDB_VM: Active view (thread), online, body missing for ${item.message.id}. Forcing download.")
+                    enqueueMessageBodyDownload(item.message.id, currentAccountId)
+                    if (bodyPref == DownloadPreference.ON_WIFI && !isWifi) {
+                         Timber.e("TDB_VM_DIRE_ERROR: Body download for ${item.message.id} (thread) initiated on non-WiFi, but preference was ON_WIFI. This is an override for active view. Logging for awareness.")
                     }
+                    item.copy(bodyState = BodyLoadingState.Loading)
                 } else {
                     item.copy(bodyState = BodyLoadingState.NotLoadedOffline)
                 }
@@ -216,23 +223,40 @@ class ThreadDetailViewModel @Inject constructor(
             return
         }
 
+        triggerAutoRefreshIfNeeded(messageItem.message, accountId, currentScreenState.isOnline)
+
         if (messageItem.bodyState is BodyLoadingState.Loaded || messageItem.bodyState is BodyLoadingState.Loading) {
             Timber.d("requestMessageBody: Body for $messageIdToLoad already loaded or loading.")
             return
         }
 
         if (currentScreenState.isOnline) {
-            if (currentScreenState.bodyDownloadPreference == DownloadPreference.ALWAYS ||
-                currentScreenState.bodyDownloadPreference == DownloadPreference.ON_WIFI ||
-                currentScreenState.bodyDownloadPreference == DownloadPreference.ON_DEMAND) {
-                updateMessageBodyState(messageIdToLoad, BodyLoadingState.Loading)
-                enqueueMessageBodyDownload(messageIdToLoad, accountId)
-            } else {
-                _uiState.update { it.copy(transientError = "Download not started due to preferences.") }
+            Timber.i("TDB_VM: Explicit request for body ${messageItem.message.id}. Forcing download.")
+            updateMessageBodyState(messageIdToLoad, BodyLoadingState.Loading)
+            enqueueMessageBodyDownload(messageIdToLoad, accountId)
+            if (currentScreenState.bodyDownloadPreference == DownloadPreference.ON_WIFI && !currentScreenState.isWifiConnected) {
+                 Timber.e("TDB_VM_DIRE_ERROR: Body download for ${messageItem.message.id} (explicit request) initiated on non-WiFi, but preference was ON_WIFI. Override for active view. Logging for awareness.")
             }
         } else {
             updateMessageBodyState(messageIdToLoad, BodyLoadingState.NotLoadedOffline)
             _uiState.update { it.copy(transientError = "Cannot download body: No internet connection.") }
+        }
+    }
+
+    private fun triggerAutoRefreshIfNeeded(message: Message, accountId: String, isOnline: Boolean) {
+        if (isOnline && !message.remoteId.isNullOrBlank()) {
+            val lastSync = message.lastSuccessfulSyncTimestamp
+            val staleThresholdMs = 5 * 60 * 1000L // 5 minutes
+            val isStale = lastSync == null || (System.currentTimeMillis() - lastSync) > staleThresholdMs
+
+            if (isStale) {
+                Timber.d("TDB_VM: Message ${message.remoteId} (local: ${message.id}) in thread is stale (last sync: $lastSync). Triggering silent refresh.")
+                syncEngine.refreshMessage(accountId, message.id, message.remoteId)
+            } else {
+                Timber.d("TDB_VM: Message ${message.remoteId} (local: ${message.id}) in thread is fresh (last sync: $lastSync). No silent refresh needed.")
+            }
+        } else {
+            Timber.d("TDB_VM: Skipping silent refresh for ${message.id} in thread. Online: $isOnline, RemoteId: ${message.remoteId}")
         }
     }
 
@@ -247,7 +271,7 @@ class ThreadDetailViewModel @Inject constructor(
             )
             .build()
         val workName = "thread-message-body-download-$messageId"
-        workManager.enqueueUniqueWork(workName, ExistingWorkPolicy.KEEP, workRequest)
+        workManager.enqueueUniqueWork(workName, ExistingWorkPolicy.REPLACE, workRequest)
         observeWorkStatus(workRequest.id, messageId)
     }
 
@@ -258,17 +282,7 @@ class ThreadDetailViewModel @Inject constructor(
                     Timber.d("WorkInfo for message body $messageId (ThreadDetail): ${workInfo.state}")
                     when (workInfo.state) {
                         WorkInfo.State.SUCCEEDED -> {
-                            val updatedMessage = (uiState.value.threadLoadingState as? ThreadDetailUIState.Success)
-                                ?.threadMessages?.find { it.message.id == messageId }?.message?.copy(
-                                body = workInfo.outputData.getString(MessageBodyDownloadWorker.KEY_RESULT_BODY) ?: ""
-                            )
-
-                            if (updatedMessage?.body?.isNotBlank() == true) {
-                                 updateMessageBodyState(messageId, BodyLoadingState.Loaded(updatedMessage.body!!))
-                            } else {
-                                updateMessageBodyState(messageId, BodyLoadingState.Error("Body not found after download."))
-                                Timber.w("Worker for $messageId succeeded but body is still blank.")
-                            }
+                            Timber.d("TDB_VM: Body download for $messageId SUCCEEDED. Data will refresh via observer.")
                         }
                         WorkInfo.State.FAILED -> {
                             val errorData = workInfo.outputData.getString(MessageBodyDownloadWorker.KEY_RESULT_ERROR) ?: "Download failed"
@@ -277,7 +291,7 @@ class ThreadDetailViewModel @Inject constructor(
                         WorkInfo.State.CANCELLED -> {
                             updateMessageBodyState(messageId, BodyLoadingState.Error("Download cancelled"))
                         }
-                        else -> { }
+                        else -> { /* RUNNING, ENQUEUED, BLOCKED - bodyState is already Loading */ }
                     }
                 }
             }

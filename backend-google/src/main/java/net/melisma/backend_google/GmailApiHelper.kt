@@ -147,6 +147,96 @@ class GmailApiHelper @Inject constructor(
 
     private val jsonParser = Json { ignoreUnknownKeys = true }
 
+    // Helper to parse common email date formats to milliseconds
+    private fun parseDateToMillis(dateString: String?, defaultEpochMillis: Long = System.currentTimeMillis()): Long {
+        if (dateString.isNullOrBlank()) return defaultEpochMillis
+        // Try RFC_1123_DATE_TIME first, as it's common in email headers
+        try {
+            val formatter = java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME
+            return java.time.ZonedDateTime.parse(dateString, formatter).toInstant().toEpochMilli()
+        } catch (e: java.time.format.DateTimeParseException) {
+            // Fallback for other potential ISO-like formats or simpler ones
+            try {
+                // Attempt to parse as OffsetDateTime (handles ISO 8601 with offset)
+                return java.time.OffsetDateTime.parse(dateString).toInstant().toEpochMilli()
+            } catch (e2: java.time.format.DateTimeParseException) {
+                // Common simple formats used by some clients, not strictly RFC
+                val commonFormats = listOf(
+                    "EEE, dd MMM yyyy HH:mm:ss Z", // Handles timezone like +0000
+                    "dd MMM yyyy HH:mm:ss Z",
+                    "EEE, MMM dd, yyyy 'at' hh:mm a z", // e.g. Mon, Aug 05, 2024 at 10:00 AM PDT
+                    "yyyy-MM-dd'T'HH:mm:ssZ",
+                    "yyyy-MM-dd'T'HH:mm:ss.SSSZ"
+                )
+                for (format in commonFormats) {
+                    try {
+                        val sdf = java.text.SimpleDateFormat(format, java.util.Locale.US)
+                        // For formats with Z, SimpleDateFormat might need specific handling or a TimeZone set
+                        // For robustness, this part might need more sophisticated date parsing library if issues persist
+                        return sdf.parse(dateString)?.time ?: defaultEpochMillis
+                    } catch (e3: java.text.ParseException) {
+                        // Continue trying other formats
+                    }
+                }
+                Timber.w("Could not parse date string: '$dateString' with common formats. Using default.")
+                return defaultEpochMillis
+            }
+        }
+    }
+
+    // Helper to format milliseconds to ISO 8601 string
+    private fun formatMillisToIso8601(timestamp: Long): String {
+        return try {
+            java.time.Instant.ofEpochMilli(timestamp).atOffset(java.time.ZoneOffset.UTC)
+                .format(java.time.format.DateTimeFormatter.ISO_OFFSET_DATE_TIME)
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to format timestamp $timestamp to ISO 8601. Returning empty string.")
+            ""
+        }
+    }
+
+    // Helper to parse a string of email addresses (e.g., from "To", "Cc" headers)
+    private fun parseAddresses(addressesString: String?): List<EmailAddress> {
+        if (addressesString.isNullOrBlank()) return emptyList()
+        val result = mutableListOf<EmailAddress>()
+        // Regex to find "Display Name <email@example.com>" or just "email@example.com"
+        val addressPattern = """(?:\"?([^\"<]+)\\"?[\s]*<)?([^<>\s]+@[^<>\s]+)>?|(?:[^<>\s]+@[^<>\s]+)""".toRegex()
+
+        addressPattern.findAll(addressesString).forEach { matchResult ->
+            // matchResult.groups contain all groups including the full match at index 0
+            // Group 1: Display Name (optional)
+            // Group 2: Email address if display name is present
+            // If only email, it's captured by the second part of OR in regex, so full match (group 0) contains it.
+
+            val g1 = matchResult.groups[1]?.value?.trim()?.removeSurrounding("\"")
+            val g2 = matchResult.groups[2]?.value?.trim()
+
+            var displayName: String? = null
+            var email: String? = null
+
+            if (g1 != null && g2 != null) { // "Display Name" <email@example.com>
+                displayName = g1
+                email = g2
+            } else { // email@example.com (captured by group 0 or specific part of regex)
+                // The regex is structured such that a plain email might be the whole match (group 0)
+                // or specifically caught by the second alternative if the first (named part) fails.
+                val fullMatch = matchResult.groups[0]?.value
+                if (fullMatch != null && fullMatch.contains("@") && !fullMatch.contains("<")) {
+                    email = fullMatch.trim()
+                    // Attempt to clean up if it was accidentally parsed with quotes meant for display name
+                    if (email.startsWith("\"") && email.endsWith("\"")) {
+                         email = email.removeSurrounding("\"")
+                    }
+                }
+            }
+
+            if (!email.isNullOrBlank()) {
+                result.add(EmailAddress(displayName = displayName?.ifBlank { null }, emailAddress = email))
+            }
+        }
+        return result
+    }
+
     private suspend fun getCurrentAccountId(): String {
         return authManager.getNullableActiveAccountId()
             ?: throw IllegalStateException("Active account ID not found")
@@ -1767,10 +1857,10 @@ class GmailApiHelper @Inject constructor(
     override suspend fun syncMessagesForFolder(
         folderId: String,
         syncToken: String?, // This is the startHistoryId for delta, or null to get a fresh historyId for future deltas
-        maxResultsFromInterface: Int?, // Hint, may be used for internal API call limits if applicable
+        maxResults: Int?, // CORRECTED: Ensure this is 'maxResults' to match MailApiService interface
         earliestTimestampEpochMillis: Long? // New parameter
     ): Result<DeltaSyncResult<Message>> = withContext(ioDispatcher) {
-        Timber.i("syncMessagesForFolder called for folderId: $folderId. SyncToken (startHistoryId): $syncToken, earliestTimestamp: $earliestTimestampEpochMillis")
+        Timber.i("syncMessagesForFolder called for folderId: $folderId. SyncToken (startHistoryId): $syncToken, earliestTimestamp: $earliestTimestampEpochMillis, maxResultsHint: $maxResults")
         if (earliestTimestampEpochMillis != null) {
             Timber.w("syncMessagesForFolder (Gmail): earliestTimestampEpochMillis ($earliestTimestampEpochMillis) is provided but currently unused by the history-based delta sync logic.")
         }
@@ -1811,12 +1901,12 @@ class GmailApiHelper @Inject constructor(
                     parameter("labelId", folderId)
                     // Specify historyTypes to get only relevant events and potentially more detailed messages in messagesAdded
                     parameter("historyTypes", "messageAdded,messageDeleted,labelAdded,labelRemoved")
-                    maxResultsFromInterface?.let {
+                    maxResults?.let { // Ensure this uses the corrected 'maxResults' parameter
                         parameter(
                             "maxResults",
-                            it.coerceIn(1, 100)
+                            it.coerceIn(1, 100) // Gmail history maxResults is 500, but use interface hint bounded.
                         )
-                    } // Gmail history maxResults is 500, but use interface hint bounded.
+                    }
                     pageTokenForHistoryInternal?.let { parameter("pageToken", it) }
                 }
 
@@ -1928,6 +2018,112 @@ class GmailApiHelper @Inject constructor(
                 e,
                 "Generic exception during syncMessagesForFolder for folder $folderId (Account: $localAccountIdForLogging)"
             )
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(ApiServiceException(mappedDetails))
+        }
+    }
+
+    private fun parseFullGmailMessage(
+        gmailMessage: GmailMessage,
+        apiAccountId: String, // This is "me" for Gmail API calls
+        currentLabelIdForContext: String? // e.g., "INBOX" when listing messages for inbox
+    ): Message {
+        val topLevelPayload = gmailMessage.payload
+
+        val subject =
+            topLevelPayload?.headers?.find { it.name == "Subject" }?.value ?: ""
+        val fromHeader =
+            topLevelPayload?.headers?.find { it.name == "From" }?.value ?: ""
+        val (senderName, senderAddress) = parseSender(fromHeader)
+        val toHeader =
+            topLevelPayload?.headers?.find { it.name == "To" }?.value ?: ""
+        val recipientEmailAddresses = parseAddresses(toHeader) // Returns List<EmailAddress>
+
+        val dateHeader =
+            topLevelPayload?.headers?.find { it.name == "Date" }?.value
+        val receivedTimestamp = parseDateToMillis(dateHeader) // Returns Long
+        
+        val internalDateMillis = gmailMessage.internalDate?.toLongOrNull()
+        val sentDateTime = formatMillisToIso8601(internalDateMillis ?: receivedTimestamp)
+        val receivedDateTime = formatMillisToIso8601(receivedTimestamp)
+
+        var body: String? = null
+        var bodyContentType: String? = null
+        
+        if (topLevelPayload != null) {
+            if (topLevelPayload.parts.isNullOrEmpty()) {
+                // Single part message (or simple message where payload itself contains the body)
+                body = topLevelPayload.body?.data?.let { decodeBase64(it) }
+                bodyContentType = topLevelPayload.mimeType
+            } else {
+                // Multipart message, find the best body part
+                val (bestBody, bestContentType) = findBestBodyPart(topLevelPayload.parts)
+                body = bestBody
+                bodyContentType = bestContentType
+            }
+        }
+
+        // Use the existing helper to extract attachments.
+        // This helper internally inspects gmailMessage.payload and its parts.
+        val attachments = extractAttachmentsFromMessage(gmailMessage.id, gmailMessage)
+
+        return Message.fromApi(
+            id = gmailMessage.id, // Gmail's message ID
+            remoteId = gmailMessage.id, // Explicitly set remoteId
+            accountId = apiAccountId, // Typically "me"
+            folderId = currentLabelIdForContext ?: gmailMessage.labelIds?.firstOrNull { it == GMAIL_LABEL_ID_INBOX || it == GMAIL_LABEL_ID_SENT || it == GMAIL_LABEL_ID_DRAFT } ?: gmailMessage.labelIds?.firstOrNull() ?: GMAIL_LABEL_ID_INBOX,
+            threadId = gmailMessage.threadId,
+            receivedDateTime = receivedDateTime,
+            sentDateTime = sentDateTime,
+            subject = subject,
+            senderName = senderName,
+            senderAddress = senderAddress,
+            bodyPreview = gmailMessage.snippet ?: body?.take(250), // Use actual body for preview if snippet is null
+            isRead = !(gmailMessage.labelIds?.contains("UNREAD") ?: false),
+            body = body,
+            bodyContentType = bodyContentType ?: "text/plain", // Default if not found
+            recipientNames = recipientEmailAddresses.mapNotNull { it.displayName }.ifEmpty { null },
+            recipientAddresses = recipientEmailAddresses.map { it.emailAddress }.ifEmpty { null },
+            isStarred = gmailMessage.labelIds?.contains(GMAIL_LABEL_ID_STARRED) ?: false,
+            hasAttachments = attachments.isNotEmpty(),
+            attachments = attachments,
+            lastSuccessfulSyncTimestamp = System.currentTimeMillis() // Freshly fetched
+        )
+    }
+
+    override suspend fun getMessage(messageRemoteId: String): Result<Message> = withContext(ioDispatcher) {
+        Timber.d("GmailApiHelper: Fetching message with remoteId: $messageRemoteId")
+        try {
+            val accountApiId = "me" // For Gmail API, it's typically "me"
+            val response: HttpResponse = httpClient.get("$BASE_URL/messages/$messageRemoteId") {
+                accept(ContentType.Application.Json)
+                parameter("format", "FULL") // Request full message payload
+            }
+            val responseBodyText = response.bodyAsText()
+
+            if (!response.status.isSuccess()) {
+                Timber.e("Error fetching message $messageRemoteId: ${response.status} - Body: $responseBodyText")
+                val httpEx = ClientRequestException(response, responseBodyText)
+                val mappedDetails = errorMapper.mapExceptionToErrorDetails(httpEx)
+                return@withContext Result.failure(ApiServiceException(mappedDetails))
+            }
+
+            val gmailMessage = jsonParser.decodeFromString<GmailMessage>(responseBodyText)
+            // Determine a context for folderId, if possible. If this is a direct fetch,
+            // the primary label (e.g., INBOX) or the first label might be a reasonable default.
+            // For simplicity, we might pass null or a sensible default if the true folder context isn't known here.
+            val folderContext = gmailMessage.labelIds?.firstOrNull { it == GMAIL_LABEL_ID_INBOX } ?: gmailMessage.labelIds?.firstOrNull()
+
+            val domainMessage = parseFullGmailMessage(gmailMessage, accountApiId, folderContext)
+            Timber.i("Successfully fetched and parsed message $messageRemoteId. Subject: ${domainMessage.subject}")
+            Result.success(domainMessage)
+
+        } catch (e: GoogleNeedsReauthenticationException) {
+            Timber.w(e, "Google account ${e.accountId} needs re-authentication during getMessage for $messageRemoteId.")
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(ApiServiceException(mappedDetails))
+        } catch (e: Exception) {
+            Timber.e(e, "Exception fetching message $messageRemoteId")
             val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
             Result.failure(ApiServiceException(mappedDetails))
         }

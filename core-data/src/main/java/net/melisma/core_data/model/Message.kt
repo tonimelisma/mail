@@ -26,6 +26,8 @@ import java.time.OffsetDateTime
  * @property body Full body of the message, typically fetched on demand.
  * @property bodyContentType The content type of the message body, e.g., "text/plain" or "text/html".
  * @property attachments List of attachments associated with the message.
+ * @property remoteId Server's unique ID for the message
+ * @property lastSuccessfulSyncTimestamp Timestamp of the last successful full sync of this message
  */
 data class Message(
     val id: String,
@@ -48,7 +50,9 @@ data class Message(
     val isStarred: Boolean = false,
     val hasAttachments: Boolean = false,
     val timestamp: Long = 0L, // Derived from receivedDateTime, default to 0 or handle parsing in constructor/factory
-    val attachments: List<Attachment> = emptyList()
+    val attachments: List<Attachment> = emptyList(),
+    val remoteId: String? = null, // Server's unique ID for the message
+    val lastSuccessfulSyncTimestamp: Long? = null // Timestamp of the last successful full sync of this message
 ) {
     companion object
     // Secondary constructor or init block could parse receivedDateTime to timestamp if needed here
@@ -74,7 +78,9 @@ fun Message.Companion.fromApi(
     recipientAddresses: List<String>? = null,
     isStarred: Boolean = false,
     hasAttachments: Boolean = false,
-    attachments: List<Attachment> = emptyList()
+    attachments: List<Attachment> = emptyList(),
+    remoteId: String? = null, // Added
+    lastSuccessfulSyncTimestamp: Long? = null // Added
 ): Message {
     val derivedTimestamp = try {
         OffsetDateTime.parse(receivedDateTime).toInstant().toEpochMilli()
@@ -100,6 +106,8 @@ fun Message.Companion.fromApi(
         isStarred = isStarred,
         hasAttachments = hasAttachments,
         timestamp = derivedTimestamp,
-        attachments = attachments
+        attachments = attachments,
+        remoteId = remoteId, // Added
+        lastSuccessfulSyncTimestamp = lastSuccessfulSyncTimestamp // Added
     )
 }

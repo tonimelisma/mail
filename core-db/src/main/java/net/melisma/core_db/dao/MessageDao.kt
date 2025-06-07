@@ -244,4 +244,60 @@ interface MessageDao {
         maxLastAccessedTimestampMillis: Long,
         excludedSyncStates: List<String>
     ): List<MessageEntity>
+
+    @Query("""
+        UPDATE messages
+        SET subject = :subject,
+            snippet = :snippet,
+            senderName = :senderName,
+            senderAddress = :senderAddress,
+            recipientNames = :recipientNames,
+            recipientAddresses = :recipientAddresses,
+            timestamp = :timestamp,
+            sentTimestamp = :sentTimestamp,
+            isRead = :isRead,
+            isStarred = :isStarred,
+            hasAttachments = :hasAttachments,
+            syncStatus = :syncStatus,
+            lastSuccessfulSyncTimestamp = :lastSuccessfulSyncTimestamp,
+            lastSyncError = :lastSyncError,
+            lastSyncAttemptTimestamp = :lastSyncAttemptTimestamp,
+            body = :body,
+            isDraft = :isDraft
+        WHERE id = :messageDboId
+    """)
+    suspend fun updateMessageDetailsAndSyncState(
+        messageDboId: String,
+        subject: String?,
+        snippet: String?,
+        senderName: String?,
+        senderAddress: String?,
+        recipientNames: List<String>?,
+        recipientAddresses: List<String>?,
+        timestamp: Long,
+        sentTimestamp: Long?,
+        isRead: Boolean,
+        isStarred: Boolean,
+        hasAttachments: Boolean,
+        body: String?,
+        isDraft: Boolean,
+        syncStatus: SyncStatus,
+        lastSuccessfulSyncTimestamp: Long?,
+        lastSyncError: String?,
+        lastSyncAttemptTimestamp: Long?
+    )
+
+    @Query("""
+        UPDATE messages
+        SET syncStatus = :syncStatus,
+            lastSyncError = :lastSyncError,
+            lastSyncAttemptTimestamp = :lastSyncAttemptTimestamp
+        WHERE id = :messageDboId
+    """)
+    suspend fun updateMessageSyncStateOnError(
+        messageDboId: String,
+        syncStatus: SyncStatus,
+        lastSyncError: String?,
+        lastSyncAttemptTimestamp: Long
+    )
 }

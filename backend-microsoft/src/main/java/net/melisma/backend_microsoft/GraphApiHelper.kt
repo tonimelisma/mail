@@ -266,31 +266,42 @@ class GraphApiHelper @Inject constructor(
     private fun mapKtorGraphMessageToDomainMessage(
         ktorGraphMessage: KtorGraphMessage,
         accountId: String,
-        folderId: String
-    ): Message? {
-        val receivedDateTimeStr = ktorGraphMessage.receivedDateTime
-            ?: return null // Return null if essential date is missing
+        folderId: String // Contextual folderId, might be from list view
+    ): Message {
+        val senderName = ktorGraphMessage.sender?.emailAddress?.name ?: ktorGraphMessage.from?.emailAddress?.name
+        val senderAddress = ktorGraphMessage.sender?.emailAddress?.address ?: ktorGraphMessage.from?.emailAddress?.address
+
+        val recipientAddresses = ktorGraphMessage.toRecipients?.mapNotNull {
+            it.emailAddress?.address
+        } ?: emptyList()
+        val recipientNames = ktorGraphMessage.toRecipients?.mapNotNull {
+            it.emailAddress?.name
+        } ?: emptyList()
+
+        // TODO: Map attachments if KtorGraphMessage includes them
+        // val attachments = mapAttachments(ktorGraphMessage.attachments, ktorGraphMessage.id, accountId)
 
         return Message.fromApi(
-            id = ktorGraphMessage.id,
+            id = ktorGraphMessage.id, // Graph message ID
+            remoteId = ktorGraphMessage.id, // Explicitly set remoteId to Graph message ID
             accountId = accountId,
-            folderId = folderId,
-            threadId = ktorGraphMessage.conversationId ?: ktorGraphMessage.id,
-            receivedDateTime = receivedDateTimeStr,
+            folderId = folderId, // This folderId is the context from where it was listed/fetched
+            threadId = ktorGraphMessage.conversationId,
+            receivedDateTime = ktorGraphMessage.receivedDateTime ?: "",
             sentDateTime = ktorGraphMessage.sentDateTime,
-            subject = ktorGraphMessage.subject ?: "",
-            senderName = ktorGraphMessage.sender?.emailAddress?.name
-                ?: ktorGraphMessage.from?.emailAddress?.name,
-            senderAddress = ktorGraphMessage.sender?.emailAddress?.address
-                ?: ktorGraphMessage.from?.emailAddress?.address,
-            bodyPreview = ktorGraphMessage.bodyPreview ?: "",
-            isRead = ktorGraphMessage.isRead != false, // Default to true (read) if null
+            subject = ktorGraphMessage.subject,
+            senderName = senderName,
+            senderAddress = senderAddress,
+            bodyPreview = ktorGraphMessage.bodyPreview,
+            isRead = ktorGraphMessage.isRead ?: true,
             body = ktorGraphMessage.body?.content,
-            bodyContentType = ktorGraphMessage.body?.contentType ?: "text",
-            recipientNames = ktorGraphMessage.toRecipients?.mapNotNull { it.emailAddress?.name },
-            recipientAddresses = ktorGraphMessage.toRecipients?.mapNotNull { it.emailAddress?.address },
-            isStarred = ktorGraphMessage.flag?.flagStatus == "flagged", // Assuming "flagged" string from API
-            hasAttachments = ktorGraphMessage.hasAttachments == true
+            bodyContentType = ktorGraphMessage.body?.contentType,
+            recipientNames = recipientNames.ifEmpty { null },
+            recipientAddresses = recipientAddresses.ifEmpty { null },
+            isStarred = ktorGraphMessage.flag?.flagStatus == "flagged",
+            hasAttachments = ktorGraphMessage.hasAttachments ?: false,
+            attachments = emptyList(), // Placeholder, attachments should be mapped if available
+            lastSuccessfulSyncTimestamp = System.currentTimeMillis() // Freshly fetched from API
         )
     }
 
@@ -553,10 +564,10 @@ class GraphApiHelper @Inject constructor(
     override suspend fun syncMessagesForFolder(
         folderId: String,
         syncToken: String?,
-        maxResultsFromInterface: Int?,
+        maxResults: Int?,
         earliestTimestampEpochMillis: Long?
     ): Result<DeltaSyncResult<Message>> = withContext(ioDispatcher) {
-        Timber.i("syncMessagesForFolder (Graph) called for folderId: $folderId. SyncToken (deltaLink): $syncToken, earliestTimestamp: $earliestTimestampEpochMillis")
+        Timber.i("syncMessagesForFolder (Graph) called for folderId: $folderId. SyncToken (deltaLink): $syncToken, earliestTimestamp: $earliestTimestampEpochMillis, maxResultsHint: $maxResults")
         if (earliestTimestampEpochMillis != null) {
             Timber.w("syncMessagesForFolder (Graph): earliestTimestampEpochMillis ($earliestTimestampEpochMillis) is provided but currently unused by the deltaLink-based sync logic.")
         }
@@ -574,7 +585,7 @@ class GraphApiHelper @Inject constructor(
 
                 val response: HttpResponse = httpClient.get(initialDeltaUrl) {
                     accept(ContentType.Application.Json)
-                    maxResultsFromInterface?.let { parameter("\$top", it.toString()) }
+                    maxResults?.let { parameter("\$top", it.toString()) }
                 }
 
                 if (!response.status.isSuccess()) {
@@ -664,10 +675,59 @@ class GraphApiHelper @Inject constructor(
         }
     }
 
-    // Removed GraphSdkMessage.toDomainMessage() extension function as GraphSdkMessage (SDK type) is gone.
-    // The mapKtorGraphMessageToDomainMessage handles mapping from Ktor DTOs.
-    // Removed getGraphClient() method.
-    // Removed local DTOs that mirrored SDK structures (GraphMessage, GraphRecipient, GraphFlag, etc.)
+    override suspend fun getMessage(messageRemoteId: String): Result<Message> = withContext(ioDispatcher) {
+        Timber.d("GraphApiHelper: Fetching message with remoteId: $messageRemoteId")
+        val accountId = credentialStore.getActiveAccountId()
+            ?: return@withContext Result.failure(ApiServiceException(ErrorDetails(message = "User ID not found for Graph API call", code = "AUTH_NO_ACTIVE_ACCOUNT")))
+
+        try {
+            val response: HttpResponse = httpClient.get("$MS_GRAPH_ROOT_ENDPOINT/me/messages/$messageRemoteId") {
+                url {
+                    // Request full body and other details we might need
+                    parameter("\$select", MESSAGE_FULL_SELECT_FIELDS)
+                }
+                accept(ContentType.Application.Json)
+            }
+            val responseBodyText = response.bodyAsText()
+
+            if (!response.status.isSuccess()) {
+                Timber.e("Error fetching message $messageRemoteId: ${response.status} - Body: $responseBodyText")
+                val httpEx = ClientRequestException(response, responseBodyText)
+                val mappedDetails = errorMapper.mapExceptionToErrorDetails(httpEx)
+                return@withContext Result.failure(ApiServiceException(mappedDetails))
+            }
+
+            val ktorGraphMessage = jsonParser.decodeFromString<KtorGraphMessage>(responseBodyText)
+
+            // Attempt to find the parent folder ID for context. This is best-effort.
+            // Graph API doesn't directly return parentFolderId in message object by default with $select.
+            // We might need another call or rely on it being part of a broader sync context if crucial.
+            // For a direct getMessage, we might not have a strong folderId context readily available from this call alone.
+            // Let's pass a placeholder or try to infer if possible, but it might often be null/default.
+            // A more robust way would be to fetch mailboxSettings or user settings for default folder IDs if needed.
+            // For now, using null as the folder context is the most straightforward for a direct getMessage call.
+            val folderContextId = ktorGraphMessage.id // Placeholder: graph message id is not folder id. For now, need a better way if folder context is critical here.
+                                                  // Actual folder ID is not directly available in single message fetch without more context or another call.
+                                                  // For parsing, this folderId is used to associate the message in our domain model.
+                                                  // If the message is being refreshed, its existing folderId from DB should be preserved by the worker.
+                                                  // Let's pass a known one or null if not applicable.
+                                                  // Using "" as placeholder, worker should use existing folderId from DB.
+
+            val domainMessage = mapKtorGraphMessageToDomainMessage(ktorGraphMessage, accountId, "") // Passing empty string for folderId context
+
+            Timber.i("Successfully fetched and parsed message $messageRemoteId from Graph. Subject: ${domainMessage.subject}")
+            Result.success(domainMessage)
+
+        } catch (e: Exception) {
+            Timber.e(e, "Exception fetching message $messageRemoteId from Graph")
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(ApiServiceException(mappedDetails))
+        }
+    }
+
+    private val jsonParser = kotlinx.serialization.json.Json {
+        // ... existing code ...
+    }
 }
 
 // Placeholder for MicrosoftAuthUserCredentials if it was still here

@@ -155,9 +155,10 @@ class FolderContentSyncWorker @AssistedInject constructor(
                 // --- DELTA SYNC PATH ---
                 Timber.tag(TAG).d("Attempting DELTA sync for folder $apiFolderIdToFetch using token: $currentMessageListSyncToken")
                 val messagesDeltaResult = mailService.syncMessagesForFolder(
-                    folderId = apiFolderIdToFetch,
+                    folderRemoteId = apiFolderIdToFetch,
                     syncToken = currentMessageListSyncToken,
-                    maxResultsFromInterface = 25
+                    maxResults = 25,
+                    earliestTimestampEpochMillis = null
                 )
 
                 if (messagesDeltaResult.isSuccess) {

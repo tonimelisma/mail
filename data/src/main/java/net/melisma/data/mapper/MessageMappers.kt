@@ -34,7 +34,7 @@ fun Message.toEntity(accountId: String, folderId: String): MessageEntity {
 
     return MessageEntity(
         id = this.id,
-        messageId = this.id,
+        messageId = this.remoteId,
         accountId = accountId,
         folderId = folderId,
         threadId = this.threadId,
@@ -49,7 +49,8 @@ fun Message.toEntity(accountId: String, folderId: String): MessageEntity {
         sentTimestamp = sentTs,
         isRead = this.isRead,
         isStarred = this.isStarred,
-        hasAttachments = this.hasAttachments
+        hasAttachments = this.hasAttachments,
+        lastSuccessfulSyncTimestamp = this.lastSuccessfulSyncTimestamp
     )
 }
 
@@ -78,6 +79,7 @@ fun MessageEntity.toDomainModel(): Message {
 
     return Message(
         id = this.id,
+        remoteId = this.messageId,
         accountId = this.accountId,
         folderId = this.folderId,
         threadId = this.threadId,
@@ -95,6 +97,7 @@ fun MessageEntity.toDomainModel(): Message {
         isStarred = this.isStarred,
         hasAttachments = this.hasAttachments,
         timestamp = this.timestamp,
-        attachments = emptyList()
+        attachments = emptyList(),
+        lastSuccessfulSyncTimestamp = this.lastSuccessfulSyncTimestamp
     )
 } 
