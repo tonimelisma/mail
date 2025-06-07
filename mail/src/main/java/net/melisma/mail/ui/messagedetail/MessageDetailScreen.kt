@@ -37,6 +37,7 @@ import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -60,8 +61,13 @@ import timber.log.Timber
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.togetherWith
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.animation.ExperimentalAnimationApi::class)
 @Composable
 fun MessageDetailScreen(
     navController: NavHostController,
@@ -165,64 +171,77 @@ fun MessageDetailScreen(
                         )
                         Spacer(modifier = Modifier.height(16.dp))
 
-                        when (screenState.bodyDisplayState) {
-                            ContentDisplayState.DOWNLOADED -> {
-                                val htmlBody = currentMessage.body
-                                if (!htmlBody.isNullOrEmpty()) {
-                                    AndroidView(
-                                        factory = { factoryContext ->
-                                            WebView(factoryContext).apply {
-                                                settings.javaScriptEnabled = false
-                                                settings.loadWithOverviewMode = true
-                                                settings.useWideViewPort = true
-                                                settings.domStorageEnabled = true
-                                                settings.defaultTextEncodingName = "utf-8"
-                                            }
-                                        },
-                                        update = { webView ->
-                                            webView.loadDataWithBaseURL(
-                                                null, htmlBody, "text/html", "utf-8", null
-                                            )
-                                        },
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .height(400.dp)
-                                    )
-                                } else {
-                                    Text(stringResource(R.string.message_body_empty), style = MaterialTheme.typography.bodyLarge)
+                        AnimatedContent(
+                            targetState = screenState.bodyDisplayState,
+                            transitionSpec = {
+                                fadeIn(animationSpec = tween(300)) togetherWith fadeOut(animationSpec = tween(300))
+                            },
+                            label = "BodyDisplayStateAnimation"
+                        ) { targetBodyState ->
+                            when (targetBodyState) {
+                                ContentDisplayState.DOWNLOADED -> {
+                                    val htmlBody = currentMessage.body
+                                    if (!htmlBody.isNullOrEmpty()) {
+                                        AndroidView(
+                                            factory = { factoryContext ->
+                                                WebView(factoryContext).apply {
+                                                    settings.javaScriptEnabled = false
+                                                    settings.loadWithOverviewMode = true
+                                                    settings.useWideViewPort = true
+                                                    settings.domStorageEnabled = true
+                                                    settings.defaultTextEncodingName = "utf-8"
+                                                }
+                                            },
+                                            update = { webView ->
+                                                webView.loadDataWithBaseURL(
+                                                    null, htmlBody, "text/html", "utf-8", null
+                                                )
+                                            },
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(400.dp)
+                                        )
+                                    } else {
+                                        Text(stringResource(R.string.message_body_empty), style = MaterialTheme.typography.bodyLarge)
+                                    }
                                 }
-                            }
-                            ContentDisplayState.LOADING -> {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(stringResource(R.string.message_body_loading_details), style = MaterialTheme.typography.bodyLarge)
+                                ContentDisplayState.LOADING -> {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(stringResource(R.string.message_body_loading_details), style = MaterialTheme.typography.bodyLarge)
+                                    }
                                 }
-                            }
-                            ContentDisplayState.DOWNLOADING -> {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    CircularProgressIndicator(modifier = Modifier.size(24.dp))
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(stringResource(R.string.message_body_downloading), style = MaterialTheme.typography.bodyLarge)
+                                ContentDisplayState.DOWNLOADING -> {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                        Text(stringResource(R.string.message_body_downloading), style = MaterialTheme.typography.bodyLarge)
+                                    }
                                 }
-                            }
-                            ContentDisplayState.NOT_DOWNLOADED_WILL_DOWNLOAD_ON_WIFI -> {
-                                Text(stringResource(R.string.message_body_waiting_for_wifi_auto), style = MaterialTheme.typography.bodyLarge)
-                            }
-                            ContentDisplayState.NOT_DOWNLOADED_WILL_DOWNLOAD_WHEN_ONLINE -> {
-                                Text(stringResource(R.string.message_body_waiting_for_online_auto), style = MaterialTheme.typography.bodyLarge)
-                            }
-                            ContentDisplayState.NOT_DOWNLOADED_OFFLINE -> {
-                                Text(stringResource(R.string.message_body_offline_not_downloaded), style = MaterialTheme.typography.bodyLarge)
-                            }
-                            ContentDisplayState.NOT_DOWNLOADED_PREFERENCE_ON_DEMAND -> {
-                                Text(stringResource(R.string.message_body_not_downloaded_on_demand_pref), style = MaterialTheme.typography.bodyLarge)
-                            }
-                            ContentDisplayState.ERROR -> {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Filled.ErrorOutline, contentDescription = "Error", tint = MaterialTheme.colorScheme.error)
-                                    Spacer(modifier = Modifier.width(8.dp))
-                                    Text(stringResource(R.string.message_body_download_error), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyLarge)
+                                ContentDisplayState.NOT_DOWNLOADED_WILL_DOWNLOAD_ON_WIFI -> {
+                                    Text(stringResource(R.string.message_body_waiting_for_wifi_auto), style = MaterialTheme.typography.bodyLarge)
+                                }
+                                ContentDisplayState.NOT_DOWNLOADED_WILL_DOWNLOAD_WHEN_ONLINE -> {
+                                    Text(stringResource(R.string.message_body_waiting_for_online_auto), style = MaterialTheme.typography.bodyLarge)
+                                }
+                                ContentDisplayState.NOT_DOWNLOADED_OFFLINE -> {
+                                    Text(stringResource(R.string.message_body_offline_not_downloaded), style = MaterialTheme.typography.bodyLarge)
+                                }
+                                ContentDisplayState.NOT_DOWNLOADED_PREFERENCE_ON_DEMAND -> {
+                                    Text(stringResource(R.string.message_body_not_downloaded_on_demand_pref), style = MaterialTheme.typography.bodyLarge)
+                                }
+                                ContentDisplayState.ERROR -> {
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Icon(Icons.Filled.ErrorOutline, contentDescription = stringResource(R.string.cd_error_icon), tint = MaterialTheme.colorScheme.error)
+                                            Spacer(modifier = Modifier.width(8.dp))
+                                            Text(stringResource(R.string.message_body_download_error), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyLarge)
+                                        }
+                                        TextButton(onClick = { viewModel.retryMessageBodyDownload() }) {
+                                            Text(stringResource(R.string.action_retry))
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -242,7 +261,8 @@ fun MessageDetailScreen(
                                     AttachmentCard(
                                         attachment = attachmentItem,
                                         displayState = attachmentState,
-                                        context = context
+                                        context = context,
+                                        onRetryClick = { viewModel.retryAttachmentDownload(attachmentItem.id) }
                                     )
                                 }
                             }
@@ -254,18 +274,20 @@ fun MessageDetailScreen(
     }
 }
 
+@OptIn(androidx.compose.animation.ExperimentalAnimationApi::class)
 @Composable
 fun AttachmentCard(
     attachment: Attachment,
     displayState: ContentDisplayState,
-    context: android.content.Context
+    context: android.content.Context,
+    onRetryClick: () -> Unit
 ) {
     Card(
         modifier = Modifier
             .width(150.dp)
             .height(120.dp)
-            .clickable(enabled = displayState == ContentDisplayState.DOWNLOADED) {
-                if (!attachment.localUri.isNullOrEmpty()) {
+            .clickable(enabled = displayState == ContentDisplayState.DOWNLOADED || displayState == ContentDisplayState.ERROR) {
+                if (displayState == ContentDisplayState.DOWNLOADED && !attachment.localUri.isNullOrEmpty()) {
                     val uri = Uri.parse(attachment.localUri)
                     val intent = Intent(Intent.ACTION_VIEW).apply {
                         setDataAndType(uri, attachment.contentType ?: "*/*")
@@ -276,6 +298,8 @@ fun AttachmentCard(
                     } catch (e: ActivityNotFoundException) {
                         Timber.e(e, "No app found to open attachment: ${attachment.fileName}")
                     }
+                } else if (displayState == ContentDisplayState.ERROR) {
+                    onRetryClick()
                 }
             },
     ) {
@@ -286,22 +310,37 @@ fun AttachmentCard(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            when (displayState) {
-                ContentDisplayState.LOADING,
-                ContentDisplayState.DOWNLOADING -> CircularProgressIndicator(modifier = Modifier.size(32.dp))
-                ContentDisplayState.DOWNLOADED -> Icon(Icons.AutoMirrored.Filled.InsertDriveFile, contentDescription = attachment.fileName, modifier = Modifier.size(32.dp))
-                ContentDisplayState.ERROR -> Icon(Icons.Filled.ErrorOutline, contentDescription = "Error", modifier = Modifier.size(32.dp), tint = MaterialTheme.colorScheme.error)
-                ContentDisplayState.NOT_DOWNLOADED_WILL_DOWNLOAD_ON_WIFI -> Text(stringResource(R.string.attachment_status_waiting_wifi), style = MaterialTheme.typography.bodySmall)
-                ContentDisplayState.NOT_DOWNLOADED_WILL_DOWNLOAD_WHEN_ONLINE -> Text(stringResource(R.string.attachment_status_waiting_online), style = MaterialTheme.typography.bodySmall)
-                ContentDisplayState.NOT_DOWNLOADED_OFFLINE -> Text(stringResource(R.string.attachment_status_offline), style = MaterialTheme.typography.bodySmall)
-                ContentDisplayState.NOT_DOWNLOADED_PREFERENCE_ON_DEMAND -> Text(stringResource(R.string.attachment_status_on_demand_pref), style = MaterialTheme.typography.bodySmall)
+            AnimatedContent(
+                targetState = displayState,
+                transitionSpec = {
+                    fadeIn(animationSpec = tween(300)) togetherWith fadeOut(animationSpec = tween(300))
+                },
+                label = "AttachmentStateAnimation"
+            ) { targetDisplayState ->
+                when (targetDisplayState) {
+                    ContentDisplayState.LOADING,
+                    ContentDisplayState.DOWNLOADING -> CircularProgressIndicator(modifier = Modifier.size(32.dp))
+                    ContentDisplayState.DOWNLOADED -> Icon(Icons.AutoMirrored.Filled.InsertDriveFile, contentDescription = attachment.fileName, modifier = Modifier.size(32.dp))
+                    ContentDisplayState.ERROR -> {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(Icons.Filled.ErrorOutline, contentDescription = stringResource(id = R.string.cd_error_icon), modifier = Modifier.size(32.dp), tint = MaterialTheme.colorScheme.error)
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(stringResource(R.string.attachment_status_error_retry_short), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                    ContentDisplayState.NOT_DOWNLOADED_WILL_DOWNLOAD_ON_WIFI -> Text(stringResource(R.string.attachment_status_waiting_wifi), style = MaterialTheme.typography.bodySmall, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                    ContentDisplayState.NOT_DOWNLOADED_WILL_DOWNLOAD_WHEN_ONLINE -> Text(stringResource(R.string.attachment_status_waiting_online), style = MaterialTheme.typography.bodySmall, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                    ContentDisplayState.NOT_DOWNLOADED_OFFLINE -> Text(stringResource(R.string.attachment_status_offline), style = MaterialTheme.typography.bodySmall, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                    ContentDisplayState.NOT_DOWNLOADED_PREFERENCE_ON_DEMAND -> Text(stringResource(R.string.attachment_status_on_demand_pref), style = MaterialTheme.typography.bodySmall, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                }
             }
             Spacer(modifier = Modifier.height(8.dp))
             Text(
                 text = attachment.fileName ?: stringResource(R.string.unknown_attachment_name),
                 style = MaterialTheme.typography.bodySmall,
                 maxLines = 2,
-                overflow = TextOverflow.Ellipsis
+                overflow = TextOverflow.Ellipsis,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center
             )
         }
     }

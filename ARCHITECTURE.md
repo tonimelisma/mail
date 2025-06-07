@@ -16,7 +16,7 @@ a focus on modern Android development practices and a robust offline-first archi
 
 * **User Experience:** Provide a seamless, performant, and visually appealing interface that works
   smoothly online and offline. Ensure users have access to a significant portion of their recent
-  mail data even without connectivity.
+  mail data even without connectivity. Download status for message bodies and attachments is clearly indicated with smooth transitions and retry options for errors.
 * **Modern Android Practices:** Leverage Kotlin, Jetpack Compose, Coroutines, Flow, Hilt, Room, and
   WorkManager.
 * **Security:** Ensure secure handling of user credentials and data, particularly OAuth tokens.
@@ -48,7 +48,7 @@ Melisma Mail employs a layered architecture designed for an offline-first experi
 
 * **UI Layer (:mail module, formerly :app):** Responsible for presenting data to the user. Interacts exclusively
   with the local database via ViewModels and Use Cases. Handles user interactions like
-  pull-to-refresh. Contains `SettingsScreen.kt` for user preferences including cache size and download preferences (bodies/attachments). ViewModels like `MessageDetailViewModel` and `ThreadDetailViewModel` utilize `NetworkMonitor` for observing network state, including Wi-Fi connectivity.
+  pull-to-refresh. Contains `SettingsScreen.kt` for user preferences including cache size and download preferences (bodies/attachments). ViewModels like `MessageDetailViewModel` and `ThreadDetailViewModel` utilize `NetworkMonitor` for observing network state, including Wi-Fi connectivity. Download status UIs (e.g., in `MessageDetailScreen.kt`) are polished with clear states, animated transitions, and retry capabilities.
 * **Domain Layer (:domain module):** Contains discrete business logic in the form of Use Cases.
 * **Data Layer (:data module):** Implements repository interfaces. Its primary role is to act as a
   **synchronizer** between network data sources (APIs) and the local database, managing data
@@ -79,9 +79,9 @@ and device resource usage.
 The UI layer utilizes the MVVM pattern.
 
 * **Views (Composables):** Observe state changes from ViewModels and render the UI. They delegate
-  user actions to ViewModels and present sync status/error information.
+  user actions to ViewModels and present sync status/error information. UI for data like message bodies and attachments includes clear download status indicators, smooth transitions (e.g., using `AnimatedContent`), and actionable error states (e.g., retry buttons).
 * **ViewModels (`MainViewModel`):** Prepare and manage UI-related data (state) for the Views, including `currentCacheSizePreference` and `availableCacheSizes`. They delegate all
-  business logic and data operations to Use Cases and manage UI feedback for sync operations, including updating cache preferences via `UserPreferencesRepository`.
+  business logic and data operations to Use Cases and manage UI feedback for sync operations, including updating cache preferences via `UserPreferencesRepository`. ViewModels like `MessageDetailViewModel` also manage detailed content display states (e.g., `ContentDisplayState`) and provide functions for retrying failed downloads.
 * **Models:** Represent the data structures (e.g., Account, Message, MailFolder, `UserPreferences`).
 
 ### **2.4. Domain Layer & Use Cases**
@@ -168,9 +168,9 @@ The application uses a multi-faceted strategy for data synchronization, managed 
 ### **2.10. Error Handling and UX**
 
 * **Transparency:** Clear UI indicators for overall sync status, item-specific sync status (pending,
-  error), and pending actions (e.g., in Outbox).
+  error), and pending actions (e.g., in Outbox). For content downloads (bodies, attachments), error states are clearly presented with options to retry.
 * **Automatic Retries:** For transient network/server issues (5 attempts, exponential backoff).
-* **User Control:** Manual retry option for persistently failed actions.
+* **User Control:** Manual retry option for persistently failed actions, including failed content downloads directly in the message view.
 * **Notifications:**
     * Delayed send notification (non-modal system notification if email unsent \>1hr, background,
       network available).
@@ -185,7 +185,7 @@ The application uses a multi-faceted strategy for data synchronization, managed 
 
 * **Purpose & Scope:** UI, navigation, user interaction handling, display of sync status.
 * **Key Components & Classes:** `MainActivity.kt`, `MainViewModel.kt`, UI Composables (including `SettingsScreen.kt` for
-  sync/cache preferences like `CacheSizePreference` and `DownloadPreference`). ViewModels like `MessageDetailViewModel` and `ThreadDetailViewModel` utilize `NetworkMonitor` (including its `isWifiConnected` Flow) for refined network state observation, moving away from direct `ConnectivityManager` usage.
+  sync/cache preferences like `CacheSizePreference` and `DownloadPreference`, and `MessageDetailScreen.kt` which provides polished UI for message/attachment download states with `AnimatedContent` and retry logic). ViewModels like `MessageDetailViewModel` and `ThreadDetailViewModel` utilize `NetworkMonitor` (including its `isWifiConnected` Flow) for refined network state observation, moving away from direct `ConnectivityManager` usage.
 
 ### **3.2. :core-data Module**
 
@@ -250,9 +250,9 @@ success, triggering initial sync processes.)*
 * **Pattern:** Offline-First MVVM with a domain layer is strictly followed.
 * **ViewModels (androidx.lifecycle.ViewModel):** Scoped to navigation destinations, they hold UI
   state, observe data from Use Cases (sourced from local DB), and manage UI feedback for sync/error
-  states.
+  states. For message details, this includes managing `ContentDisplayState` for bodies/attachments and providing retry mechanisms for downloads.
 * **Views (Jetpack Compose Composables):** Observe StateFlow from ViewModels using
-  collectAsStateWithLifecycle(). Implement pull-to-refresh, display sync status indicators.
+  collectAsStateWithLifecycle(). Implement pull-to-refresh, display sync status indicators, and present content download states with smooth transitions and retry options.
 * **State Management:** Immutable data classes represent screen state.
 * **Navigation:** Jetpack Navigation for Compose is used with routes like home,
   message\_detail/{messageId}, and settings.

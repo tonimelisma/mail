@@ -370,6 +370,42 @@ class MessageDetailViewModel @Inject constructor(
         }
     }
 
+    fun retryMessageBodyDownload() {
+        val currentAccountId = accountId
+        val currentMessageId = messageId
+        if (currentAccountId != null && currentMessageId != null) {
+            Timber.d("ViewModelDBG: Retrying message body download for $currentMessageId")
+            // Set state to DOWNLOADING immediately for responsiveness
+            _uiState.update { it.copy(bodyDisplayState = ContentDisplayState.DOWNLOADING, transientError = null) }
+            enqueueMessageBodyDownloadInternal(currentMessageId, currentAccountId)
+        } else {
+            Timber.w("ViewModelDBG: Cannot retry body download, accountId or messageId is null.")
+        }
+    }
+
+    fun retryAttachmentDownload(attachmentIdToRetry: String) {
+        val currentAccountId = accountId
+        val currentMessageId = messageId
+        val currentMessage = (_uiState.value.messageOverallState as? MessageDetailUIState.Success)?.message
+
+        if (currentAccountId != null && currentMessageId != null && currentMessage != null) {
+            currentMessage.attachments.find { it.id == attachmentIdToRetry }?.let { attachmentToRetry ->
+                Timber.d("ViewModelDBG: Retrying attachment download for ${attachmentToRetry.id} in message $currentMessageId")
+                // Set state to DOWNLOADING immediately for responsiveness
+                _uiState.update { currentState ->
+                    val newStates = currentState.attachmentDisplayStates.toMutableMap()
+                    newStates[attachmentToRetry.id] = ContentDisplayState.DOWNLOADING
+                    currentState.copy(attachmentDisplayStates = newStates, transientError = null)
+                }
+                enqueueAttachmentDownloadInternal(currentMessageId, currentAccountId, attachmentToRetry)
+            } ?: run {
+                Timber.w("ViewModelDBG: Attachment with id $attachmentIdToRetry not found in current message for retry.")
+            }
+        } else {
+            Timber.w("ViewModelDBG: Cannot retry attachment download, missing account/message info or attachment not found.")
+        }
+    }
+
     fun clearTransientError() {
         _uiState.update { it.copy(transientError = null) }
     }

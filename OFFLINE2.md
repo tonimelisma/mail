@@ -398,7 +398,7 @@ action queue.
     * **Objective:** Allow users to choose the time window for initial full sync (e.g., 30, 60, 90 days).
 
 * **REQ-CACHE-003: Selective Offline Download (Attachments/Bodies)**
-    * **Status: FOUNDATION IMPLEMENTED & BUILD STABLE.**
+    * **Status: IMPLEMENTATION COMPLETE, UI POLISHED.**
     * **Objective:** Allow users to configure if message bodies and/or attachments are downloaded automatically or only on demand, based on preferences and network state (including "active view implies demand" rule).
     * **Details:**
         * User preferences for body and attachment downloads (`ALWAYS`, `ON_WIFI`, `ON_DEMAND`) are now configurable via `SettingsScreen` and stored via `UserPreferencesRepository`.
@@ -407,9 +407,10 @@ action queue.
             * Automatically evaluate download needs for message bodies/attachments when a message is viewed, respecting preferences and network state.
             * Trigger `MessageBodyDownloadWorker` or `AttachmentDownloadWorker` as needed.
             * Expose detailed `ContentDisplayState` / `BodyLoadingState` to the UI.
-        * `MessageDetailScreen` and `FullMessageDisplayUnit` display these states (e.g., "Downloading...", "Will download on Wi-Fi") instead of requiring manual download initiation buttons (except for retry on error).
+            * Implement retry mechanisms for failed downloads, observable through `WorkInfo` updates.
+        * `MessageDetailScreen` displays these states (e.g., "Downloading...", "Will download on Wi-Fi", "Error. Tap to retry.") and now uses `AnimatedContent` for smoother transitions between states. Retry functionality is exposed via clickable UI elements in error states.
         * `FolderContentSyncWorker` enqueues body/attachment downloads for newly synced messages according to preferences.
-    * **Next Steps:** Thorough Quality Assurance (QA) testing of all preference combinations and network conditions. UI polish for status messages and transitions. Evaluate if any edge cases in download logic need refinement.
+    * **Next Steps:** Thorough Quality Assurance (QA) testing of all preference combinations and network conditions. Evaluate if any edge cases in download logic need refinement.
 
 * **REQ-SYNC-005: Auto-Refresh Message on View**
     * **Status: Pending (Needs robust implementation and integration).**
@@ -423,7 +424,7 @@ action queue.
 ### Current Build Status: SUCCESSFUL & STABLE (DB Version 15)
 
 The project **builds and compiles successfully**. `SyncEngine` orchestrates initial folder list, key folder content sync, and schedules periodic cache cleanup. Delta synchronization for folders and messages, including handling of server-side deletions, is implemented in the API helpers and integrated into the sync workers. Duplicate folder issues have been resolved, and database schema changes are handled via `fallbackToDestructiveMigration` (current DB version 15). Workers for on-demand actions and body downloads are functional; `MessageBodyDownloadWorker` now records body sizes. The offline action queue is persistent and robust. Message pagination is verified. `UserPreferencesRepository` and `SettingsScreen` now support user-configurable cache size limits and initial sync durations. `CacheCleanupWorker` now uses these settings, more accurately tracks cache usage (including message body sizes), and implements the **refined advanced eviction policy (REQ-CACHE-002) including tiered eviction and exclusion of pending actions**. The `lastAccessedTimestamp` field in `MessageEntity` is updated when message details are viewed.
-**The foundational logic for REQ-CACHE-003 (Selective Offline Download for Attachments/Bodies) is now implemented, including user preferences, ViewModel logic for automatic downloads based on active view and network state (using `NetworkMonitor.isWifiConnected` and removing direct `ConnectivityManager` usage), worker enhancements, and UI display of download states. All related build errors have been resolved.**
+**The foundational logic for REQ-CACHE-003 (Selective Offline Download for Attachments/Bodies) is now implemented, including user preferences, ViewModel logic for automatic downloads based on active view and network state (using `NetworkMonitor.isWifiConnected` and removing direct `ConnectivityManager` usage), worker enhancements, and UI display of download states. All related build errors have been resolved. UI polish for these download states, including retry capabilities and smoother transitions using `AnimatedContent`, has also been completed.**
 
 ### Immediate Priorities:
 

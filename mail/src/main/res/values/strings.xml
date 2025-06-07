@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">Mail</string>
+    <string name="app_name">Melisma Mail</string>
     <string name="app_name_google_account">Melisma Mail (Google)</string>
     <string name="app_name_microsoft_account">Melisma Mail (Microsoft)</string>
     <string name="unknown_user">Unknown User</string>
@@ -49,7 +49,7 @@
     <string name="remove_account_confirm_message">Are you sure you want to remove the account %1$s? You will need to sign in again to access its mail.</string>
     <string name="remove_action">Remove</string>
     <string name="cancel_action">Cancel</string>
-    <string name="cd_navigate_up">Navigate Up</string>
+    <string name="cd_navigate_up">Navigate up</string>
 
     <string name="select_a_folder_to_see_threads">Select a folder to see threads</string>
     <string name="cd_error_loading_threads">Error loading threads icon</string>
@@ -111,7 +111,6 @@
 
     <!-- Added missing strings -->
     <string name="unknown_error">An unknown error occurred.</string>
-    <string name="action_retry">Retry</string>
     <string name="loading_more_messages">Loading more messages...</string>
     <string name="error_loading_more_failed">Failed to load more: %1$s</string>
 
@@ -185,11 +184,16 @@
     <string name="message_body_download_error">Error downloading message body.</string>
     <string name="attachments_title">Attachments</string>
     <string name="attachment_status_waiting_wifi">On Wi-Fi</string>
-    <string name="attachment_status_waiting_online">When Online</string>
+    <string name="attachment_status_waiting_online">Waiting for Online</string>
     <string name="attachment_status_offline">Offline</string>
-    <string name="attachment_status_on_demand_pref">On Demand</string>
+    <string name="attachment_status_on_demand_pref">Tap to download</string>
     <string name="attachment_status_error">Error</string>
 
     <string name="unknown_attachment_name">Unknown Attachment</string>
+
+    <!-- New Strings -->
+    <string name="cd_error_icon">Error Icon</string>
+    <string name="action_retry">Retry</string>
+    <string name="attachment_status_error_retry_short">Error. Tap to retry.</string>
 
 </resources>
