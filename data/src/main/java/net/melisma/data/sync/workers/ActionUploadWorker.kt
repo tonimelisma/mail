@@ -292,75 +292,47 @@ class ActionUploadWorker @AssistedInject constructor(
                 val isReadStr = payload[KEY_IS_READ]
                 val isRead = isReadStr?.toBooleanStrictOrNull()
                 if (isRead == null) {
-                    return kotlin.Result.failure(IllegalArgumentException("Missing or invalid 'isRead' payload for thread action. Value: '$isReadStr'"))
+                    Timber.e("$TAG: Missing or invalid 'isRead' payload for $actionType on thread $threadId. Value: '$isReadStr'")
+                    return kotlin.Result.failure(IllegalArgumentException("Missing or invalid 'isRead' payload for $actionType. Value: '$isReadStr'"))
                 }
-                
-                try {
-                    val messageIds = messageDao.getMessageIdsByThreadId(threadId, accountId)
-                    Timber.d("$TAG: Applying MARK_THREAD_AS_READ=$isRead to ${messageIds.size} messages in thread $threadId")
-                    // This could be optimized into a single batch API call if the service supports it.
-                    // For now, we iterate, and if any fail, the whole action fails.
-                    messageIds.forEach { messageId ->
-                        mailService.markMessageRead(messageId, isRead).getOrThrow()
-                    }
-                    kotlin.Result.success(Unit)
-                } catch (e: Exception) {
-                    Timber.e(e, "$TAG: Failed to mark all messages in thread $threadId as read=$isRead")
-                    kotlin.Result.failure(e)
-                }
+                Timber.d("$TAG: Calling mailService.markThreadRead for thread $threadId, isRead: $isRead")
+                mailService.markThreadRead(threadId, isRead)
             }
             ACTION_DELETE_THREAD -> {
                 val threadId = entityId
-                try {
-                    val messageIds = messageDao.getMessageIdsByThreadId(threadId, accountId)
-                    Timber.d("$TAG: Applying DELETE_THREAD to ${messageIds.size} messages in thread $threadId")
-                    messageIds.forEach { messageId ->
-                        mailService.deleteMessage(messageId).getOrThrow()
-                    }
-                    kotlin.Result.success(Unit)
-                } catch (e: Exception) {
-                    Timber.e(e, "$TAG: Failed to delete all messages in thread $threadId")
-                    kotlin.Result.failure(e)
-                }
+                Timber.d("$TAG: Calling mailService.deleteThread for thread $threadId")
+                mailService.deleteThread(threadId)
             }
             ACTION_MOVE_THREAD -> {
                 val threadId = entityId
-                val newFolderId = payload[KEY_NEW_FOLDER_ID] // This is a local UUID
-                if (newFolderId == null) {
-                    return kotlin.Result.failure(IllegalArgumentException("Missing 'newFolderId' payload for MOVE_THREAD action."))
+                val targetFolderLocalId = payload[KEY_NEW_FOLDER_ID]
+                val sourceFolderLocalId = payload[KEY_OLD_FOLDER_ID]
+
+                if (targetFolderLocalId == null) {
+                    Timber.e("$TAG: Missing '$KEY_NEW_FOLDER_ID' payload for MOVE_THREAD action on thread $threadId.")
+                    return kotlin.Result.failure(IllegalArgumentException("Missing '$KEY_NEW_FOLDER_ID' for MOVE_THREAD"))
+                }
+                if (sourceFolderLocalId == null) {
+                    Timber.e("$TAG: Missing '$KEY_OLD_FOLDER_ID' payload for MOVE_THREAD action on thread $threadId.")
+                    return kotlin.Result.failure(IllegalArgumentException("Missing '$KEY_OLD_FOLDER_ID' for MOVE_THREAD"))
                 }
 
-                try {
-                    val messageIds = messageDao.getMessageIdsByThreadId(threadId, accountId)
-                    Timber.d("$TAG: Applying MOVE_THREAD to ${messageIds.size} messages in thread $threadId, moving to folder $newFolderId")
-                    
-                    // Here, we assume the API service's moveMessage expects the remote messageId and a remote folderId.
-                    // The worker or API helper needs a way to map the local newFolderId (UUID) to a remote folderId.
-                    // Let's assume the API helper layer handles this mapping.
-                    // We also need to know the source folder for each message. This is complex.
-                    // A simpler API might just take a list of message IDs and a destination folder ID.
-                    // Let's proceed with a simplified assumption that the API can handle it with just destination.
-                    // THIS IS A SOFT SPOT: The 'moveMessage' API might need more info (like source folder).
-                    // For now, we will call it for each message. A batch API would be better.
-                    messageIds.forEach { messageId ->
-                        // This call is problematic if moveMessage needs the source folder ID, which we don't have here readily.
-                        // A better implementation would be mailService.moveMessages(messageIds, newFolderId)
-                        // For now, we'll leave this as a known issue to be addressed in the API service layer.
-                        // The existing moveMessage takes (messageId, sourceFolderId, targetFolderId). We can't fulfill this here.
-                        // Let's stub a failure for this action until the API service is updated.
-                        // mailService.moveMessage(messageId, ???, newFolderId).getOrThrow()
-                    }
-                    // For now, let's pretend it works, but log a warning.
-                    Timber.w("$TAG: MOVE_THREAD is not fully implemented. mailService.moveMessage requires a source folder ID which is not available in this context for each message in the thread.")
-                    // To avoid failing the build and to allow other actions to proceed, we will return a temporary success.
-                    // In a real scenario, this should be a failure.
-                    kotlin.Result.success(Unit)
-                    // return kotlin.Result.failure(NotImplementedError("MOVE_THREAD requires API changes to not need a source folder ID per message."))
+                val targetFolderEntity = folderDao.getFolderByIdSuspend(targetFolderLocalId)
+                val sourceFolderEntity = folderDao.getFolderByIdSuspend(sourceFolderLocalId)
 
-                } catch (e: Exception) {
-                    Timber.e(e, "$TAG: Failed to move all messages in thread $threadId")
-                    kotlin.Result.failure(e)
+                if (targetFolderEntity?.remoteId == null) {
+                    val errorMsg = "Target folder (local ID: $targetFolderLocalId) not found or has no remote ID for MOVE_THREAD."
+                    Timber.e("$TAG: $errorMsg")
+                    return kotlin.Result.failure(IllegalStateException(errorMsg))
                 }
+                if (sourceFolderEntity?.remoteId == null) {
+                    val errorMsg = "Source folder (local ID: $sourceFolderLocalId) not found or has no remote ID for MOVE_THREAD."
+                    Timber.e("$TAG: $errorMsg")
+                    return kotlin.Result.failure(IllegalStateException(errorMsg))
+                }
+                
+                Timber.d("$TAG: Calling mailService.moveThread for thread $threadId from remote folder ${sourceFolderEntity.remoteId} to remote folder ${targetFolderEntity.remoteId}")
+                mailService.moveThread(threadId, sourceFolderEntity.remoteId!!, targetFolderEntity.remoteId!!)
             }
             else -> {
                 Timber.e("$TAG: Unknown action type: $actionType for entity $entityId")

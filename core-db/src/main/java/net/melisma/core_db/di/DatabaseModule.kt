@@ -17,10 +17,19 @@ import net.melisma.core_db.dao.MessageDao
 import net.melisma.core_db.dao.PendingActionDao
 import net.melisma.core_db.dao.RemoteKeyDao
 import javax.inject.Singleton
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Module
 @InstallIn(SingletonComponent::class)
 object DatabaseModule {
+
+    // Define the migration from version 14 to 15
+    private val MIGRATION_14_15 = object : Migration(14, 15) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE messages ADD COLUMN isOutbox INTEGER NOT NULL DEFAULT 0")
+        }
+    }
 
     @Provides
     @Singleton
@@ -31,7 +40,12 @@ object DatabaseModule {
             AppDatabase::class.java,
             "melisma_mail.db"
         )
-            .fallbackToDestructiveMigrationFrom(true, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13) // For current version 14, dropAllTables = true
+            // Fallback for versions 1-13 to version 14 (or directly to 15 if preferred and data loss is ok for these old versions)
+            // Since we have a specific 14->15 migration, we want to ensure any older version hits the fallback to get to 14 first,
+            // or if the fallback can go directly to 15 safely.
+            // For simplicity and matching previous behavior for 1-13:
+            .fallbackToDestructiveMigrationFrom(13) // Destructive from 13 and below to current
+            .addMigrations(MIGRATION_14_15) // Add specific migration for 14 to 15
             .build()
     }
 

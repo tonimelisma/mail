@@ -166,13 +166,15 @@ object BackendGoogleModule {
     @Provides
     @Singleton
     fun provideGmailApiHelper(
+        @ApplicationContext context: Context,
         @GoogleHttpClient httpClient: HttpClient,
         googleErrorMapper: GoogleErrorMapper,
         ioDispatcher: CoroutineDispatcher,
         authManager: GoogleAuthManager
     ): GmailApiHelper {
-        Timber.d("Providing GmailApiHelper with all dependencies, including GoogleAuthManager")
+        Timber.d("Providing GmailApiHelper with all dependencies, including GoogleAuthManager and Context")
         return GmailApiHelper(
+            context,
             httpClient,
             googleErrorMapper,
             ioDispatcher,

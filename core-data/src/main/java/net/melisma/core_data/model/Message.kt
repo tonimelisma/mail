@@ -28,6 +28,7 @@ import java.time.OffsetDateTime
  * @property attachments List of attachments associated with the message.
  * @property remoteId Server's unique ID for the message
  * @property lastSuccessfulSyncTimestamp Timestamp of the last successful full sync of this message
+ * @property isOutbox True if the message is locally saved and pending send; false otherwise.
  */
 data class Message(
     val id: String,
@@ -52,7 +53,8 @@ data class Message(
     val timestamp: Long = 0L, // Derived from receivedDateTime, default to 0 or handle parsing in constructor/factory
     val attachments: List<Attachment> = emptyList(),
     val remoteId: String? = null, // Server's unique ID for the message
-    val lastSuccessfulSyncTimestamp: Long? = null // Timestamp of the last successful full sync of this message
+    val lastSuccessfulSyncTimestamp: Long? = null, // Timestamp of the last successful full sync of this message
+    val isOutbox: Boolean = false // Added for outbox functionality
 ) {
     companion object
     // Secondary constructor or init block could parse receivedDateTime to timestamp if needed here
@@ -80,7 +82,8 @@ fun Message.Companion.fromApi(
     hasAttachments: Boolean = false,
     attachments: List<Attachment> = emptyList(),
     remoteId: String? = null, // Added
-    lastSuccessfulSyncTimestamp: Long? = null // Added
+    lastSuccessfulSyncTimestamp: Long? = null, // Added
+    isOutbox: Boolean = false // Added for outbox functionality
 ): Message {
     val derivedTimestamp = try {
         OffsetDateTime.parse(receivedDateTime).toInstant().toEpochMilli()
@@ -108,6 +111,7 @@ fun Message.Companion.fromApi(
         timestamp = derivedTimestamp,
         attachments = attachments,
         remoteId = remoteId, // Added
-        lastSuccessfulSyncTimestamp = lastSuccessfulSyncTimestamp // Added
+        lastSuccessfulSyncTimestamp = lastSuccessfulSyncTimestamp, // Added
+        isOutbox = isOutbox // Added for outbox functionality
     )
 }

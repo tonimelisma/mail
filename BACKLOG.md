@@ -13,7 +13,7 @@
 * **Requirement 1.2 (View Single Message):** As a user, I want to tap on an email in the list to
   view its full content, available offline if cached.
     * **Status: Implemented** (UI/Navigation with offline body access via OFFLINE.MD Phases 1-3,
-      enhanced by Phase 4 policies for body caching and auto-refresh on view REQ-SYNC-005)
+      enhanced by Phase 4 policies for body caching. Foundational work for auto-refresh on view REQ-SYNC-005 **Largely Implemented**.)
 * **Requirement 1.3 (Folder Navigation):** As a user, I want to navigate between different mail
   folders.
     * **Status: Implemented** (Core functionality with offline support via OFFLINE.MD Phases 1-3)
@@ -47,7 +47,7 @@
 * **Requirement 3.2 (Send Email):** As a user, I want to send the composed email, with it being
   added to an Outbox and synced when online.
     * **Status: Implemented** (Offline queuing to Outbox via OFFLINE.MD Phase 2, error handling
-      REQ-ERR-003, REQ-ERR-004)
+      REQ-ERR-003, REQ-ERR-004. **Further refined with `MessageEntity.isOutbox` flag for clearer local state management and robust attachment handling for Gmail during send.**)
 * **Requirement 3.3 (Reply/Reply-All/Forward):** As a user, I want to reply, reply-all, or forward a
   received message, with drafts/sends handled offline.
     * **Status: Implemented** (Leverages compose/send with offline queuing)
@@ -73,7 +73,7 @@
     * **Status: Pending**
 * **Requirement 4.5 (Attach Files):** As a user, I want to easily attach files when composing an
   email.
-    * **Status: Implemented**
+    * **Status: Implemented** (**Gmail send functionality now robustly handles attachments by constructing `multipart/mixed` messages.**)
 
 **EPIC 5: Account & App Foundation (Offline-First Core)** (Underpins everything)
 
@@ -99,11 +99,11 @@
 * Offline & Sync:
     * **Requirement 5.6 (Data Caching \- Non-Functional):** The app should cache data locally (e.g.,
       using Room database) to improve performance and enable offline access, with clear policies.
-        * **Status: Implemented** (Core of OFFLINE.MD plan. Detailed policies including configurable cache size limit REQ-CACHE-001 and the advanced, multi-tiered eviction strategy REQ-CACHE-002 are now fully implemented. Initial sync duration REQ-INIT-001 is now **Implemented**. Foundational work for selective offline download of attachments/bodies REQ-CACHE-003, including user preferences, ViewModel logic for automatic downloads, UI state display, and UI polish (retry mechanisms, animated transitions) is now **Fully Implemented** and build is stable.)
+        * **Status: Implemented** (Core of OFFLINE.MD plan. Detailed policies including configurable cache size limit REQ-CACHE-001 and the advanced, multi-tiered eviction strategy REQ-CACHE-002 are now fully implemented. Initial sync duration REQ-INIT-001 is now **Implemented**. Foundational work for selective offline download of attachments/bodies REQ-CACHE-003, including user preferences, ViewModel logic for automatic downloads, UI state display, and UI polish (retry mechanisms, animated transitions) is now **Fully Implemented** and build is stable. Auto-refresh on view REQ-SYNC-005 is now **Largely Implemented (Foundation in place)**. **`MessageEntity` now includes `isOutbox` flag, integrated into the local data lifecycle for sending messages.**)
     * **Requirement 5.7 (Background Sync \- Functional):** As a user, I want the app to periodically
       check for new emails and sync changes.
         * **Status: Implemented** (SyncEngine and WorkManager from OFFLINE.MD Phases 1 & 3, refined
-          by Phase 4 sync strategies REQ-SYNC series, and now considers REQ-CACHE-003 download preferences for bodies/attachments during sync operations)
+          by Phase 4 sync strategies REQ-SYNC series (including REQ-SYNC-005 for individual message refresh), and now considers REQ-CACHE-003 download preferences for bodies/attachments during sync operations. DI for MailApiService refactored using a factory pattern. **`ActionUploadWorker` now uses direct thread-level API methods where applicable, and API helpers (`GmailApiHelper`, `GraphApiHelper`) have more complete action implementations, including robust attachment sending for Gmail.**)
     * **Requirement 5.X (Transparent Sync Status \- Functional):** Users should have clear
       visibility into sync status and errors.
         * **Status: Implemented** (OFFLINE.MD Phase 3 UI Feedback, enhanced by Phase 4 REQ-ERR
@@ -141,7 +141,7 @@
 
 * **Requirement 6.1 (Move Message):** As a user, I want to move messages between folders, with
   changes queued offline.
-    * **Status: Implemented** (Offline queuing via OFFLINE.MD Phase 2\)
+    * **Status: Implemented** (Offline queuing via OFFLINE.MD Phase 2\. **Action processing further refined with direct thread-level API calls in `ActionUploadWorker` and completed API methods in `GraphApiHelper`.**)
 * **Requirement 6.2 (Advanced Search Filters \- Local & Online):** As a user, I want to search my
   emails using advanced filters, with local FTS search and online fallback/combination.
     * **Status: Planned for Implementation** (Defined in OFFLINE.MD Phase 4, REQ-SRCH series)

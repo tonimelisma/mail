@@ -6,6 +6,10 @@ import io.ktor.client.plugins.ClientRequestException
 import io.ktor.client.request.accept
 import io.ktor.client.request.get
 import io.ktor.client.request.parameter
+import io.ktor.client.request.patch
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
+import io.ktor.client.request.header
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
@@ -16,6 +20,8 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import net.melisma.backend_microsoft.auth.MicrosoftAuthUserCredentials
 import net.melisma.backend_microsoft.di.MicrosoftGraphHttpClient
 import net.melisma.backend_microsoft.errors.MicrosoftErrorMapper
@@ -38,6 +44,7 @@ import java.util.TimeZone
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import io.ktor.http.contentType
 
 
 @Serializable
@@ -121,6 +128,13 @@ data class GraphDeltaItem(
 data class GraphRemovedReason(
     val reason: String? = null // e.g., "deleted" or "changed"
 )
+
+// Add new DTOs for thread operations
+@Serializable
+private data class GraphMessageIdReadStatus(val id: String, val isRead: Boolean?)
+
+@Serializable
+private data class GraphMessageIdOnly(val id: String)
 
 @Singleton
 class GraphApiHelper @Inject constructor(
@@ -394,32 +408,134 @@ class GraphApiHelper @Inject constructor(
         selectFields: List<String>,
         maxResults: Int
     ): Result<List<Message>> = withContext(ioDispatcher) {
-        Timber.w("getMessagesForThread: MS Graph SDK removed. Not implemented with Ktor.")
-        Result.failure(NotImplementedError("getMessagesForThread requires Ktor reimplementation as MS Graph SDK was removed."))
+        Timber.w("getMessagesForThread: Not implemented in this phase. Iterative thread actions will use single message fetches if needed.")
+        Result.failure(NotImplementedError("getMessagesForThread requires Ktor reimplementation."))
     }
 
     override suspend fun getMessageContent(messageId: String): Result<Message> =
         withContext(ioDispatcher) {
-            Timber.w("getMessageContent: MS Graph SDK removed. Not implemented with Ktor.")
-            Result.failure(NotImplementedError("getMessageContent requires Ktor reimplementation as MS Graph SDK was removed."))
+            Timber.d("GraphApiHelper: Fetching full message content for remoteId: $messageId")
+            val accountId = credentialStore.getActiveAccountId()
+                ?: return@withContext Result.failure(ApiServiceException(ErrorDetails(message = "User ID not found for Graph API call", code = "AUTH_NO_ACTIVE_ACCOUNT")))
+
+            try {
+                val response: HttpResponse = httpClient.get("$MS_GRAPH_ROOT_ENDPOINT/me/messages/$messageId") {
+                    url {
+                        parameter("\$select", MESSAGE_FULL_SELECT_FIELDS) // Ensure body is selected
+                    }
+                    accept(ContentType.Application.Json)
+                    header("Prefer", "outlook.body-content-type=\"html\"") // Request HTML body
+                }
+                val responseBodyText = response.bodyAsText()
+
+                if (!response.status.isSuccess()) {
+                    Timber.e("Error fetching message content $messageId: ${response.status} - Body: $responseBodyText")
+                    val httpEx = ClientRequestException(response, responseBodyText)
+                    val mappedDetails = errorMapper.mapExceptionToErrorDetails(httpEx)
+                    return@withContext Result.failure(ApiServiceException(mappedDetails))
+                }
+
+                val ktorGraphMessage = jsonParser.decodeFromString<KtorGraphMessage>(responseBodyText)
+                
+                // For getMessageContent, folderId might not be known. Pass empty string.
+                // Worker should use existing folderId from DB when updating local entity.
+                val domainMessage = mapKtorGraphMessageToDomainMessage(ktorGraphMessage, accountId, "") 
+
+                Timber.i("Successfully fetched and parsed message content $messageId. Subject: ${domainMessage.subject}")
+                Result.success(domainMessage)
+
+            } catch (e: Exception) {
+                Timber.e(e, "Exception fetching message content $messageId from Graph")
+                val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+                Result.failure(ApiServiceException(mappedDetails))
+            }
         }
 
     override suspend fun markMessageRead(messageId: String, isRead: Boolean): Result<Unit> =
         withContext(ioDispatcher) {
-            Timber.w("markMessageRead: MS Graph SDK removed. Not implemented with Ktor.")
-            Result.failure(NotImplementedError("markMessageRead requires Ktor reimplementation as MS Graph SDK was removed."))
+            Timber.d("GraphApiHelper: markMessageRead for messageId: $messageId, isRead: $isRead")
+            try {
+                val requestBody = buildJsonObject {
+                    put("isRead", JsonPrimitive(isRead))
+                }
+
+                val response: HttpResponse = httpClient.patch("$MS_GRAPH_ROOT_ENDPOINT/me/messages/$messageId") {
+                    contentType(ContentType.Application.Json)
+                    setBody(requestBody)
+                }
+
+                if (response.status.isSuccess()) {
+                    Timber.i("Successfully marked message $messageId as isRead=$isRead")
+                    Result.success(Unit)
+                } else {
+                    val errorBody = response.bodyAsText()
+                    Timber.e("Error marking message $messageId as isRead=$isRead: ${response.status} - $errorBody")
+                    val httpEx = ClientRequestException(response, errorBody)
+                    Result.failure(ApiServiceException(errorMapper.mapExceptionToErrorDetails(httpEx)))
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "Exception in markMessageRead for messageId: $messageId")
+                Result.failure(ApiServiceException(errorMapper.mapExceptionToErrorDetails(e)))
+            }
         }
 
     override suspend fun starMessage(messageId: String, isStarred: Boolean): Result<Unit> =
         withContext(ioDispatcher) {
-            Timber.w("starMessage: MS Graph SDK removed. Not implemented with Ktor.")
-            Result.failure(NotImplementedError("starMessage requires Ktor reimplementation as MS Graph SDK was removed."))
+            Timber.d("GraphApiHelper: starMessage for messageId: $messageId, isStarred: $isStarred")
+            try {
+                val flagStatus = if (isStarred) "flagged" else "notFlagged"
+                val requestBody = buildJsonObject {
+                    put("flag", buildJsonObject {
+                        put("flagStatus", JsonPrimitive(flagStatus))
+                    })
+                }
+
+                val response: HttpResponse = httpClient.patch("$MS_GRAPH_ROOT_ENDPOINT/me/messages/$messageId") {
+                    contentType(ContentType.Application.Json)
+                    setBody(requestBody)
+                }
+
+                if (response.status.isSuccess()) {
+                    Timber.i("Successfully starred message $messageId as isStarred=$isStarred (status=$flagStatus)")
+                    Result.success(Unit)
+                } else {
+                    val errorBody = response.bodyAsText()
+                    Timber.e("Error starring message $messageId as isStarred=$isStarred: ${response.status} - $errorBody")
+                    val httpEx = ClientRequestException(response, errorBody)
+                    Result.failure(ApiServiceException(errorMapper.mapExceptionToErrorDetails(httpEx)))
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "Exception in starMessage for messageId: $messageId")
+                Result.failure(ApiServiceException(errorMapper.mapExceptionToErrorDetails(e)))
+            }
         }
 
     override suspend fun deleteMessage(messageId: String): Result<Unit> =
         withContext(ioDispatcher) {
-            Timber.w("deleteMessage: MS Graph SDK removed. Not implemented with Ktor.")
-            Result.failure(NotImplementedError("deleteMessage requires Ktor reimplementation as MS Graph SDK was removed."))
+            Timber.d("GraphApiHelper: deleteMessage for messageId: $messageId")
+            try {
+                val requestBody = buildJsonObject {
+                    put("destinationId", JsonPrimitive("deleteditems"))
+                }
+
+                val response: HttpResponse = httpClient.post("$MS_GRAPH_ROOT_ENDPOINT/me/messages/$messageId/move") {
+                    contentType(ContentType.Application.Json)
+                    setBody(requestBody)
+                }
+                
+                if (response.status.isSuccess()) {
+                    Timber.i("Successfully deleted (moved to deleteditems) message $messageId")
+                    Result.success(Unit)
+                } else {
+                    val errorBody = response.bodyAsText()
+                    Timber.e("Error deleting message $messageId: ${response.status} - $errorBody")
+                    val httpEx = ClientRequestException(response, errorBody)
+                    Result.failure(ApiServiceException(errorMapper.mapExceptionToErrorDetails(httpEx)))
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "Exception in deleteMessage for messageId: $messageId")
+                Result.failure(ApiServiceException(errorMapper.mapExceptionToErrorDetails(e)))
+            }
         }
 
     override suspend fun getMessageDetails(messageId: String): Flow<Message?> = flow {
@@ -430,23 +546,190 @@ class GraphApiHelper @Inject constructor(
     // Stubs for other MailApiService methods from previous steps
     override suspend fun moveMessage(
         messageId: String,
-        currentFolderId: String,
-        destinationFolderId: String
+        currentFolderId: String, // Note: Graph API move doesn't use currentFolderId for the operation itself
+        destinationFolderId: String // This should be the REMOTE ID of the destination folder
     ): Result<Unit> =
-        withContext(ioDispatcher) { Result.failure(NotImplementedError("moveMessage not implemented (SDK removed)")) }
+        withContext(ioDispatcher) {
+            Timber.d("GraphApiHelper: moveMessage for messageId: $messageId to destinationFolderId: $destinationFolderId (current: $currentFolderId noted)")
+            try {
+                val requestBody = buildJsonObject {
+                    put("destinationId", JsonPrimitive(destinationFolderId))
+                }
+
+                val response: HttpResponse = httpClient.post("$MS_GRAPH_ROOT_ENDPOINT/me/messages/$messageId/move") {
+                    contentType(ContentType.Application.Json)
+                    setBody(requestBody)
+                }
+
+                if (response.status.isSuccess()) {
+                    Timber.i("Successfully moved message $messageId to $destinationFolderId")
+                    Result.success(Unit)
+                } else {
+                    val errorBody = response.bodyAsText()
+                    Timber.e("Error moving message $messageId to $destinationFolderId: ${response.status} - $errorBody")
+                    val httpEx = ClientRequestException(response, errorBody)
+                    Result.failure(ApiServiceException(errorMapper.mapExceptionToErrorDetails(httpEx)))
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "Exception in moveMessage for messageId: $messageId")
+                Result.failure(ApiServiceException(errorMapper.mapExceptionToErrorDetails(e)))
+            }
+        }
 
     override suspend fun markThreadRead(threadId: String, isRead: Boolean): Result<Unit> =
-        withContext(ioDispatcher) { Result.failure(NotImplementedError("markThreadRead not implemented (SDK removed)")) }
+        withContext(ioDispatcher) {
+            Timber.d("GraphApiHelper: markThreadRead for threadId: $threadId, isRead: $isRead")
+            try {
+                credentialStore.getActiveAccountId() // Ensure active account
+                    ?: return@withContext Result.failure(ApiServiceException(ErrorDetails(message = "User ID not found for Graph API call", code = "AUTH_NO_ACTIVE_ACCOUNT")))
+
+                val listResponse: HttpResponse = httpClient.get("$MS_GRAPH_ROOT_ENDPOINT/me/messages") {
+                    url {
+                        parameter("\$filter", "conversationId eq '$threadId'")
+                        parameter("\$select", "id,isRead")
+                        parameter("\$top", "250")
+                    }
+                    accept(ContentType.Application.Json)
+                }
+
+                if (!listResponse.status.isSuccess()) {
+                    val errorBody = listResponse.bodyAsText()
+                    Timber.e("Error fetching messages for thread $threadId to mark read: ${listResponse.status} - $errorBody")
+                    return@withContext Result.failure(ApiServiceException(errorMapper.mapExceptionToErrorDetails(ClientRequestException(listResponse, errorBody))))
+                }
+
+                val messagesInThread = listResponse.body<GraphCollection<GraphMessageIdReadStatus>>().value
+                Timber.d("Found ${messagesInThread.size} messages in thread $threadId to potentially update read status.")
+
+                var firstError: Throwable? = null
+                for (msg in messagesInThread) {
+                    if (msg.isRead != isRead) {
+                        val markResult = markMessageRead(msg.id, isRead)
+                        if (markResult.isFailure) {
+                            Timber.e(markResult.exceptionOrNull(), "Failed to mark message ${msg.id} in thread $threadId. Aborting thread operation.")
+                            firstError = markResult.exceptionOrNull() ?: Exception("Unknown error marking message in thread")
+                            break
+                        }
+                    }
+                }
+                
+                return@withContext if (firstError == null) {
+                    Timber.i("Successfully processed markThreadRead for thread $threadId to isRead=$isRead")
+                    Result.success(Unit)
+                } else {
+                    Result.failure(ApiServiceException(errorMapper.mapExceptionToErrorDetails(firstError)))
+                }
+
+            } catch (e: Exception) {
+                Timber.e(e, "Exception in markThreadRead for threadId: $threadId")
+                Result.failure(ApiServiceException(errorMapper.mapExceptionToErrorDetails(e)))
+            }
+        }
 
     override suspend fun deleteThread(threadId: String): Result<Unit> =
-        withContext(ioDispatcher) { Result.failure(NotImplementedError("deleteThread not implemented (SDK removed)")) }
+        withContext(ioDispatcher) {
+            Timber.d("GraphApiHelper: deleteThread for threadId: $threadId")
+            try {
+                credentialStore.getActiveAccountId() 
+                    ?: return@withContext Result.failure(ApiServiceException(ErrorDetails(message = "User ID not found for Graph API call", code = "AUTH_NO_ACTIVE_ACCOUNT")))
+                
+                val listResponse: HttpResponse = httpClient.get("$MS_GRAPH_ROOT_ENDPOINT/me/messages") {
+                    url {
+                        parameter("\$filter", "conversationId eq '$threadId'")
+                        parameter("\$select", "id")
+                        parameter("\$top", "250")
+                    }
+                    accept(ContentType.Application.Json)
+                }
+
+                if (!listResponse.status.isSuccess()) {
+                    val errorBody = listResponse.bodyAsText()
+                    Timber.e("Error fetching messages for thread $threadId to delete: ${listResponse.status} - $errorBody")
+                    return@withContext Result.failure(ApiServiceException(errorMapper.mapExceptionToErrorDetails(ClientRequestException(listResponse, errorBody))))
+                }
+
+                val messagesInThread = listResponse.body<GraphCollection<GraphMessageIdOnly>>().value
+                Timber.d("Found ${messagesInThread.size} messages in thread $threadId to delete.")
+                
+                var firstError: Throwable? = null
+                for (msg in messagesInThread) {
+                    val deleteResult = deleteMessage(msg.id)
+                    if (deleteResult.isFailure) {
+                        Timber.e(deleteResult.exceptionOrNull(), "Failed to delete message ${msg.id} in thread $threadId. Aborting thread operation.")
+                        firstError = deleteResult.exceptionOrNull() ?: Exception("Unknown error deleting message in thread")
+                        break
+                    }
+                }
+                
+                return@withContext if (firstError == null) {
+                    Timber.i("Successfully processed deleteThread for thread $threadId")
+                    Result.success(Unit)
+                } else {
+                    Result.failure(ApiServiceException(errorMapper.mapExceptionToErrorDetails(firstError)))
+                }
+
+            } catch (e: Exception) {
+                Timber.e(e, "Exception in deleteThread for threadId: $threadId")
+                Result.failure(ApiServiceException(errorMapper.mapExceptionToErrorDetails(e)))
+            }
+        }
 
     override suspend fun moveThread(
         threadId: String,
-        currentFolderId: String,
-        destinationFolderId: String
+        currentFolderId: String, // Remote ID
+        destinationFolderId: String // Remote ID
     ): Result<Unit> =
-        withContext(ioDispatcher) { Result.failure(NotImplementedError("moveThread not implemented (SDK removed)")) }
+        withContext(ioDispatcher) {
+            Timber.d("GraphApiHelper: moveThread for threadId: $threadId from $currentFolderId to $destinationFolderId")
+            try {
+                credentialStore.getActiveAccountId()
+                    ?: return@withContext Result.failure(ApiServiceException(ErrorDetails(message = "User ID not found for Graph API call", code = "AUTH_NO_ACTIVE_ACCOUNT")))
+
+                val listResponse: HttpResponse = httpClient.get("$MS_GRAPH_ROOT_ENDPOINT/me/messages") {
+                    url {
+                        parameter("\$filter", "conversationId eq '$threadId' and parentFolderId eq '$currentFolderId'")
+                        parameter("\$select", "id")
+                        parameter("\$top", "250")
+                    }
+                    accept(ContentType.Application.Json)
+                }
+
+                if (!listResponse.status.isSuccess()) {
+                    val errorBody = listResponse.bodyAsText()
+                    Timber.e("Error fetching messages for thread $threadId in folder $currentFolderId to move: ${listResponse.status} - $errorBody")
+                    return@withContext Result.failure(ApiServiceException(errorMapper.mapExceptionToErrorDetails(ClientRequestException(listResponse, errorBody))))
+                }
+                
+                val messagesInThreadAndFolder = listResponse.body<GraphCollection<GraphMessageIdOnly>>().value
+                Timber.d("Found ${messagesInThreadAndFolder.size} messages in thread $threadId and folder $currentFolderId to move to $destinationFolderId.")
+
+                if (messagesInThreadAndFolder.isEmpty()){
+                    Timber.i("No messages found matching criteria for moveThread operation. Thread: $threadId, Source Folder: $currentFolderId. Considering successful.")
+                    return@withContext Result.success(Unit)
+                }
+
+                var firstError: Throwable? = null
+                for (msg in messagesInThreadAndFolder) {
+                    val moveResult = moveMessage(msg.id, currentFolderId, destinationFolderId)
+                    if (moveResult.isFailure) {
+                        Timber.e(moveResult.exceptionOrNull(), "Failed to move message ${msg.id} in thread $threadId. Aborting thread operation.")
+                        firstError = moveResult.exceptionOrNull() ?: Exception("Unknown error moving message in thread")
+                        break
+                    }
+                }
+                
+                return@withContext if (firstError == null) {
+                    Timber.i("Successfully processed moveThread for thread $threadId to $destinationFolderId")
+                    Result.success(Unit)
+                } else {
+                    Result.failure(ApiServiceException(errorMapper.mapExceptionToErrorDetails(firstError)))
+                }
+
+            } catch (e: Exception) {
+                Timber.e(e, "Exception in moveThread for threadId: $threadId")
+                Result.failure(ApiServiceException(errorMapper.mapExceptionToErrorDetails(e)))
+            }
+        }
 
     override suspend fun getMessageAttachments(messageId: String): Result<List<net.melisma.core_data.model.Attachment>> =
         withContext(ioDispatcher) { Result.failure(NotImplementedError("getMessageAttachments not implemented (SDK removed)")) }

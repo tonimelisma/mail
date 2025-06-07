@@ -32,7 +32,7 @@ import net.melisma.core_db.entity.RemoteKeyEntity
         RemoteKeyEntity::class,
         PendingActionEntity::class
     ],
-    version = 14,
+    version = 15,
     exportSchema = false // Set to true for production apps for schema migration history
 )
 @TypeConverters(

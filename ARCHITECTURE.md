@@ -1,7 +1,7 @@
 # **Melisma Mail \- Architectural Design & Developer Guide**
 
-Version: 2.3 (Offline-First Enhancements)  
-Date: July 1, 2025
+Version: 2.4 (Sync Refinements & DI Enhancements)
+Date: July 2, 2025
 
 ## **1\. Introduction & Project Vision**
 
@@ -32,7 +32,7 @@ a focus on modern Android development practices and a robust offline-first archi
 * **Local Storage:** Room (with FTS for local search, and `lastAccessedTimestamp`, `MessageBodyEntity.sizeInBytes`, `AttachmentEntity.size` for intelligent caching and accurate size tracking)
 * **Background Processing:** WorkManager
 * **Asynchronous Programming:** Kotlin Coroutines & Flow
-* **Dependency Injection:** Hilt
+* **Dependency Injection:** Hilt (utilizing factory patterns for dynamic provider selection, e.g., `MailApiServiceFactory`)
 * **Networking:** Ktor (with OkHttp engine)
 * **Authentication:**
     * Google: AppAuth for Android (orchestrated by GoogleAuthManager) for OAuth 2.0 authorization
@@ -48,25 +48,25 @@ Melisma Mail employs a layered architecture designed for an offline-first experi
 
 * **UI Layer (:mail module, formerly :app):** Responsible for presenting data to the user. Interacts exclusively
   with the local database via ViewModels and Use Cases. Handles user interactions like
-  pull-to-refresh. Contains `SettingsScreen.kt` for user preferences including cache size and download preferences (bodies/attachments). ViewModels like `MessageDetailViewModel` and `ThreadDetailViewModel` utilize `NetworkMonitor` for observing network state, including Wi-Fi connectivity. Download status UIs (e.g., in `MessageDetailScreen.kt`) are polished with clear states, animated transitions, and retry capabilities.
+  pull-to-refresh. Contains `SettingsScreen.kt` for user preferences including cache size and download preferences (bodies/attachments). ViewModels like `MessageDetailViewModel` and `ThreadDetailViewModel` utilize `NetworkMonitor` for observing network state, including Wi-Fi connectivity, and `SyncEngine` for triggering message refreshes. Download status UIs (e.g., in `MessageDetailScreen.kt`) are polished with clear states, animated transitions, and retry capabilities.
 * **Domain Layer (:domain module):** Contains discrete business logic in the form of Use Cases.
 * **Data Layer (:data module):** Implements repository interfaces. Its primary role is to act as a
   **synchronizer** between network data sources (APIs) and the local database, managing data
   fetching, caching (initial sync, delta sync, respecting user download preferences for bodies/attachments), action queuing, and local search. Orchestrated by a
-  `SyncEngine`. Includes `UserPreferencesRepository` for managing user settings like cache limits and download preferences, and workers like `MessageBodyDownloadWorker` (calculates body size, respects preferences) and `AttachmentDownloadWorker` (respects preferences), and `CacheCleanupWorker` (uses preferences and accurate sizing).
+  `SyncEngine`. Includes `UserPreferencesRepository` for managing user settings like cache limits and download preferences, workers like `MessageBodyDownloadWorker` (calculates body size, respects preferences), `AttachmentDownloadWorker` (respects preferences), `CacheCleanupWorker` (uses preferences and accurate sizing), and `SingleMessageSyncWorker` (for individual message refreshes). Contains Hilt modules for providing dependencies, including factories like `MailApiServiceFactory`.
 * **Database Layer (:core-db module):** Defines the Room database schema, entities (with sync
   metadata like SyncStatus, lastSuccessfulSyncTimestamp, lastAccessedTimestamp, `MessageBodyEntity.sizeInBytes`, and FTS
-  capabilities), and Data Access Objects (DAOs). Current DB version is 15.
+  capabilities), and Data Access Objects (DAOs). `MessageBodyDao` includes methods for fine-grained sync status updates (e.g., `updateSyncStatusAndError`). Current DB version is 15.
 * **Backend/Provider Layer (:backend-google, :backend-microsoft modules):** Handles all
-  provider-specific API communication, including support for delta queries.
-* **Contracts Layer (:core-data module):** Defines interfaces and data models for the application, including `CacheSizePreference` and `DownloadPreference` enums.
+  provider-specific API communication, including support for delta queries and fetching full individual messages via methods like `getMessage(messageRemoteId)`.
+* **Contracts Layer (:core-data module):** Defines interfaces and data models for the application, including `CacheSizePreference`, `DownloadPreference`, and factory interfaces like `MailApiServiceFactory`.
 
 ### **2.2. Offline-First and Single Source of Truth**
 
 The application is architected to be "offline-first". The UI layer is completely decoupled from the
 network. It observes Flows directly from the Room database DAOs. All user mutations (deleting,
 marking as read, sending) are applied to the local database first (optimistic updates), then queued
-for synchronization with the server. The local database, defined in :core-db, is the **single source
+for synchronization with the server. For sending messages, this involves creating a local `MessageEntity` marked with `isOutbox = true`. The local database, defined in :core-db, is the **single source
 of truth** for the entire application state. Key entities like folders (`FolderEntity`) are
 identified internally by a consistent local UUID primary key, with functional types (e.g., Inbox,
 Drafts) managed by a dedicated `wellKnownType: WellKnownFolderType` enum, ensuring robust and
@@ -103,7 +103,11 @@ reusability, and faster build times.
 
 ### **2.7. Dependency Injection (Hilt)**
 
-Hilt is used for managing dependencies throughout the application.
+Hilt is used for managing dependencies throughout the application. For scenarios requiring dynamic
+selection of provider-specific implementations (e.g., choosing between `GmailApiHelper` and
+`GraphApiHelper` for `MailApiService`), a factory pattern (e.g., `MailApiServiceFactory` injected
+into workers like `SingleMessageSyncWorker`) is employed to centralize this logic and keep dependent
+classes cleaner and more focused.
 
 ### **2.8. Asynchronous Operations & Sync Strategy**
 
@@ -125,8 +129,8 @@ The application uses a multi-faceted strategy for data synchronization, managed 
       configurable) and hasn't been recently checked by general foreground polling, the SyncEngine
       initiates a sync for that specific folder.
     * **Individual Message Refresh:** When an individual email is opened for viewing, if online, the
-      app automatically attempts to silently refresh that message's content (via SyncEngine) if it's
-      potentially stale.
+      app automatically attempts to silently refresh that message's content (via `SyncEngine` enqueuing `SingleMessageSyncWorker`) if it's
+      potentially stale (e.g., older than 5 minutes since last full sync or specific local criteria).
     * **Pull-to-Refresh:** User-initiated pull-to-refresh on message lists triggers an immediate,
       high-priority sync request to the SyncEngine for the current folder.
 4. **Delta Synchronization:** All sync operations (after initial) aim to fetch only changes (new
@@ -135,7 +139,7 @@ The application uses a multi-faceted strategy for data synchronization, managed 
    REQ-SYNC-006) to keep the local cache consistent.
 5. **Action Sync (ActionUploadWorker):** User-initiated actions are queued and processed by a
    dedicated WorkManager worker. It attempts to sync the action with the server, with automatic
-   retries (5 attempts, exponential backoff: 1m, 5m, 15m, 30m, 1hr). Failed actions are clearly
+   retries (5 attempts, exponential backoff: 1m, 5m, 15m, 30m, 1hr). **This worker now calls direct thread-level API methods where appropriate (e.g., for marking a thread read, deleting a thread) for greater efficiency. For `ACTION_SEND_MESSAGE`, it processes the `MessageDraft` from the payload, relying on the `MailApiService` to handle the actual sending (which for Gmail now includes robust `multipart/mixed` attachment handling) and then deletes the local `isOutbox = true` message upon success.** Failed actions are clearly
    indicated in the UI (e.g., Outbox) with manual retry options.
 6. **Future Vision (Pub/Sub):** Evolve to a direct-to-client connection model where supported (
    Google Cloud Pub/Sub for Gmail, IMAP IDLE). For providers like Microsoft Graph that do not
@@ -153,6 +157,7 @@ The application uses a multi-faceted strategy for data synchronization, managed 
     * **Exclusions:**
         *   Items with a `syncStatus` indicating a pending upload or download.
         *   Messages associated with an active `PendingActionEntity` (status PENDING or RETRY).
+        *   Messages marked as `isOutbox = true` (i.e., pending send).
         *   Messages (including their bodies and attachments) whose `lastAccessedTimestamp` is within the last 90 days.
     * **Priority:** If cache exceeds limit, evict to 80% of limit, applying the following tiered logic:
         1.  **Tier 1 (Old Messages):** Target messages whose own `timestamp` (creation/reception date) is older than 90 days.
@@ -197,8 +202,8 @@ The application uses a multi-faceted strategy for data synchronization, managed 
 
 * **Purpose & Scope:** Implements repository interfaces. Orchestrates data synchronization via
   `SyncEngine`, WorkManager workers (`InitialAccountSyncWorker`, `FolderContentSyncWorker`,
-  `ActionUploadWorker`, `CacheCleanupWorker`, `MessageBodyDownloadWorker`, `AttachmentDownloadWorker`), manages delta sync, local search queries. `FolderContentSyncWorker`, `MessageBodyDownloadWorker`, and `AttachmentDownloadWorker` all respect user-configured `DownloadPreference` settings.
-* **Key Components & Classes:** `Default...Repository` implementations, `SyncEngine.kt`, `UserPreferencesRepository.kt`, `CacheCleanupWorker.kt`, `MessageBodyDownloadWorker.kt`, `AttachmentDownloadWorker.kt`.
+  `ActionUploadWorker`, `CacheCleanupWorker`, `MessageBodyDownloadWorker`, `AttachmentDownloadWorker`, `SingleMessageSyncWorker`), manages delta sync, local search queries. `FolderContentSyncWorker`, `MessageBodyDownloadWorker`, and `AttachmentDownloadWorker` all respect user-configured `DownloadPreference` settings.
+* **Key Components & Classes:** `Default...Repository` implementations (e.g., `DefaultMessageRepository` now handles creating local `isOutbox = true` messages for sending), `SyncEngine.kt`, `UserPreferencesRepository.kt`, `CacheCleanupWorker.kt`, `MessageBodyDownloadWorker.kt`, `AttachmentDownloadWorker.kt`, `SingleMessageSyncWorker.kt`, `MailApiServiceFactoryImpl.kt`, `di/FactoryModule.kt`.
 
 ### **3.4. :core-db Module**
 
@@ -206,19 +211,19 @@ The application uses a multi-faceted strategy for data synchronization, managed 
   `lastAccessedTimestamp`, `MessageBodyEntity.sizeInBytes`, etc.), DAOs, FTS tables for messages. Database version is 15.
 * **Key Components & Classes:** `AppDatabase.kt`, Entity classes (e.g., `FolderEntity` now uses a
   local UUID `id` as its primary key and includes a `wellKnownType: WellKnownFolderType` enum to
-  identify its functional type, replacing the previous string-based `type` and mixed PK strategy; `MessageBodyEntity` now includes `sizeInBytes`), DAO interfaces (`MessageBodyDao` includes `getAllMessageBodies()`).
+  identify its functional type, replacing the previous string-based `type` and mixed PK strategy; `MessageBodyEntity` now includes `sizeInBytes`; `MessageEntity` now includes `isOutbox: Boolean`), DAO interfaces (`MessageBodyDao` includes `getAllMessageBodies()` and specific error update methods like `updateSyncStatusAndError`).
 
 ### **3.5. :backend-microsoft Module**
 
 * **Purpose & Scope:** Microsoft/Outlook specific logic, MSAL, Microsoft Graph API (including delta
   queries).
-* **Key Components & Classes:** MicrosoftAuthManager.kt, GraphApiHelper.kt.
+* **Key Components & Classes:** MicrosoftAuthManager.kt, GraphApiHelper.kt (now with full Ktor-based implementations for `getMessageContent`, `markMessageRead`, `starMessage`, `deleteMessage`, `moveMessage`, and corresponding thread-level actions).
 
 ### **3.6. :backend-google Module**
 
 * **Purpose & Scope:** Google/Gmail specific logic, AppAuth, Gmail API (including historyId for
   delta sync).
-* **Key Components & Classes:** GoogleAuthManager.kt, GmailApiHelper.kt.
+* **Key Components & Classes:** GoogleAuthManager.kt, GmailApiHelper.kt (now with robust `multipart/mixed` attachment handling for sending messages).
 
 ## **4\. Detailed Authentication & Authorization Flows**
 
@@ -286,7 +291,7 @@ success, triggering initial sync processes.)*
 ## **8\. Setup, Build, and Development Environment**
 
 * **Prerequisites:** Latest stable Android Studio, SDK, JDK.
-* **Project Setup:** Clone repo, sync Gradle, configure client IDs in auth\_config\_msal.json and
+* **Project Setup:** Clone repo, sync Gradle, configure client IDs in auth\_config_msal.json and
   build.gradle.kts.
 * **Build Commands:** ./gradlew build, ./gradlew testDebugUnitTest, etc.
 * **Development Guidance:** Follow standard Git flow, use Timber for logging. Pay close attention to

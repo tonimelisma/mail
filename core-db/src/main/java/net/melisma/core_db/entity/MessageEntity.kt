@@ -37,7 +37,7 @@ data class MessageEntity(
     val threadId: String?,
     val subject: String?,
     val snippet: String?, // Corresponds to bodyPreview
-    val body: String?, // Full body, stored separately in MessageBodyEntity but can be denormalized here for simplicity
+    val body: String? = null, // Full body, only populated on demand or for drafts/outbox
     val senderName: String?,
     val senderAddress: String?,
     val recipientNames: List<String>?, // Needs TypeConverter
@@ -45,14 +45,14 @@ data class MessageEntity(
     val timestamp: Long, // Unix timestamp, UTC, derived from receivedDateTime
     val sentTimestamp: Long?, // Unix timestamp, UTC, derived from sentDateTime. Added for alignment.
     val isRead: Boolean,
-    val isStarred: Boolean, // Assuming this will be handled
-    val hasAttachments: Boolean, // Assuming this will be handled
+    val isStarred: Boolean = false,
+    val hasAttachments: Boolean = false,
     val isLocallyDeleted: Boolean = false, // Added for optimistic deletion
     // val needsSync: Boolean = false, // Replaced by syncStatus
     val lastSyncError: String? = null, // Reused for sync metadata
     // Draft and Outbox support
     val isDraft: Boolean = false,
-    val isOutbox: Boolean = false,
+    val isOutbox: Boolean = false, // Added for outbox functionality
     val draftType: String? = null, // "NEW", "REPLY", "FORWARD"
     val draftParentId: String? = null, // For reply/forward chains
     val sendAttempts: Int = 0,

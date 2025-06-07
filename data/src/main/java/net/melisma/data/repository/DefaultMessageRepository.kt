@@ -433,17 +433,81 @@ class DefaultMessageRepository @Inject constructor(
     }
 
     override suspend fun sendMessage(draft: MessageDraft, account: Account): Result<String> = withContext(ioDispatcher) {
-        val tempSentMessageId = "local-sent-${UUID.randomUUID()}"
+        val newLocalMessageId = UUID.randomUUID().toString()
+
+        val sentFolder = folderDao.getFolderByWellKnownTypeSuspend(account.id, WellKnownFolderType.SENT_ITEMS)
+        if (sentFolder == null) {
+            Timber.e("$TAG: sendMessage - Sent Items folder not found for account ${account.id}. Cannot save outbox message.")
+            return@withContext Result.failure(IllegalStateException("Sent Items folder not found for account ${account.id}"))
+        }
+
+        // Consolidate recipients for the entity
+        val allRecipients = draft.to + draft.cc + draft.bcc
+        val recipientAddresses = allRecipients.map { it.emailAddress }
+        val recipientNames = allRecipients.mapNotNull { it.displayName }.filter { it.isNotBlank() }
+
+        val outboxMessageEntity = MessageEntity(
+            id = newLocalMessageId,
+            messageId = null, // No remote ID yet
+            accountId = account.id,
+            folderId = sentFolder.id, // Associate with local Sent Items folder
+            threadId = draft.inReplyTo, // Use inReplyTo for threadId
+            subject = draft.subject,
+            snippet = draft.body.take(255),
+            body = draft.body, // Full body for outbox item
+            senderName = account.displayName ?: account.emailAddress,
+            senderAddress = account.emailAddress,
+            recipientAddresses = recipientAddresses,
+            recipientNames = recipientNames.ifEmpty { null },
+            timestamp = System.currentTimeMillis(), // Creation time
+            sentTimestamp = null, // Not yet sent
+            isRead = true, // Usually, messages you send are marked read for you
+            isStarred = false,
+            hasAttachments = draft.attachments.isNotEmpty(),
+            isDraft = false, // Not a draft anymore
+            isOutbox = true // This is an outbox message
+        )
+
+        val attachmentEntities = draft.attachments.mapNotNull { att ->
+            // Assuming MessageDraft.Attachment has enough info to create AttachmentEntity
+            // We need a local URI if the attachment is already prepared, or plan for upload
+            // For now, map basic info. ActionUploadWorker will need to handle upload from local URI if present.
+            AttachmentEntity(
+                attachmentId = att.id, // Should be a local unique ID for the draft attachment
+                messageId = newLocalMessageId, // Link to the outbox message
+                fileName = att.fileName,
+                mimeType = att.contentType,
+                size = att.size,
+                isInline = att.isInline,
+                contentId = att.contentId,
+                localFilePath = att.localUri, // Crucial for ActionUploadWorker to find and upload
+                isDownloaded = att.localUri != null, // If localUri is present, it implies it's "downloaded"/available locally
+                downloadTimestamp = if (att.localUri != null) System.currentTimeMillis() else null,
+                syncStatus = SyncStatus.IDLE, // Will be processed by ActionUploadWorker
+                lastSyncError = null
+            )
+        }
+
+        appDatabase.withTransaction {
+            messageDao.insertOrUpdateMessages(listOf(outboxMessageEntity))
+            if (attachmentEntities.isNotEmpty()) {
+                attachmentDao.insertAttachments(attachmentEntities)
+            }
+        }
+        Timber.d("$TAG: Saved message $newLocalMessageId to local outbox (Sent Items folder association). Attachments: ${attachmentEntities.size}")
 
         syncEngine.queueAction(
             account.id,
-            tempSentMessageId,
+            newLocalMessageId, // Entity ID is the ID of our new outbox MessageEntity
             ActionUploadWorker.ACTION_SEND_MESSAGE,
             mapOf(
+                // Send the original draft details; ActionUploadWorker is already equipped to handle this
                 ActionUploadWorker.KEY_DRAFT_DETAILS to Json.encodeToString(draft)
             )
         )
-        Result.success(tempSentMessageId)
+        Timber.d("$TAG: Queued ACTION_SEND_MESSAGE for outbox message $newLocalMessageId")
+
+        Result.success(newLocalMessageId) // Return the ID of the locally saved outbox message
     }
 
     override fun searchMessages(

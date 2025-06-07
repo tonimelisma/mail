@@ -98,6 +98,7 @@ fun MessageEntity.toDomainModel(): Message {
         hasAttachments = this.hasAttachments,
         timestamp = this.timestamp,
         attachments = emptyList(),
-        lastSuccessfulSyncTimestamp = this.lastSuccessfulSyncTimestamp
+        lastSuccessfulSyncTimestamp = this.lastSuccessfulSyncTimestamp,
+        isOutbox = this.isOutbox
     )
 } 

@@ -56,6 +56,9 @@ import java.util.Locale
 import java.util.TimeZone
 import javax.inject.Inject
 import javax.inject.Singleton
+import android.content.Context
+import android.net.Uri
+import dagger.hilt.android.qualifiers.ApplicationContext
 
 // Data classes for Gmail Profile and History API
 @kotlinx.serialization.Serializable
@@ -110,6 +113,7 @@ data class GmailMessageIdOnly(
 
 @Singleton
 class GmailApiHelper @Inject constructor(
+    @ApplicationContext private val context: Context, // Added ApplicationContext
     @GoogleHttpClient private val httpClient: HttpClient,
     private val errorMapper: ErrorMapperService,
     private val ioDispatcher: CoroutineDispatcher,
@@ -1605,35 +1609,78 @@ class GmailApiHelper @Inject constructor(
 
     private fun buildRfc2822Message(draft: net.melisma.core_data.model.MessageDraft): String {
         val message = StringBuilder()
-        // Standard headers
-        message.append(
-            "Date: ${
-                SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss Z", Locale.US).format(
-                    Date()
-                )
-            }\r\n"
-        ) // Add Date header
-        message.append("MIME-Version: 1.0\r\n") // Standard MIME header
+        val boundary = "----=_Part_${System.nanoTime()}" // Unique boundary
 
+        // Standard headers
+        message.append("Date: ${
+            SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss Z", Locale.US).format(
+                Date()
+            )
+        }\r\n")
+        message.append("MIME-Version: 1.0\r\n")
         message.append("To: ${formatEmailAddressesRfc2822(draft.to)}\r\n")
         if (draft.cc.isNotEmpty()) message.append("Cc: ${formatEmailAddressesRfc2822(draft.cc)}\r\n")
         if (draft.bcc.isNotEmpty()) message.append("Bcc: ${formatEmailAddressesRfc2822(draft.bcc)}\r\n")
-        // From header will be set by Gmail based on authenticated user.
-        // draft.from is not part of MessageDraft, which is correct.
-        message.append("Subject: ${draft.subject}\r\n") // Ensure subject is not null, MessageDraft defaults to ""
+        message.append("Subject: ${draft.subject}\r\n")
 
-        // For simplicity, assuming body is HTML. A more robust solution would check draft.bodyContentType
-        // This simplified version doesn't handle attachments via raw RFC2822.
-        // That would require a multipart/mixed structure.
-        message.append("Content-Type: text/html; charset=utf-8\r\n")
-        message.append("Content-Transfer-Encoding: base64\r\n") // Gmail often expects body to be base64 encoded for raw.
-        message.append("\r\n")
-        message.append(
-            Base64.encodeToString(
-                draft.body.toByteArray(Charsets.UTF_8),
-                Base64.NO_WRAP
+        if (draft.attachments.filter { !it.localUri.isNullOrBlank() }.isEmpty()) {
+            // No attachments, send as simple text/html
+            message.append("Content-Type: text/html; charset=utf-8\r\n")
+            message.append("Content-Transfer-Encoding: base64\r\n")
+            message.append("\r\n")
+            message.append(
+                Base64.encodeToString(
+                    draft.body.toByteArray(Charsets.UTF_8),
+                    Base64.NO_WRAP
+                )
             )
-        ) // Encode body to Base64
+        } else {
+            // Has attachments, build multipart/mixed
+            message.append("Content-Type: multipart/mixed; boundary=\"$boundary\"\r\n")
+            message.append("\r\n") // End of headers, start of multipart body
+
+            // Part 1: The main message body (as multipart/alternative if needed, or simple text/html)
+            // For simplicity, let's assume draft.body is HTML. A real app might offer plain text too.
+            message.append("--$boundary\r\n")
+            // Ideally, this part would be multipart/alternative with text/plain and text/html
+            // For now, directly adding the HTML body part.
+            message.append("Content-Type: text/html; charset=utf-8\r\n")
+            message.append("Content-Transfer-Encoding: base64\r\n")
+            message.append("\r\n")
+            message.append(Base64.encodeToString(draft.body.toByteArray(Charsets.UTF_8), Base64.NO_WRAP))
+            message.append("\r\n")
+
+            // Part 2 onwards: Attachments
+            draft.attachments.forEach { attachment ->
+                if (!attachment.localUri.isNullOrBlank()) {
+                    try {
+                        val attachmentUri = Uri.parse(attachment.localUri)
+                        val contentResolver = context.contentResolver
+                        val attachmentBytes = contentResolver.openInputStream(attachmentUri)?.use { it.readBytes() }
+
+                        if (attachmentBytes != null) {
+                            message.append("--$boundary\r\n")
+                            message.append("Content-Type: ${attachment.contentType ?: "application/octet-stream"}\r\n")
+                            message.append("Content-Transfer-Encoding: base64\r\n")
+                            message.append("Content-Disposition: attachment; filename=\"${attachment.fileName ?: "attachment"}\"\r\n")
+                            if (!attachment.contentId.isNullOrBlank()){ // For inline attachments
+                                message.append("Content-ID: <${attachment.contentId}>\r\n")
+                            }
+                            message.append("\r\n")
+                            message.append(Base64.encodeToString(attachmentBytes, Base64.NO_WRAP))
+                            message.append("\r\n")
+                        } else {
+                            Timber.w("Could not read attachment bytes for URI: ${attachment.localUri}")
+                        }
+                    } catch (e: Exception) {
+                        Timber.e(e, "Error processing attachment URI: ${attachment.localUri}")
+                        // Optionally, skip this attachment or fail the send
+                    }
+                }
+            }
+            // End of multipart message
+            message.append("--$boundary--\r\n")
+        }
         return message.toString()
     }
 

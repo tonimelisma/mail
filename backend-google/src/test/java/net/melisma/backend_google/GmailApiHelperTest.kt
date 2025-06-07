@@ -35,6 +35,7 @@ import org.junit.BeforeClass
 import org.junit.Test
 import timber.log.Timber
 import java.io.IOException
+import android.content.Context
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class GmailApiHelperTest {
@@ -47,6 +48,7 @@ class GmailApiHelperTest {
     // New mocks for dependencies
     private lateinit var mockIoDispatcher: CoroutineDispatcher
     private lateinit var mockAuthManager: GoogleAuthManager
+    private lateinit var mockContext: Context
 
     // To hold request handlers for different scenarios in a test
     private var requestHandler: suspend MockRequestHandleScope.(HttpRequestData) -> HttpResponseData =
@@ -215,6 +217,7 @@ class GmailApiHelperTest {
         // Initialize new mocks
         mockIoDispatcher = Dispatchers.Unconfined // Or TestCoroutineDispatcher()
         mockAuthManager = mockk<GoogleAuthManager>(relaxed = true)
+        mockContext = mockk<Context>(relaxed = true)
 
         coEvery { mockErrorMapper.mapExceptionToErrorDetails(any()) } answers {
             val exception = arg<Exception>(0)
@@ -233,6 +236,7 @@ class GmailApiHelperTest {
 
         // Updated instantiation of GmailApiHelper
         gmailApiHelper = GmailApiHelper(
+            context = mockContext,
             httpClient = mockHttpClient,
             errorMapper = mockErrorMapper,
             ioDispatcher = mockIoDispatcher,
