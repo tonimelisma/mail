@@ -1,17 +1,24 @@
 package net.melisma.mail.ui.threaddetail
 
 import android.webkit.WebView
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -32,19 +39,15 @@ import java.time.format.FormatStyle
 @Composable
 fun FullMessageDisplayUnit(
     item: ThreadMessageItem,
-    isExpandedInitially: Boolean = false, // To control if body is shown or needs a click
     onRequestLoadBody: (messageId: String) -> Unit,
+    isExpandedInitially: Boolean,
     modifier: Modifier = Modifier
 ) {
     val message = item.message
     LocalContext.current
 
-    // Trigger body load if it's NotLoadedYet and this unit is meant to be initially expanded
-    // (e.g., for the first/latest message, or if all are expanded by default)
-    // For now, let's assume we always try to load if NotLoadedYet, or user clicks a button.
-    // A more sophisticated approach might only load for visible items or on explicit user interaction.
-    LaunchedEffect(message.id, item.bodyState) {
-        if (item.bodyState == BodyLoadingState.NotLoadedYet && isExpandedInitially) {
+    LaunchedEffect(message.id, item.bodyState, isExpandedInitially) {
+        if (item.bodyState == BodyLoadingState.Initial && isExpandedInitially) {
             onRequestLoadBody(message.id)
         }
     }
@@ -59,16 +62,17 @@ fun FullMessageDisplayUnit(
             // Message Headers (Similar to MessageListItem but perhaps styled differently)
             Text(
                 text = message.senderName.takeIf { !it.isNullOrBlank() } ?: message.senderAddress
-                ?: "Unknown Sender",
+                ?: stringResource(R.string.unknown_sender),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold
             )
             val formatter = remember { DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM) }
-            val parsedDate = remember(message.receivedDateTime) {
+            val unknownDateText = stringResource(R.string.unknown_date)
+            val parsedDate = remember(message.receivedDateTime, unknownDateText) {
                 try {
-                    OffsetDateTime.parse(message.receivedDateTime).format(formatter)
+                    message.receivedDateTime?.let { OffsetDateTime.parse(it).format(formatter) } ?: unknownDateText
                 } catch (e: Exception) {
-                    message.receivedDateTime
+                    message.receivedDateTime ?: unknownDateText
                 }
             }
             Text(
@@ -88,23 +92,28 @@ fun FullMessageDisplayUnit(
 
             // Message Body Section
             when (val bodyState = item.bodyState) {
-                is BodyLoadingState.NotLoadedYet -> {
-                    Button(onClick = { onRequestLoadBody(message.id) }) {
-                        Text(stringResource(R.string.action_load_full_message))
-                    }
-                }
-
-                is BodyLoadingState.Loading -> {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 16.dp),
-                        contentAlignment = Alignment.Center
+                is BodyLoadingState.Initial -> {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        CircularProgressIndicator()
+                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                        Spacer(modifier = Modifier.padding(start = 8.dp))
+                        Text(stringResource(R.string.message_body_loading_details))
                     }
                 }
-
+                is BodyLoadingState.Loading -> {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                        Spacer(modifier = Modifier.padding(start = 8.dp))
+                        Text(stringResource(R.string.message_body_downloading))
+                    }
+                }
                 is BodyLoadingState.Loaded -> {
                     val htmlBody = bodyState.htmlContent
                     if (htmlBody.isNotBlank()) {
@@ -116,47 +125,55 @@ fun FullMessageDisplayUnit(
                                     settings.useWideViewPort = true
                                     settings.domStorageEnabled = true
                                     settings.defaultTextEncodingName = "utf-8"
-                                    // Potentially adjust WebView height based on content if feasible
-                                    // Or ensure it wraps content within the LazyColumn item boundaries.
                                 }
                             },
                             update = { webView ->
                                 webView.loadDataWithBaseURL(
-                                    null,
-                                    htmlBody,
-                                    "text/html",
-                                    "utf-8",
-                                    null
+                                    null, htmlBody, "text/html", "utf-8", null
                                 )
                             },
-                            modifier = Modifier.fillMaxWidth() // Adjust height as needed
+                            modifier = Modifier.fillMaxWidth()
                         )
                     } else {
-                        Text(
-                            "(No message body content)",
-                            style = MaterialTheme.typography.bodyMedium
-                        )
+                        Text(stringResource(R.string.message_body_empty), style = MaterialTheme.typography.bodyMedium)
                     }
                 }
-
                 is BodyLoadingState.Error -> {
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(8.dp)
+                        modifier = Modifier.fillMaxWidth().padding(8.dp)
+                            .clickable { onRequestLoadBody(message.id) }
                     ) {
-                        Text(
-                            text = stringResource(
-                                R.string.error_loading_message_body,
-                                bodyState.errorMessage
-                            ),
-                            color = MaterialTheme.colorScheme.error
-                        )
+                        Icon(Icons.Filled.ErrorOutline, contentDescription = "Error loading body", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(24.dp))
                         Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = stringResource(R.string.error_loading_message_body, bodyState.errorMessage),
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        Spacer(Modifier.height(8.dp))
                         Button(onClick = { onRequestLoadBody(message.id) }) {
                             Text(stringResource(R.string.action_retry))
                         }
+                    }
+                }
+                BodyLoadingState.NotLoadedWillDownloadOnWifi -> {
+                    Text(stringResource(R.string.message_body_waiting_for_wifi_auto), modifier = Modifier.padding(vertical = 8.dp))
+                }
+                BodyLoadingState.NotLoadedWillDownloadWhenOnline -> {
+                    Text(stringResource(R.string.message_body_waiting_for_online_auto), modifier = Modifier.padding(vertical = 8.dp))
+                }
+                BodyLoadingState.NotLoadedOffline -> {
+                    Text(stringResource(R.string.message_body_offline_not_downloaded), modifier = Modifier.padding(vertical = 8.dp))
+                }
+                BodyLoadingState.NotLoadedPreferenceAllowsLater -> {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.fillMaxWidth().padding(8.dp)
+                            .clickable { onRequestLoadBody(message.id) }
+                    ) {
+                        Text(stringResource(R.string.message_body_not_downloaded_on_demand_pref), modifier = Modifier.padding(vertical = 8.dp))
+                        Text("(Tap to load now)", style = MaterialTheme.typography.labelSmall)
                     }
                 }
             }

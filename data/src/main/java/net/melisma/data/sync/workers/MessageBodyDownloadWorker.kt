@@ -1,17 +1,24 @@
 package net.melisma.data.sync.workers
 
 import android.content.Context
+// import android.net.ConnectivityManager // No longer needed
+// import android.net.NetworkCapabilities // No longer needed
 import androidx.hilt.work.HiltWorker
 import androidx.work.CoroutineWorker
+import androidx.work.Data
 import androidx.work.WorkerParameters
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
+import net.melisma.core_data.connectivity.NetworkMonitor // Added
 import net.melisma.core_data.datasource.MailApiServiceSelector
 import net.melisma.core_data.errors.ApiServiceException
 import net.melisma.core_data.model.SyncStatus
 import net.melisma.core_db.dao.AccountDao
 import net.melisma.core_db.dao.MessageBodyDao
 import net.melisma.core_db.entity.MessageBodyEntity
+import net.melisma.core_data.preferences.UserPreferencesRepository
+import net.melisma.core_data.preferences.DownloadPreference
+import kotlinx.coroutines.flow.first
 import timber.log.Timber
 
 @HiltWorker
@@ -20,58 +27,88 @@ class MessageBodyDownloadWorker @AssistedInject constructor(
     @Assisted workerParams: WorkerParameters,
     private val messageBodyDao: MessageBodyDao,
     private val mailApiServiceSelector: MailApiServiceSelector,
-    private val accountDao: AccountDao
+    private val accountDao: AccountDao,
+    private val userPreferencesRepository: UserPreferencesRepository,
+    // private val connectivityManager: ConnectivityManager, // Replaced
+    private val networkMonitor: NetworkMonitor // Injected
 ) : CoroutineWorker(appContext, workerParams) {
+
+    companion object {
+        const val KEY_ACCOUNT_ID = "ACCOUNT_ID"
+        const val KEY_MESSAGE_ID = "MESSAGE_ID"
+        const val KEY_RESULT_BODY = "RESULT_BODY"
+        const val KEY_RESULT_ERROR = "RESULT_ERROR"
+    }
 
     private val TAG = "MessageBodyDownloadWrkr"
 
+    // Removed local isOnline() and isWifiConnected() methods
+
     override suspend fun doWork(): Result {
-        val accountId = inputData.getString("ACCOUNT_ID")
-        val messageId = inputData.getString("MESSAGE_ID")
+        val accountId = inputData.getString(KEY_ACCOUNT_ID)
+        val messageId = inputData.getString(KEY_MESSAGE_ID)
 
         if (accountId.isNullOrBlank() || messageId.isNullOrBlank()) {
-            Timber.e("Required ID (accountId or messageId) missing in inputData.")
-            return Result.failure()
+            val errorMsg = "Required ID (accountId or messageId) missing"
+            Timber.e("$TAG: $errorMsg in inputData.")
+            val outputData = Data.Builder().putString(KEY_RESULT_ERROR, errorMsg).build()
+            return Result.failure(outputData)
         }
 
-        Timber.d("Worker started for accountId: $accountId, messageId: $messageId")
+        Timber.d("$TAG: Worker started for accountId: $accountId, messageId: $messageId")
 
         try {
-            // Check if body is already successfully synced
+            val preferences = userPreferencesRepository.userPreferencesFlow.first()
+            val bodyPreference = preferences.bodyDownloadPreference
+
+            Timber.d("$TAG: Body download preference for $messageId: $bodyPreference")
+
+            val currentIsOnline = networkMonitor.isOnline.first()
+            val currentIsWifi = networkMonitor.isWifiConnected.first()
+
+            if (bodyPreference == DownloadPreference.ON_WIFI && !currentIsWifi) {
+                Timber.i("$TAG: Preference is ON_WIFI, but not connected to Wi-Fi. Retrying for message $messageId.")
+                return Result.retry()
+            }
+
+            if (!currentIsOnline) {
+                Timber.i("$TAG: No internet connection. Retrying for message $messageId (preference: $bodyPreference).")
+                return Result.retry()
+            }
+
             val existingBodyEntity = messageBodyDao.getMessageBodyByIdSuspend(messageId)
             if (existingBodyEntity != null && existingBodyEntity.syncStatus == SyncStatus.SYNCED && existingBodyEntity.content != null) {
                 Timber.i("$TAG: Message body for $messageId already synced. Skipping download.")
-                // Optionally update lastSuccessfulSyncTimestamp if we want to track "access" or "check" time
-                // messageBodyDao.insertOrUpdateMessageBody(existingBodyEntity.copy(lastSuccessfulSyncTimestamp = System.currentTimeMillis()))
-                return Result.success()
+                val outputData = Data.Builder().putString(KEY_RESULT_BODY, existingBodyEntity.content).build()
+                return Result.success(outputData)
             }
 
-            // Get MailApiService for accountId
             val mailService = mailApiServiceSelector.getServiceByAccountId(accountId)
             if (mailService == null) {
-                Timber.e("MailService not found for account $accountId. Failing message body download.")
+                val errorMsg = "Mail service not found for account $accountId"
+                Timber.e("$TAG: $errorMsg. Failing message body download.")
                 var errorEntity = messageBodyDao.getMessageBodyByIdSuspend(messageId)
                 if (errorEntity == null) {
                     errorEntity = MessageBodyEntity(
                         messageId = messageId,
                         content = null,
                         syncStatus = SyncStatus.ERROR,
-                        lastSyncError = "Mail service not found",
+                        lastSyncError = errorMsg,
                         lastSyncAttemptTimestamp = System.currentTimeMillis()
                     )
                 } else {
                     errorEntity = errorEntity.copy(
                         content = null,
                         syncStatus = SyncStatus.ERROR,
-                        lastSyncError = "Mail service not found",
+                        lastSyncError = errorMsg,
                         lastSyncAttemptTimestamp = System.currentTimeMillis()
                     )
                 }
                 messageBodyDao.insertOrUpdateMessageBody(errorEntity)
-                return Result.failure()
+                val outputData = Data.Builder().putString(KEY_RESULT_ERROR, errorMsg).build()
+                return Result.failure(outputData)
             }
 
-            // Update MessageBodyEntity status to PENDING_DOWNLOAD before API call
             var bodyEntityToUpdate = messageBodyDao.getMessageBodyByIdSuspend(messageId)
             if (bodyEntityToUpdate == null) {
                 bodyEntityToUpdate = MessageBodyEntity(
@@ -93,19 +130,16 @@ class MessageBodyDownloadWorker @AssistedInject constructor(
             messageBodyDao.insertOrUpdateMessageBody(bodyEntityToUpdate)
             Timber.d("Set message body $messageId status to PENDING_DOWNLOAD.")
 
-            // Fetch message body for messageId from API.
-            val bodyResult =
-                mailService.getMessageContent(messageId) // Corrected method call, removed accountId
+            val bodyResult = mailService.getMessageContent(messageId)
 
             if (bodyResult.isSuccess) {
-                val messageWithBody = bodyResult.getOrThrow() // Get the Message object
-                val bodyContent = messageWithBody.body // Access body property
-                val contentType = messageWithBody.bodyContentType // Access bodyContentType property
+                val messageWithBody = bodyResult.getOrThrow()
+                val bodyContent = messageWithBody.body
+                val contentType = messageWithBody.bodyContentType
                 Timber.d("Fetched body for message $messageId. ContentType: $contentType")
 
                 val bodySizeInBytes = bodyContent?.toByteArray(Charsets.UTF_8)?.size?.toLong() ?: 0L
 
-                // Create a new entity or update existing one with fetched content
                 var successEntity = messageBodyDao.getMessageBodyByIdSuspend(messageId)
                 if (successEntity == null) {
                     successEntity = MessageBodyEntity(
@@ -133,7 +167,10 @@ class MessageBodyDownloadWorker @AssistedInject constructor(
                 }
                 messageBodyDao.insertOrUpdateMessageBody(successEntity)
                 Timber.d("Saved message body for $messageId to DB.")
-                return Result.success()
+                // Ensure bodyContent is not null before putting it in outputData
+                val outputBody = bodyContent ?: ""
+                val outputData = Data.Builder().putString(KEY_RESULT_BODY, outputBody).build()
+                return Result.success(outputData)
             } else {
                 val exception = bodyResult.exceptionOrNull()
                 val errorMessage = exception?.message ?: "Failed to fetch message body"
@@ -164,17 +201,16 @@ class MessageBodyDownloadWorker @AssistedInject constructor(
                     try {
                         accountDao.setNeedsReauthentication(accountId, true)
                     } catch (dbException: Exception) {
-                        Timber.e(
-                            dbException,
-                            "$TAG: Failed to mark account $accountId for re-authentication in DB."
-                        )
+                        Timber.e(dbException, "$TAG: Failed to mark account $accountId for re-authentication in DB.")
                     }
                 }
-                return Result.failure()
+                val outputData = Data.Builder().putString(KEY_RESULT_ERROR, errorMessage).build()
+                return Result.failure(outputData)
             }
 
         } catch (e: Exception) {
-            Timber.e(e, "Error downloading message body for accountId: $accountId, messageId: $messageId")
+            val generalErrorMessage = e.message ?: "Unknown error in worker"
+            Timber.e(e, "$TAG: Error downloading message body for accountId: $accountId, messageId: $messageId. Error: $generalErrorMessage")
             var generalErrorEntity = messageBodyDao.getMessageBodyByIdSuspend(messageId)
             if (generalErrorEntity == null) {
                 generalErrorEntity = MessageBodyEntity(
@@ -182,7 +218,7 @@ class MessageBodyDownloadWorker @AssistedInject constructor(
                     content = null,
                     sizeInBytes = 0L,
                     syncStatus = SyncStatus.ERROR,
-                    lastSyncError = e.message ?: "Unknown error in worker",
+                    lastSyncError = generalErrorMessage,
                     lastSyncAttemptTimestamp = System.currentTimeMillis()
                 )
             } else {
@@ -190,7 +226,7 @@ class MessageBodyDownloadWorker @AssistedInject constructor(
                     content = null,
                     sizeInBytes = if (generalErrorEntity.content == null) 0L else generalErrorEntity.sizeInBytes,
                     syncStatus = SyncStatus.ERROR,
-                    lastSyncError = e.message ?: "Unknown error in worker",
+                    lastSyncError = generalErrorMessage,
                     lastSyncAttemptTimestamp = System.currentTimeMillis()
                 )
             }
@@ -201,13 +237,11 @@ class MessageBodyDownloadWorker @AssistedInject constructor(
                 try {
                     accountDao.setNeedsReauthentication(accountId, true)
                 } catch (dbException: Exception) {
-                    Timber.e(
-                        dbException,
-                        "$TAG: Failed to mark account $accountId for re-auth in DB (outer exception)."
-                    )
+                    Timber.e(dbException, "$TAG: Failed to mark account $accountId for re-auth in DB (outer exception).")
                 }
             }
-            return Result.failure()
+            val outputData = Data.Builder().putString(KEY_RESULT_ERROR, generalErrorMessage).build()
+            return Result.failure(outputData)
         }
     }
 }

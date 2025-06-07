@@ -99,18 +99,18 @@
 * Offline & Sync:
     * **Requirement 5.6 (Data Caching \- Non-Functional):** The app should cache data locally (e.g.,
       using Room database) to improve performance and enable offline access, with clear policies.
-        * **Status: Implemented** (Core of OFFLINE.MD plan. Detailed policies including configurable cache size limit REQ-CACHE-001 and the advanced, multi-tiered eviction strategy REQ-CACHE-002 are now fully implemented. Initial sync duration REQ-INIT-001 is now **Implemented**.)
+        * **Status: Implemented** (Core of OFFLINE.MD plan. Detailed policies including configurable cache size limit REQ-CACHE-001 and the advanced, multi-tiered eviction strategy REQ-CACHE-002 are now fully implemented. Initial sync duration REQ-INIT-001 is now **Implemented**. Foundational work for selective offline download of attachments/bodies REQ-CACHE-003, including user preferences, ViewModel logic for automatic downloads, and UI state display, is now **Implemented** and build is stable.)
     * **Requirement 5.7 (Background Sync \- Functional):** As a user, I want the app to periodically
       check for new emails and sync changes.
         * **Status: Implemented** (SyncEngine and WorkManager from OFFLINE.MD Phases 1 & 3, refined
-          by Phase 4 sync strategies REQ-SYNC series)
+          by Phase 4 sync strategies REQ-SYNC series, and now considers REQ-CACHE-003 download preferences for bodies/attachments during sync operations)
     * **Requirement 5.X (Transparent Sync Status \- Functional):** Users should have clear
       visibility into sync status and errors.
         * **Status: Implemented** (OFFLINE.MD Phase 3 UI Feedback, enhanced by Phase 4 REQ-ERR
-          series)
+          series, and UI now reflects download states for REQ-CACHE-003)
     * **Requirement 5.Y (Configurable Sync & Cache \- Functional):** Users should have some control
       over sync frequency (implicit via OS) and cache settings (time window, size limits).
-        * **Status: Implemented** (Cache size limits REQ-CACHE-001 via `SettingsScreen` and `UserPreferencesRepository` are **Implemented**. Sync frequency/time window for initial sync REQ-INIT-001 is now **Implemented**).
+        * **Status: Implemented** (Cache size limits REQ-CACHE-001 via `SettingsScreen` and `UserPreferencesRepository` are **Implemented**. Initial sync duration REQ-INIT-001 is now **Implemented**. Preferences for selective offline download of message bodies and attachments REQ-CACHE-003 are now **Implemented** via `SettingsScreen` and `UserPreferencesRepository`.)
 * Notifications:
     * **Requirement 5.8 (Push Notifications \- Functional):** As a user, I want to receive
       notifications for new emails.
@@ -164,10 +164,10 @@
 
 * **Requirement 7.1 (Basic Settings):** As a user, I want access to basic settings (e.g., account
   management, theme).
-    * **Status: Implemented** (Account management UI via `SettingsScreen`, theme selection, cache size configuration, initial sync duration configuration).
+    * **Status: Implemented** (Account management UI via `SettingsScreen`, theme selection, cache size configuration, initial sync duration configuration, message body/attachment download preference configuration (REQ-CACHE-003)).
 * **Requirement 7.2 (Sync and Cache Configuration):** As a user, I want to configure initial sync
   duration and local cache size limits.
-    * **Status: Implemented** (Local cache size limits **Implemented** via `SettingsScreen` (REQ-CACHE-001). Initial sync duration **Implemented** (REQ-INIT-001)).
+    * **Status: Implemented** (Local cache size limits **Implemented** via `SettingsScreen` (REQ-CACHE-001). Initial sync duration **Implemented** (REQ-INIT-001). Configuration for selective download of bodies/attachments (REQ-CACHE-003) **Implemented**.)
 
 **EPIC 8: Integrations** (Lower Priority)
 

@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.longPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
@@ -53,10 +54,24 @@ enum class InitialSyncDurationPreference(val durationInDays: Long, val displayNa
     }
 }
 
+enum class DownloadPreference(val displayName: String) {
+    ALWAYS("Always"),
+    ON_WIFI("On Wi-Fi only"),
+    ON_DEMAND("On demand only");
+
+    companion object {
+        fun fromString(value: String?, default: DownloadPreference): DownloadPreference {
+            return entries.find { it.name == value } ?: default
+        }
+    }
+}
+
 data class UserPreferences(
     val mailViewMode: MailViewModePreference,
     val cacheSizeLimitBytes: Long,
-    val initialSyncDurationDays: Long
+    val initialSyncDurationDays: Long,
+    val bodyDownloadPreference: DownloadPreference,
+    val attachmentDownloadPreference: DownloadPreference
 )
 
 interface UserPreferencesRepository {
@@ -64,6 +79,8 @@ interface UserPreferencesRepository {
     suspend fun updateMailViewMode(mailViewMode: MailViewModePreference)
     suspend fun updateCacheSizeLimit(cacheSizePreference: CacheSizePreference)
     suspend fun updateInitialSyncDuration(durationPreference: InitialSyncDurationPreference)
+    suspend fun updateBodyDownloadPreference(preference: DownloadPreference)
+    suspend fun updateAttachmentDownloadPreference(preference: DownloadPreference)
 }
 
 @Singleton
@@ -76,6 +93,8 @@ class DefaultUserPreferencesRepository @Inject constructor(
         val IS_THREAD_VIEW_MODE = booleanPreferencesKey("is_thread_view_mode")
         val CACHE_SIZE_LIMIT_BYTES = longPreferencesKey("cache_size_limit_bytes")
         val INITIAL_SYNC_DURATION_DAYS = longPreferencesKey("initial_sync_duration_days")
+        val BODY_DOWNLOAD_PREFERENCE = stringPreferencesKey("body_download_preference")
+        val ATTACHMENT_DOWNLOAD_PREFERENCE = stringPreferencesKey("attachment_download_preference")
     }
 
     override val userPreferencesFlow: Flow<UserPreferences> = context.dataStore.data
@@ -99,7 +118,19 @@ class DefaultUserPreferencesRepository @Inject constructor(
             val initialSyncDays = preferences[PreferencesKeys.INITIAL_SYNC_DURATION_DAYS]
                 ?: InitialSyncDurationPreference.defaultPreference().durationInDays
 
-            UserPreferences(mailViewMode, cacheLimit, initialSyncDays)
+            val bodyPrefString = preferences[PreferencesKeys.BODY_DOWNLOAD_PREFERENCE]
+            val bodyDownloadPreference = DownloadPreference.fromString(bodyPrefString, DownloadPreference.ALWAYS)
+
+            val attachmentPrefString = preferences[PreferencesKeys.ATTACHMENT_DOWNLOAD_PREFERENCE]
+            val attachmentDownloadPreference = DownloadPreference.fromString(attachmentPrefString, DownloadPreference.ON_WIFI)
+
+            UserPreferences(
+                mailViewMode,
+                cacheLimit,
+                initialSyncDays,
+                bodyDownloadPreference,
+                attachmentDownloadPreference
+            )
         }
 
     override suspend fun updateMailViewMode(mailViewMode: MailViewModePreference) {
@@ -118,6 +149,18 @@ class DefaultUserPreferencesRepository @Inject constructor(
     override suspend fun updateInitialSyncDuration(durationPreference: InitialSyncDurationPreference) {
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.INITIAL_SYNC_DURATION_DAYS] = durationPreference.durationInDays
+        }
+    }
+
+    override suspend fun updateBodyDownloadPreference(preference: DownloadPreference) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.BODY_DOWNLOAD_PREFERENCE] = preference.name
+        }
+    }
+
+    override suspend fun updateAttachmentDownloadPreference(preference: DownloadPreference) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.ATTACHMENT_DOWNLOAD_PREFERENCE] = preference.name
         }
     }
 } 

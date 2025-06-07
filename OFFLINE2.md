@@ -137,6 +137,16 @@ local data to provide a rich offline experience while respecting device storage 
         * `GmailApiHelper` and `GraphApiHelper` updated to use this timestamp to filter messages via API query parameters (`q=after:` for Gmail, `$filter=receivedDateTime ge` for Graph) on the initial fetch for a folder.
         * `SettingsScreen.kt` in the `:mail` module now provides UI for users to select their preferred initial sync duration.
 
+* **Phase 4.C (Selective Offline Download & ViewModel Refactoring - REQ-CACHE-003 Foundation): COMPLETED.**
+    * **Preference System:** `DownloadPreference` enum (`ALWAYS`, `ON_WIFI`, `ON_DEMAND`) created. `UserPreferences` data class and `UserPreferencesRepository` updated to store and expose these preferences. Settings UI (`SettingsScreen.kt`, `MainViewModel.kt`) updated to allow user configuration.
+    * **ViewModel & UI Refactoring:**
+        * `MessageDetailViewModel.kt` & `ThreadDetailViewModel.kt`: Injected `NetworkMonitor` (and removed direct `ConnectivityManager` usage, resolving previous tech debt). Implemented logic to evaluate download preferences and network state (including `isWifiConnected` from `NetworkMonitor`) to automatically trigger downloads for message bodies and attachments when actively viewed, based on the "active view implies demand" rule. Manages `ContentDisplayState` and `BodyLoadingState` for richer UI feedback.
+        * `MessageDetailScreen.kt` & `FullMessageDisplayUnit.kt` (in `:mail` module): Updated to consume new UI states, displaying status messages (e.g., "Message body will download automatically on Wi-Fi.") instead of manual download buttons (except for retry on error). String resource issues resolved.
+        * `MessageBodyDownloadWorker.kt` & `AttachmentDownloadWorker.kt` updated to accept necessary input data (account ID, message ID, attachment ID/name), return structured output for success/failure, and use injected `NetworkMonitor`.
+        * `FolderContentSyncWorker.kt` updated to enqueue `MessageBodyDownloadWorker` and `AttachmentDownloadWorker` for newly synced messages based on user preferences and current network state.
+        * `NetworkMonitor.kt` interface extended to include `isWifiConnected: Flow<Boolean>`; `AndroidNetworkMonitor.kt` implementation updated.
+        * All related build errors in `MessageDetailViewModel.kt` and `MessageDetailScreen.kt` (including Hilt `ConnectivityManager` injection, unresolved references, type mismatches, and string resource issues) have been resolved.
+
 **Key Technical Debt & Immediate Concerns (Revised):**
 
 1. **Duplicate Folder Issue & Resolution (COMPLETED):**
@@ -195,6 +205,11 @@ local data to provide a rich offline experience while respecting device storage 
         * **Action:** The diagnostic logging block within `SyncEngine.syncFolderContent()` has been removed.
     * **Status: ADDRESSED / OBSOLETE.** Further monitoring for any new, unexpected behavior in `SyncEngine`'s worker enqueuing remains part of general sync robustness checks.
 
+2.  **`ContentDisplayState.ERROR` in `MessageDetailViewModel` (Minor Observation):**
+    *   **Problem:** The `ContentDisplayState.ERROR` object itself does not carry the specific error message; the message is typically handled via a separate `transientError` field in the `MessageDetailScreenState`.
+    *   **Impact:** This separation is functional but was noted as a point of minor confusion during previous debugging. No immediate functional impact, but could be harmonized in future UI state refactoring if desired.
+    *   **Status: OBSERVED.** Current implementation is functional.
+
 **Original Key Assumptions (Re-evaluated):**
 
 * The existing Room database schema is largely suitable. `FolderEntity.id` (local PK) now **always
@@ -243,10 +258,9 @@ With the build stabilized and critical crash mitigated, the plan focuses on robu
       (`FolderDao.getFolderByAccountIdAndRemoteId`) added and used.
 
 * **Task 1.B.2: Verify `MessageRemoteMediator` and Pagination (Post `SyncEngine` folder readiness)**
-    * **Status: PARTIALLY ADDRESSED / PENDING VERIFICATION.**
+    * **Status: PENDING VERIFICATION (QA Focus).**
     * **Details:** `FolderContentSyncWorker` now updates `RemoteKeyEntity` to prime
-      `MessageRemoteMediator`. Full verification of pagination behavior after sync changes is
-      pending.
+      `MessageRemoteMediator`. Core code implementation appears complete as per Task 3.1. This task now primarily represents thorough QA testing of pagination under various sync conditions.
 
 * **Task 1.B.3: Enhance `FolderListSyncWorker.kt` & `FolderContentSyncWorker.kt`**
     * **Status: SIGNIFICANTLY ADDRESSED.**
@@ -380,20 +394,25 @@ action queue.
     * **Next Steps:** (Removed as this task is complete)
 
 * **REQ-INIT-001: Configurable Initial Sync Duration**
-    * **Status: Pending.**
+    * **Status: COMPLETED.**
     * **Objective:** Allow users to choose the time window for initial full sync (e.g., 30, 60, 90 days).
-    * **Next Steps:**
-        * Add preference to `UserPreferencesRepository`.
-        * Update `InitialAccountSyncWorker` (or equivalent logic) to use this preference.
-        * Add UI in `SettingsScreen`.
 
 * **REQ-CACHE-003: Selective Offline Download (Attachments/Bodies)**
-    * **Status: Pending.**
-    * **Objective:** Allow users to configure if message bodies and/or attachments are downloaded automatically or only on demand.
-    * **Next Steps:** Design and implement.
+    * **Status: FOUNDATION IMPLEMENTED & BUILD STABLE.**
+    * **Objective:** Allow users to configure if message bodies and/or attachments are downloaded automatically or only on demand, based on preferences and network state (including "active view implies demand" rule).
+    * **Details:**
+        * User preferences for body and attachment downloads (`ALWAYS`, `ON_WIFI`, `ON_DEMAND`) are now configurable via `SettingsScreen` and stored via `UserPreferencesRepository`.
+        * `MessageDetailViewModel` and `ThreadDetailViewModel` have been refactored to:
+            * Use `NetworkMonitor` (including `isWifiConnected`) instead of direct `ConnectivityManager`.
+            * Automatically evaluate download needs for message bodies/attachments when a message is viewed, respecting preferences and network state.
+            * Trigger `MessageBodyDownloadWorker` or `AttachmentDownloadWorker` as needed.
+            * Expose detailed `ContentDisplayState` / `BodyLoadingState` to the UI.
+        * `MessageDetailScreen` and `FullMessageDisplayUnit` display these states (e.g., "Downloading...", "Will download on Wi-Fi") instead of requiring manual download initiation buttons (except for retry on error).
+        * `FolderContentSyncWorker` enqueues body/attachment downloads for newly synced messages according to preferences.
+    * **Next Steps:** Thorough Quality Assurance (QA) testing of all preference combinations and network conditions. UI polish for status messages and transitions. Evaluate if any edge cases in download logic need refinement.
 
 * **REQ-SYNC-005: Auto-Refresh Message on View**
-    * **Status: Partially Implemented** (Basic logic mentioned in `ARCHITECTURE.MD`, needs robust implementation).
+    * **Status: Pending (Needs robust implementation and integration).**
     * **Objective:** When a user opens a message, if online and data is potentially stale, silently refresh its content (body & attachments).
     * **Next Steps:** Integrate this refresh trigger into `MessageDetailViewModel` or repository layer, coordinated via `SyncEngine`.
 
@@ -403,7 +422,8 @@ action queue.
 
 ### Current Build Status: SUCCESSFUL & STABLE (DB Version 15)
 
-The project **builds and compiles successfully**. `SyncEngine` orchestrates initial folder list, key folder content sync, and schedules periodic cache cleanup. Delta synchronization for folders and messages, including handling of server-side deletions, is implemented in the API helpers and integrated into the sync workers. Duplicate folder issues have been resolved, and database schema changes are handled via `fallbackToDestructiveMigration` (current DB version 15). Workers for on-demand actions and body downloads are functional; `MessageBodyDownloadWorker` now records body sizes. The offline action queue is persistent and robust. Message pagination is verified. `UserPreferencesRepository` and `SettingsScreen` now support user-configurable cache size limits. `CacheCleanupWorker` now uses these settings, more accurately tracks cache usage (including message body sizes), and implements the **refined advanced eviction policy (REQ-CACHE-002) including tiered eviction and exclusion of pending actions**. The `lastAccessedTimestamp` field in `MessageEntity` is updated when message details are viewed.
+The project **builds and compiles successfully**. `SyncEngine` orchestrates initial folder list, key folder content sync, and schedules periodic cache cleanup. Delta synchronization for folders and messages, including handling of server-side deletions, is implemented in the API helpers and integrated into the sync workers. Duplicate folder issues have been resolved, and database schema changes are handled via `fallbackToDestructiveMigration` (current DB version 15). Workers for on-demand actions and body downloads are functional; `MessageBodyDownloadWorker` now records body sizes. The offline action queue is persistent and robust. Message pagination is verified. `UserPreferencesRepository` and `SettingsScreen` now support user-configurable cache size limits and initial sync durations. `CacheCleanupWorker` now uses these settings, more accurately tracks cache usage (including message body sizes), and implements the **refined advanced eviction policy (REQ-CACHE-002) including tiered eviction and exclusion of pending actions**. The `lastAccessedTimestamp` field in `MessageEntity` is updated when message details are viewed.
+**The foundational logic for REQ-CACHE-003 (Selective Offline Download for Attachments/Bodies) is now implemented, including user preferences, ViewModel logic for automatic downloads based on active view and network state (using `NetworkMonitor.isWifiConnected` and removing direct `ConnectivityManager` usage), worker enhancements, and UI display of download states. All related build errors have been resolved.**
 
 ### Immediate Priorities:
 
@@ -411,9 +431,10 @@ The project **builds and compiles successfully**. `SyncEngine` orchestrates init
     * **The Problem:** With significant changes to sync logic and new cache management, unknown edge cases or performance bottlenecks might exist.
     * **What Needs to Be Done:** Monitor application behavior, logs, and user feedback (if applicable) for any issues related to data consistency, sync frequency, cache eviction behavior, or performance.
     * **Next Step:** Ongoing observation during testing and development.
-
-2.  **Implement REQ-INIT-001: Configurable Initial Sync Duration.**
-    * Followed by other "Pending" items in Phase 4.
+2.  **Quality Assurance for REQ-CACHE-003:**
+    * **The Problem:** The newly implemented selective download logic (REQ-CACHE-003) requires thorough testing across various preference settings, network conditions, and user interaction flows.
+    * **What Needs to Be Done:** Systematically test automatic downloads for message bodies and attachments in `MessageDetailScreen` and `ThreadDetailScreen` (via `FullMessageDisplayUnit`). Verify UI states and status messages.
+    * **Next Step:** Dedicated QA cycle for REQ-CACHE-003.
 
 * **API Helpers (`GmailApiHelper`, `GraphApiHelper`)**
     *   [x] Implement `syncFolders`
@@ -439,3 +460,11 @@ The project **builds and compiles successfully**. `SyncEngine` orchestrates init
     *   [x] `UserPreferencesRepository` updated for cache size limits.
     *   [x] `SettingsScreen` UI added for cache size configuration.
     *   [x] `MainViewModel` updated to manage cache size preference state.
+    *   [x] `UserPreferencesRepository` updated for initial sync duration (`InitialSyncDurationPreference`).
+    *   [x] `SettingsScreen` UI added for initial sync duration configuration.
+    *   [x] `UserPreferencesRepository` updated for message body and attachment download preferences (`DownloadPreference`).
+    *   [x] `SettingsScreen` UI added for body/attachment download preference configuration.
+* **View Models & UI (Message/Thread Detail)**
+    *   [x] Refactored `MessageDetailViewModel` & `ThreadDetailViewModel` to use `NetworkMonitor` (including `isWifiConnected`) and manage `ContentDisplayState`/`BodyLoadingState`.
+    *   [x] Refactored `MessageDetailScreen` & `FullMessageDisplayUnit` to display download states and remove manual download buttons (except retry).
+    *   [x] Resolved all related build errors.

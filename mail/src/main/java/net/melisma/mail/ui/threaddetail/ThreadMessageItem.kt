@@ -4,5 +4,5 @@ import net.melisma.core_data.model.Message
 
 data class ThreadMessageItem(
     val message: Message,
-    val bodyState: BodyLoadingState = BodyLoadingState.NotLoadedYet
+    val bodyState: BodyLoadingState = BodyLoadingState.Initial
 ) 

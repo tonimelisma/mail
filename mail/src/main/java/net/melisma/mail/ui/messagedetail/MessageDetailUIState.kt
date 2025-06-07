@@ -19,7 +19,7 @@ sealed interface MessageDetailUIState {
 
     /**
      * The message details were successfully loaded.
-     * @param mailMessage The loaded [Message] object containing all details.
+     * @param message The loaded [Message] object containing all details.
      */
-    data class Success(val mailMessage: Message) : MessageDetailUIState
+    data class Success(val message: Message) : MessageDetailUIState
 } 

@@ -146,6 +146,50 @@
     <string name="settings_initial_sync_duration_dialog_desc">Select how far back to sync emails when adding a new account. Choosing \"All Time\" may take longer and use more data initially.</string>
     <string name="settings_about_header">About</string>
 
+    <!-- Download Preferences -->
+    <string name="settings_download_preferences_header">Download Settings</string>
+    <string name="settings_body_download_title">Message Body Download</string>
+    <string name="settings_attachment_download_title">Attachment Download</string>
+    <string name="settings_body_download_dialog_title">Download Message Bodies</string>
+    <string name="settings_attachment_download_dialog_title">Download Attachments</string>
+
+    <!-- Message Detail Download Controls -->
+    <string name="download_full_message_button">Download full message</string>
+    <string name="message_body_downloading">Message body is being downloaded…</string>
+    <string name="message_body_waiting_for_wifi">Waiting for Wi-Fi to download message body…</string>
+    <string name="download_attachment_button_cd">Download attachment %s</string>
+    <string name="view_attachment_button_cd">View attachment %s</string>
+    <string name="retry_download_attachment_button_cd">Retry download attachment %s</string>
+    <string name="attachment_status_downloading">Downloading…</string>
+    <string name="attachment_status_failed">Failed</string>
+    <string name="attachment_status_downloaded">Downloaded</string>
+
+    <string name="message_body_not_downloaded">Message body not downloaded</string>
+    <string name="message_body_no_internet">No internet connection to download body.</string>
+
     <string name="search_hint">Search mail</string>
+
+    <!-- Strings for MessageDetailScreen (REQ-CACHE-003) -->
+    <string name="title_message_detail_no_subject">(No Subject)</string>
+    <string name="message_no_subject_display">(No Subject)</string>
+    <string name="message_from_label">From: %1$s</string>
+    <string name="unknown_sender">Unknown Sender</string>
+    <string name="message_received_label">Received: %1$s</string>
+    <string name="unknown_date">Unknown Date</string>
+    <string name="message_body_empty">(Message body is empty or not in HTML format)</string>
+    <string name="message_body_loading_details">Loading message content…</string>
+    <string name="message_body_waiting_for_wifi_auto">Message body will download automatically on Wi-Fi.</string>
+    <string name="message_body_waiting_for_online_auto">Message body will download automatically when online.</string>
+    <string name="message_body_offline_not_downloaded">Message body not downloaded. Device is offline.</string>
+    <string name="message_body_not_downloaded_on_demand_pref">Message body available on demand.</string>
+    <string name="message_body_download_error">Error downloading message body.</string>
+    <string name="attachments_title">Attachments</string>
+    <string name="attachment_status_waiting_wifi">On Wi-Fi</string>
+    <string name="attachment_status_waiting_online">When Online</string>
+    <string name="attachment_status_offline">Offline</string>
+    <string name="attachment_status_on_demand_pref">On Demand</string>
+    <string name="attachment_status_error">Error</string>
+
+    <string name="unknown_attachment_name">Unknown Attachment</string>
 
 </resources>

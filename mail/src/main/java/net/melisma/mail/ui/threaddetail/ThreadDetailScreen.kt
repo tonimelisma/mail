@@ -36,7 +36,7 @@ fun ThreadDetailScreen(
 
     Scaffold(
         topBar = {
-            val title = when (val state = uiState) {
+            val title = when (val state = uiState.threadLoadingState) {
                 is ThreadDetailUIState.Success -> state.threadSubject
                     ?: stringResource(R.string.title_thread_detail_fallback)
 
@@ -60,7 +60,7 @@ fun ThreadDetailScreen(
                 .fillMaxSize()
                 .padding(paddingValues)
         ) {
-            when (val state = uiState) {
+            when (val state = uiState.threadLoadingState) {
                 is ThreadDetailUIState.Loading -> {
                     CircularProgressIndicator(modifier = Modifier.align(Alignment.Center))
                 }

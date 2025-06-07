@@ -23,7 +23,7 @@ a focus on modern Android development practices and a robust offline-first archi
 * **Modularity:** Maintain a well-defined, modular codebase for better maintainability, scalability,
   and testability.
 * **Data Transparency & Control:** Provide clear feedback on synchronization status, errors, and
-  offer users reasonable control over data caching (including configurable size limits and accurate accounting of message bodies and attachments) and offline behavior.
+  offer users reasonable control over data caching (including configurable size limits, download preferences for message bodies and attachments, and accurate accounting of their sizes) and offline behavior.
 
 ### **1.3. Key Technologies**
 
@@ -48,18 +48,18 @@ Melisma Mail employs a layered architecture designed for an offline-first experi
 
 * **UI Layer (:mail module, formerly :app):** Responsible for presenting data to the user. Interacts exclusively
   with the local database via ViewModels and Use Cases. Handles user interactions like
-  pull-to-refresh. Contains `SettingsScreen.kt` for user preferences including cache size.
+  pull-to-refresh. Contains `SettingsScreen.kt` for user preferences including cache size and download preferences (bodies/attachments). ViewModels like `MessageDetailViewModel` and `ThreadDetailViewModel` utilize `NetworkMonitor` for observing network state, including Wi-Fi connectivity.
 * **Domain Layer (:domain module):** Contains discrete business logic in the form of Use Cases.
 * **Data Layer (:data module):** Implements repository interfaces. Its primary role is to act as a
   **synchronizer** between network data sources (APIs) and the local database, managing data
-  fetching, caching (initial sync, delta sync), action queuing, and local search. Orchestrated by a
-  `SyncEngine`. Includes `UserPreferencesRepository` for managing user settings like cache limits, and workers like `MessageBodyDownloadWorker` (calculates body size) and `CacheCleanupWorker` (uses preferences and accurate sizing).
+  fetching, caching (initial sync, delta sync, respecting user download preferences for bodies/attachments), action queuing, and local search. Orchestrated by a
+  `SyncEngine`. Includes `UserPreferencesRepository` for managing user settings like cache limits and download preferences, and workers like `MessageBodyDownloadWorker` (calculates body size, respects preferences) and `AttachmentDownloadWorker` (respects preferences), and `CacheCleanupWorker` (uses preferences and accurate sizing).
 * **Database Layer (:core-db module):** Defines the Room database schema, entities (with sync
   metadata like SyncStatus, lastSuccessfulSyncTimestamp, lastAccessedTimestamp, `MessageBodyEntity.sizeInBytes`, and FTS
   capabilities), and Data Access Objects (DAOs). Current DB version is 15.
 * **Backend/Provider Layer (:backend-google, :backend-microsoft modules):** Handles all
   provider-specific API communication, including support for delta queries.
-* **Contracts Layer (:core-data module):** Defines interfaces and data models for the application, including `CacheSizePreference` enum.
+* **Contracts Layer (:core-data module):** Defines interfaces and data models for the application, including `CacheSizePreference` and `DownloadPreference` enums.
 
 ### **2.2. Offline-First and Single Source of Truth**
 
@@ -71,7 +71,7 @@ of truth** for the entire application state. Key entities like folders (`FolderE
 identified internally by a consistent local UUID primary key, with functional types (e.g., Inbox,
 Drafts) managed by a dedicated `wellKnownType: WellKnownFolderType` enum, ensuring robust and
 provider-agnostic referencing. Data management policies (initial sync, user-configurable cache size
-limits based on `CacheSizePreference`, eviction rules based on age and recent access using `lastAccessedTimestamp` and accurate sizing from `MessageBodyEntity.sizeInBytes` and `AttachmentEntity.size`) ensure a balance between offline availability
+limits based on `CacheSizePreference`, user-configurable download preferences for message bodies and attachments via `DownloadPreference`, eviction rules based on age and recent access using `lastAccessedTimestamp` and accurate sizing from `MessageBodyEntity.sizeInBytes` and `AttachmentEntity.size`) ensure a balance between offline availability
 and device resource usage.
 
 ### **2.3. MVVM (Model-View-ViewModel)**
@@ -112,11 +112,11 @@ The application uses a multi-faceted strategy for data synchronization, managed 
 
 1. **Initial Account Sync:**
     * A one-time WorkManager job (InitialAccountSyncWorker) triggered on new account login.
-    * Downloads message headers, bodies (calculating `sizeInBytes`), and attachments (using `AttachmentEntity.size`) for a user-configurable duration (options: 30 Days, 90 Days (default), 6 Months, All Time, managed via `UserPreferencesRepository` and `SettingsScreen.kt`), capped at a user-defined overall cache limit (default 0.5GB, options: 0.5GB, 1GB, 2GB, 5GB via `CacheSizePreference`). `FolderContentSyncWorker` reads this preference and instructs the `GmailApiHelper` or `GraphApiHelper` to filter messages accordingly. Individual attachments over 25MB are skipped for this bulk download (metadata only).
+    * Downloads message headers, and potentially bodies (calculating `sizeInBytes`) and attachments (using `AttachmentEntity.size`) based on user's `DownloadPreference` settings for a user-configurable duration (options: 30 Days, 90 Days (default), 6 Months, All Time, managed via `UserPreferencesRepository` and `SettingsScreen.kt`), capped at a user-defined overall cache limit (default 0.5GB, options: 0.5GB, 1GB, 2GB, 5GB via `CacheSizePreference`). `FolderContentSyncWorker` reads these preferences and instructs the `GmailApiHelper` or `GraphApiHelper` to filter messages accordingly, and enqueues body/attachment downloads based on preferences.
 2. **Periodic Background Sync:**
     * A recurring PeriodicWorkRequest via WorkManager (e.g., FolderContentSyncWorker) to check for
       new mail and other updates at user-defined intervals (e.g., every 15 minutes), ensuring
-      battery efficiency. This performs delta synchronization for all relevant folders.
+      battery efficiency. This performs delta synchronization for all relevant folders and enqueues body/attachment downloads based on preferences.
 3. **Foreground Sync & Activity-Driven Sync:**
     * **Constant Polling (Key Folders):** When the app is in the foreground, the SyncEngine ensures
       frequent, short-interval polling (delta sync) for critical folders: Inbox, Drafts, and Outbox.
@@ -144,6 +144,7 @@ The application uses a multi-faceted strategy for data synchronization, managed 
 ### **2.9. Data Caching and Eviction**
 
 * **Overall Cache Size Limit:** User-configurable via `SettingsScreen.kt` and `UserPreferencesRepository`. Options: `CacheSizePreference.MB_500` (500MB, default), `CacheSizePreference.GB_1` (1GB), `CacheSizePreference.GB_2` (2GB), `CacheSizePreference.GB_5` (5GB).
+* **User Download Preferences:** Users can configure via `SettingsScreen.kt` and `UserPreferencesRepository` whether message bodies and attachments are downloaded (`DownloadPreference.ALWAYS`), only on Wi-Fi (`DownloadPreference.ON_WIFI`), or effectively on demand (`DownloadPreference.ON_DEMAND` - typically triggered by active view).
 * **Accurate Size Tracking:** The system now accurately tracks the size of cached data:
     * `AttachmentEntity.size` (Long): Stores the size of downloaded attachments, populated from API metadata or file system.
     * `MessageBodyEntity.sizeInBytes` (Long): Stores the size of the downloaded message body content (UTF-8 bytes), calculated by `MessageBodyDownloadWorker`.
@@ -184,20 +185,20 @@ The application uses a multi-faceted strategy for data synchronization, managed 
 
 * **Purpose & Scope:** UI, navigation, user interaction handling, display of sync status.
 * **Key Components & Classes:** `MainActivity.kt`, `MainViewModel.kt`, UI Composables (including `SettingsScreen.kt` for
-  sync/cache preferences like `CacheSizePreference`).
+  sync/cache preferences like `CacheSizePreference` and `DownloadPreference`). ViewModels like `MessageDetailViewModel` and `ThreadDetailViewModel` utilize `NetworkMonitor` (including its `isWifiConnected` Flow) for refined network state observation, moving away from direct `ConnectivityManager` usage.
 
 ### **3.2. :core-data Module**
 
 * **Purpose & Scope:** Defines contracts (interfaces) and core data models.
-* **Key Components & Classes:** Repository Interfaces (`UserPreferencesRepository`), Domain Models (`UserPreferences`, `CacheSizePreference`), Service Interfaces, SyncStatus
+* **Key Components & Classes:** Repository Interfaces (`UserPreferencesRepository`), Domain Models (`UserPreferences`, `CacheSizePreference`, `DownloadPreference`), Service Interfaces, SyncStatus
   enum.
 
 ### **3.3. :data Module**
 
 * **Purpose & Scope:** Implements repository interfaces. Orchestrates data synchronization via
   `SyncEngine`, WorkManager workers (`InitialAccountSyncWorker`, `FolderContentSyncWorker`,
-  `ActionUploadWorker`, `CacheCleanupWorker`, `MessageBodyDownloadWorker`), manages delta sync, local search queries.
-* **Key Components & Classes:** `Default...Repository` implementations, `SyncEngine.kt`, `UserPreferencesRepository.kt`, `CacheCleanupWorker.kt`, `MessageBodyDownloadWorker.kt`.
+  `ActionUploadWorker`, `CacheCleanupWorker`, `MessageBodyDownloadWorker`, `AttachmentDownloadWorker`), manages delta sync, local search queries. `FolderContentSyncWorker`, `MessageBodyDownloadWorker`, and `AttachmentDownloadWorker` all respect user-configured `DownloadPreference` settings.
+* **Key Components & Classes:** `Default...Repository` implementations, `SyncEngine.kt`, `UserPreferencesRepository.kt`, `CacheCleanupWorker.kt`, `MessageBodyDownloadWorker.kt`, `AttachmentDownloadWorker.kt`.
 
 ### **3.4. :core-db Module**
 

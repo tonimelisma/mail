@@ -38,6 +38,7 @@ import net.melisma.core_data.preferences.CacheSizePreference
 import net.melisma.core_data.preferences.MailViewModePreference
 import net.melisma.core_data.preferences.UserPreferencesRepository
 import net.melisma.core_data.preferences.InitialSyncDurationPreference
+import net.melisma.core_data.preferences.DownloadPreference
 import net.melisma.core_data.repository.FolderRepository
 import net.melisma.core_data.repository.MessageRepository
 import net.melisma.core_data.repository.OverallApplicationAuthState
@@ -65,6 +66,9 @@ data class MainScreenState(
     val availableCacheSizes: List<CacheSizePreference> = CacheSizePreference.entries.toList(),
     val currentInitialSyncDurationPreference: InitialSyncDurationPreference = InitialSyncDurationPreference.defaultPreference(),
     val availableInitialSyncDurations: List<InitialSyncDurationPreference> = InitialSyncDurationPreference.entries.toList(),
+    val currentBodyDownloadPreference: DownloadPreference = DownloadPreference.ALWAYS,
+    val currentAttachmentDownloadPreference: DownloadPreference = DownloadPreference.ON_WIFI,
+    val availableDownloadPreferences: List<DownloadPreference> = DownloadPreference.entries.toList(),
     val toastMessage: String? = null
 ) {
     val isAnyFolderLoading: Boolean
@@ -329,7 +333,9 @@ class MainViewModel @Inject constructor(
                     it.copy(
                         currentViewMode = preferences.mailViewMode,
                         currentCacheSizePreference = CacheSizePreference.fromBytes(preferences.cacheSizeLimitBytes),
-                        currentInitialSyncDurationPreference = InitialSyncDurationPreference.fromDays(preferences.initialSyncDurationDays)
+                        currentInitialSyncDurationPreference = InitialSyncDurationPreference.fromDays(preferences.initialSyncDurationDays),
+                        currentBodyDownloadPreference = preferences.bodyDownloadPreference,
+                        currentAttachmentDownloadPreference = preferences.attachmentDownloadPreference
                     )
                 }
             }.launchIn(viewModelScope)
@@ -642,6 +648,18 @@ class MainViewModel @Inject constructor(
     fun setInitialSyncDurationPreference(preference: InitialSyncDurationPreference) {
         viewModelScope.launch {
             userPreferencesRepository.updateInitialSyncDuration(preference)
+        }
+    }
+
+    fun setBodyDownloadPreference(preference: DownloadPreference) {
+        viewModelScope.launch {
+            userPreferencesRepository.updateBodyDownloadPreference(preference)
+        }
+    }
+
+    fun setAttachmentDownloadPreference(preference: DownloadPreference) {
+        viewModelScope.launch {
+            userPreferencesRepository.updateAttachmentDownloadPreference(preference)
         }
     }
 

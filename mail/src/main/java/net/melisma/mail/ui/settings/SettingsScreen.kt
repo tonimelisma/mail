@@ -56,6 +56,7 @@ import net.melisma.core_data.model.Account
 import net.melisma.core_data.preferences.CacheSizePreference
 import net.melisma.core_data.preferences.MailViewModePreference
 import net.melisma.core_data.preferences.InitialSyncDurationPreference
+import net.melisma.core_data.preferences.DownloadPreference
 import net.melisma.mail.MainViewModel
 import net.melisma.mail.MainScreenState
 import net.melisma.mail.R
@@ -75,6 +76,8 @@ fun SettingsScreen(
     var showRemoveDialog by remember { mutableStateOf<Account?>(null) }
     var showCacheSizeDialog by remember { mutableStateOf(false) } // New state for cache size dialog
     var showInitialSyncDurationDialog by remember { mutableStateOf(false) } // New state
+    var showBodyDownloadPreferenceDialog by remember { mutableStateOf(false) }
+    var showAttachmentDownloadPreferenceDialog by remember { mutableStateOf(false) }
 
     // Observe toast message changes (remains the same)
     LaunchedEffect(state.toastMessage) {
@@ -288,6 +291,35 @@ fun SettingsScreen(
                 InitialSyncDurationPreferenceItem(state = state, onClick = { showInitialSyncDurationDialog = true })
             }
 
+            // DOWNLOAD PREFERENCES SECTION
+            item {
+                HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                Text(
+                    text = stringResource(R.string.settings_download_preferences_header), // New String Resource
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+            }
+
+            item {
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.settings_body_download_title)) }, // New String
+                    supportingContent = { Text(state.currentBodyDownloadPreference.displayName) },
+                    modifier = Modifier.clickable { showBodyDownloadPreferenceDialog = true }
+                )
+                HorizontalDivider(modifier = Modifier.padding(start = 16.dp))
+            }
+
+            item {
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.settings_attachment_download_title)) }, // New String
+                    supportingContent = { Text(state.currentAttachmentDownloadPreference.displayName) },
+                    modifier = Modifier.clickable { showAttachmentDownloadPreferenceDialog = true }
+                )
+                HorizontalDivider(modifier = Modifier.padding(start = 16.dp))
+            }
+            // END DOWNLOAD PREFERENCES SECTION
+
             // ABOUT SECTION (Example - could be more elaborate)
             item {
                 HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
@@ -355,6 +387,32 @@ fun SettingsScreen(
             onSelected = {
                 viewModel.setInitialSyncDurationPreference(it)
                 showInitialSyncDurationDialog = false
+            }
+        )
+    }
+
+    if (showBodyDownloadPreferenceDialog) {
+        DownloadPreferenceSelectionDialog(
+            title = stringResource(R.string.settings_body_download_dialog_title),
+            availablePreferences = state.availableDownloadPreferences,
+            currentPreference = state.currentBodyDownloadPreference,
+            onDismiss = { showBodyDownloadPreferenceDialog = false },
+            onSelected = {
+                viewModel.setBodyDownloadPreference(it)
+                showBodyDownloadPreferenceDialog = false
+            }
+        )
+    }
+
+    if (showAttachmentDownloadPreferenceDialog) {
+        DownloadPreferenceSelectionDialog(
+            title = stringResource(R.string.settings_attachment_download_dialog_title),
+            availablePreferences = state.availableDownloadPreferences,
+            currentPreference = state.currentAttachmentDownloadPreference,
+            onDismiss = { showAttachmentDownloadPreferenceDialog = false },
+            onSelected = {
+                viewModel.setAttachmentDownloadPreference(it)
+                showAttachmentDownloadPreferenceDialog = false
             }
         )
     }
@@ -457,6 +515,46 @@ fun InitialSyncDurationSelectionDialog(
                             Text(
                                 duration.displayName,
                                 style = if (duration == currentPreference) MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold) else MaterialTheme.typography.bodyLarge
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    )
+}
+
+@Composable
+fun DownloadPreferenceSelectionDialog(
+    title: String,
+    availablePreferences: List<DownloadPreference>,
+    currentPreference: DownloadPreference,
+    onDismiss: () -> Unit,
+    onSelected: (DownloadPreference) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(android.R.string.cancel))
+            }
+        },
+        dismissButton = null, 
+        text = {
+            LazyColumn(modifier = Modifier.padding(top = 8.dp)) {
+                items(availablePreferences) { preference ->
+                    TextButton(
+                        onClick = { onSelected(preference) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                preference.displayName,
+                                style = if (preference == currentPreference) MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Bold) else MaterialTheme.typography.bodyLarge
                             )
                         }
                     }
