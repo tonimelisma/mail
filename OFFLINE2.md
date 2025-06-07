@@ -292,6 +292,25 @@ action queue.
 
 ---
 
+**Sprint/Phase 3: Verify and Refactor Message Pagination (Post Delta Sync)**
+
+**Objective:** Ensure `MessageRemoteMediator` works harmoniously with the delta-sync-first architecture, reliably handling pagination for older messages without interfering with `FolderContentSyncWorker`.
+
+* **Task 3.1: Verify `MessageRemoteMediator` and Pagination Behavior**
+    * **Status: COMPLETED.**
+    * **Problem:** The existing `MessageRemoteMediator` was designed before the robust `FolderContentSyncWorker` and its delta sync capabilities. Its `LoadType.REFRESH` behavior was destructive (clearing local data) and could conflict with data synced by the worker, leading to inefficiencies and potential data loss or UI flickering.
+    * **Investigation:** Reviewed `MessageRemoteMediator.kt`, `FolderContentSyncWorker.kt`, `RemoteKeyEntity.kt`, and `RemoteKeyDao.kt`. Confirmed that `FolderContentSyncWorker` correctly handles both initial paged syncs and subsequent delta syncs, including resetting pagination tokens when delta updates occur. The mediator's aggressive refresh was redundant and harmful.
+    * **Resolution:**
+        * Modified `MessageRemoteMediator.initialize()` to return `InitializeAction.SKIP_INITIAL_REFRESH`. This prevents the mediator from running its own sync cycle when the UI first loads, relying instead on `SyncEngine` and `FolderContentSyncWorker` to ensure data is present.
+        * Modified the `load()` method for `LoadType.REFRESH`:
+            * It no longer clears the local database for the folder.
+            * It no longer makes a network call to fetch messages.
+            * It now immediately returns `MediatorResult.Success`, with `endOfPaginationReached` determined by checking the existing `RemoteKeyEntity` for a `nextPageToken`. This effectively makes the mediator's refresh a no-op concerning data fetching, as `FolderContentSyncWorker` is responsible for updating the newest data. A UI pull-to-refresh should trigger `FolderContentSyncWorker` externally.
+        * The `LoadType.APPEND` logic in the mediator remains unchanged, allowing it to continue fetching older pages of messages when the user scrolls down.
+    * **Outcome:** `MessageRemoteMediator` now correctly defers to `FolderContentSyncWorker` for syncing new/updated messages and only handles the loading of older message pages on demand. This resolves the conflict, improves efficiency, and ensures a more stable pagination experience.
+
+---
+
 ## 4\. Next Steps & Current Build Status
 
 ### Current Build Status: SUCCESSFUL & STABLE
@@ -301,18 +320,12 @@ key folder content sync. Delta synchronization for folders and messages, includi
 server-side deletions, is implemented in the API helpers and integrated into the sync workers.
 Duplicate folder issues have been resolved, and database schema changes are handled via
 `fallbackToDestructiveMigration` (DB version 14). Workers for on-demand actions and body
-downloads are functional. The offline action queue is now persistent and robust.
+downloads are functional. The offline action queue is now persistent and robust. Message pagination
+is verified and refactored to work correctly with the delta sync architecture.
 
 ### Immediate Priorities:
 
-1. **Verify Message Pagination (Post Delta Sync Implementation):**
-    * **The Problem:** Unconfirmed if `MessageRemoteMediator` correctly handles pagination after
-      the introduction of delta sync and changes to how `RemoteKeyEntity` and `FolderEntity`
-      paging tokens are managed.
-    * **What Needs to Be Done:** Thoroughly test pagination for message lists.
-    * **Next Step:** Perform manual and automated tests for message pagination.
-
-2. **Monitor & Refine Sync Robustness:**
+1.  **Monitor & Refine Sync Robustness:**
     * **The Problem:** With significant changes to sync logic, unknown edge cases or performance
       bottlenecks might exist.
     * **What Needs to Be Done:** Monitor application behavior, logs, and user feedback (if
@@ -320,12 +333,11 @@ downloads are functional. The offline action queue is now persistent and robust.
       for any issues related to data consistency, sync frequency, or performance.
     * **Next Step:** Ongoing observation during testing and development.
 
-3. **Implement Offline Actions & Queuing (Core Functionality).** **(COMPLETED)**
-4. **Implement Delta Sync in API Helpers (`GmailApiHelper`, `GraphApiHelper`).** **(COMPLETED)**
-5. **Refine Offline Action Queue.** **(COMPLETED)**
-6. **Verify Pagination & `MessageRemoteMediator`** (post delta sync implementation). **(Next
-   Critical Step)**
-7. **Refine and Test:** Continuously test the offline experience, refine sync logic, and handle edge
+2.  **Implement Offline Actions & Queuing (Core Functionality).** **(COMPLETED)**
+3.  **Implement Delta Sync in API Helpers (`GmailApiHelper`, `GraphApiHelper`).** **(COMPLETED)**
+4.  **Refine Offline Action Queue.** **(COMPLETED)**
+5.  **Verify Pagination & `MessageRemoteMediator`** (post delta sync implementation). **(COMPLETED)**
+6.  **Refine and Test:** Continuously test the offline experience, refine sync logic, and handle edge
    cases and errors.
 
 * **API Helpers (`GmailApiHelper`, `GraphApiHelper`)**

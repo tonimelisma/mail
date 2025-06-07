@@ -34,8 +34,10 @@ class MessageRemoteMediator(
     private val folderDao = database.folderDao()
 
     override suspend fun initialize(): InitializeAction {
-        Timber.d("initialize() for $accountId/$folderId: Launching initial refresh as per simplified plan.")
-        return InitializeAction.LAUNCH_INITIAL_REFRESH
+        // SKIP_INITIAL_REFRESH means Pager will not call load() with REFRESH
+        // until a PagingSource is invalidated. We rely on SyncEngine and its workers
+        // to perform the initial sync, not the mediator.
+        return InitializeAction.SKIP_INITIAL_REFRESH
     }
 
     override suspend fun load(
@@ -71,8 +73,14 @@ class MessageRemoteMediator(
 
             val pageTokenToFetch: String? = when (loadType) {
                 LoadType.REFRESH -> {
-                    Timber.d("load() REFRESH for $accountId/$apiFolderIdToFetch: No page token needed for initial load.")
-                    null
+                    // A REFRESH means the PagingSource was invalidated. This is often triggered
+                    // by a pull-to-refresh in the UI. The actual data fetching for new items
+                    // is handled by FolderContentSyncWorker, which runs before this.
+                    // This mediator's role is just to signal success so the Pager displays
+                    // the new data from the DB and to determine if pagination should continue.
+                    val remoteKey = remoteKeyDao.getRemoteKeyForFolder(this.folderId)
+                    Timber.d("load() REFRESH for $accountId/$apiFolderIdToFetch. Data should be fresh from worker. RemoteKey: $remoteKey")
+                    return MediatorResult.Success(endOfPaginationReached = remoteKey?.nextPageToken == null)
                 }
 
                 LoadType.PREPEND -> {
@@ -112,12 +120,8 @@ class MessageRemoteMediator(
                 Timber.i("load() for $accountId/$apiFolderIdToFetch ($loadType): API success. Fetched ${messagesFromApi.size} messages. NewNextPageToken: '$newNextPageToken'. EndReached: $endOfPaginationReached")
 
                 database.withTransaction {
-                    if (loadType == LoadType.REFRESH) {
-                        Timber.d("load() REFRESH for $accountId/${this.folderId}: Clearing old messages and remote key for folder.")
-                        messageDao.deleteMessagesForFolder(accountId, this.folderId)
-                        remoteKeyDao.deleteRemoteKeyForFolder(this.folderId)
-                    }
-
+                    // REFRESH is handled above and does not run this transaction.
+                    // This block only runs for APPEND.
                     remoteKeyDao.insertOrReplace(
                         RemoteKeyEntity(
                             folderId = this.folderId,
