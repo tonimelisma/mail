@@ -1,6 +1,7 @@
 package net.melisma.core_data.datasource
 
 import kotlinx.coroutines.flow.Flow
+import net.melisma.core_data.model.DeltaSyncResult
 import net.melisma.core_data.model.MailFolder
 import net.melisma.core_data.model.Message
 import net.melisma.core_data.model.PagedMessagesResponse
@@ -222,6 +223,32 @@ interface MailApiService {
         folderId: String? = null,
         maxResults: Int = 50
     ): Result<List<Message>>
+
+    /**
+     * Performs a delta synchronization of mail folders for the given account.
+     *
+     * @param accountId The ID of the account for which to sync folders.
+     * @param syncToken The token from the previous sync operation. Null for an initial full sync.
+     * @return Result containing a DeltaSyncResult with new/updated folders, deleted folder IDs, and the next sync token.
+     */
+    suspend fun syncFolders(
+        accountId: String,
+        syncToken: String?
+    ): Result<DeltaSyncResult<MailFolder>>
+
+    /**
+     * Performs a delta synchronization of messages for a specific folder.
+     *
+     * @param folderId The remote ID of the folder to sync messages for.
+     * @param syncToken The token from the previous sync operation. Null for an initial full sync.
+     * @param maxResults Optional maximum number of messages to return per page during the sync.
+     * @return Result containing a DeltaSyncResult with new/updated messages, deleted message IDs, and the next sync token.
+     */
+    suspend fun syncMessagesForFolder(
+        folderId: String,
+        syncToken: String?,
+        maxResults: Int? = null
+    ): Result<DeltaSyncResult<Message>>
 
     // Future methods to consider:
     // - syncFolders(syncToken) - For delta syncing with sync token

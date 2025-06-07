@@ -41,6 +41,7 @@ import net.melisma.core_data.model.Message
 import net.melisma.core_data.model.MessageDraft
 import net.melisma.core_data.model.MessageSyncState
 import net.melisma.core_data.model.SyncStatus
+import net.melisma.core_data.model.WellKnownFolderType
 import net.melisma.core_data.repository.AccountRepository
 import net.melisma.core_data.repository.MessageRepository
 import net.melisma.core_db.AppDatabase
@@ -505,7 +506,8 @@ class DefaultMessageRepository @Inject constructor(
         val account = accountRepository.getAccountById(accountId).firstOrNull()
             ?: return Result.failure(Exception("Account not found for draft saving"))
 
-        val draftFolderId = folderDao.getFolderIdByType(accountId, "DRAFTS")?.id
+        val draftFolderId =
+            folderDao.getFolderByWellKnownTypeSuspend(accountId, WellKnownFolderType.DRAFTS)?.id
             ?: return Result.failure(Exception("Unable to find DRAFTS folder for account $accountId"))
 
         val messageId = if (isNew) {
@@ -573,7 +575,8 @@ class DefaultMessageRepository @Inject constructor(
 
         // Create a temporary local-only message
         val tempId = "local-draft-${UUID.randomUUID()}"
-        val draftFolder = folderDao.getFolderIdByType(accountId, "DRAFTS")
+        val draftFolder =
+            folderDao.getFolderByWellKnownTypeSuspend(accountId, WellKnownFolderType.DRAFTS)
             ?: return@withContext Result.failure(Exception("Drafts folder not found"))
 
         val newMessage = MessageEntity(

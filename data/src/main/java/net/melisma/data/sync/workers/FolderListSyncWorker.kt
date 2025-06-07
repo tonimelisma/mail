@@ -8,12 +8,10 @@ import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
-import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.first
 import net.melisma.core_data.datasource.MailApiServiceSelector
 import net.melisma.core_data.errors.ApiServiceException
-import net.melisma.core_data.model.Account
 import net.melisma.core_data.model.MailFolder
-import net.melisma.core_data.repository.AccountRepository
 import net.melisma.core_db.AppDatabase
 import net.melisma.core_db.dao.AccountDao
 import net.melisma.data.mapper.toEntity
@@ -25,28 +23,27 @@ class FolderListSyncWorker @AssistedInject constructor(
     @Assisted appContext: Context,
     @Assisted private val workerParams: WorkerParameters,
     private val database: AppDatabase,
-    private val accountRepository: AccountRepository,
     private val mailApiServiceSelector: MailApiServiceSelector,
     private val accountDao: AccountDao
 ) : CoroutineWorker(appContext, workerParams) {
 
     // Helper function to identify well-known Gmail folder IDs
-    private fun isWellKnownGmailFolderId(folderIdFromApi: String): Boolean {
-        return folderIdFromApi in setOf(
-            "INBOX",
-            "SENT",
-            "DRAFTS",
-            "TRASH",
-            "SPAM",
-            "IMPORTANT",
-            "STARRED",
-            "SCHEDULED",
-            "ALL",
-            "ARCHIVE" // Common Gmail system labels/folders
-            // CHAT is often a label as well, but might not be a "folder" in all contexts.
-            // Check specific Gmail API behavior if CHAT folders are needed.
-        )
-    }
+    // private fun isWellKnownGmailFolderId(folderIdFromApi: String): Boolean { // REMOVED
+    //     return folderIdFromApi in setOf(
+    //         "INBOX",
+    //         "SENT",
+    //         "DRAFTS",
+    //         "TRASH",
+    //         "SPAM",
+    //         "IMPORTANT",
+    //         "STARRED",
+    //         "SCHEDULED",
+    //         "ALL",
+    //         "ARCHIVE" // Common Gmail system labels/folders
+    //         // CHAT is often a label as well, but might not be a "folder" in all contexts.
+    //         // Check specific Gmail API behavior if CHAT folders are needed.
+    //     )
+    // }
 
     override suspend fun doWork(): Result {
         val accountId = workerParams.inputData.getString(KEY_ACCOUNT_ID)
@@ -54,62 +51,79 @@ class FolderListSyncWorker @AssistedInject constructor(
 
         Timber.d("doWork: Starting folder list sync for accountId: $accountId")
 
-        val account = accountRepository.getAccountById(accountId).firstOrNull()
-        if (account == null) {
-            Timber.e("doWork: Account not found for ID: $accountId")
+        val accountEntity = accountDao.getAccountByIdSuspend(accountId)
+        if (accountEntity == null) {
+            Timber.e("doWork: AccountEntity not found for ID: $accountId")
             return Result.failure(workDataOf(KEY_ERROR_MESSAGE to "Account not found"))
         }
-
-        // It's assumed account.providerType exists and is like "GMAIL" or "MICROSOFT_GRAPH"
-        // This might come from AccountEntity's mapping to the Account domain model.
-        val providerType = account.providerType // Confirmed Account.kt has this
+        // For a full sync, we effectively ignore the stored sync token by passing null,
+        // or let the API helper decide. For Gmail, it always fetches all.
+        // For Graph, passing null to syncFolders implies starting a new delta sequence (i.e., get all).
+        val syncTokenForFullRefresh = null // Explicitly null for a full refresh behavior
+        val providerType = accountEntity.providerType
 
         val apiService = mailApiServiceSelector.getServiceByAccountId(accountId)
         if (apiService == null) {
             Timber.e("doWork: No API service found for account ID: $accountId, providerType: $providerType")
+            accountDao.updateFolderListSyncError(
+                accountId,
+                "FolderListSync: API service not found for provider $providerType"
+            )
             return Result.failure(workDataOf(KEY_ERROR_MESSAGE to "Unsupported provider type or account issue"))
         }
 
         try {
-            val remoteFoldersResult = apiService.getMailFolders(null, accountId)
+            val deltaSyncResult = apiService.syncFolders(accountId, syncTokenForFullRefresh)
 
-            if (remoteFoldersResult.isSuccess) {
-                val remoteFolders = remoteFoldersResult.getOrThrow()
+            if (deltaSyncResult.isSuccess) {
+                val deltaData = deltaSyncResult.getOrThrow()
+                val foldersFromApi = deltaData.newOrUpdatedItems
+                val remoteIdsFromApi =
+                    foldersFromApi.mapNotNull { it.id }.toSet() // mailFolder.id is the remoteId
+
                 database.withTransaction {
-                    // Delete all existing folders for this account first
-                    database.folderDao().deleteAllFoldersForAccount(accountId)
-
-                    val folderEntities = remoteFolders.map { mailFolder: MailFolder ->
-                        val remoteApiId =
-                            mailFolder.id // ID from the API (e.g., "SENT", "INBOX", or a GUID)
-                        val primaryKeyForDb: String
-
-                        if (providerType == Account.PROVIDER_TYPE_GOOGLE) {
-                            if (isWellKnownGmailFolderId(remoteApiId)) {
-                                // For well-known Gmail folders, use their known remote ID (e.g., "SENT") as the local primary key.
-                                primaryKeyForDb = remoteApiId
-                            } else {
-                                // For user-created Gmail labels (which have opaque API IDs like "Label_123"), generate a UUID.
-                                // Their remoteApiId will be stored in FolderEntity.remoteId by the toEntity mapper.
-                                primaryKeyForDb = UUID.randomUUID().toString()
-                            }
-                        } else {
-                            // For other providers (e.g., Microsoft Graph), their API folder IDs (typically GUIDs)
-                            // are suitable as local primary keys. If they can be non-unique across accounts (unlikely for folder IDs)
-                            // or not stable, a UUID approach might be safer, but generally remote IDs are fine here.
-                            primaryKeyForDb = remoteApiId
+                    // 1. Upsert folders received from API
+                    if (foldersFromApi.isNotEmpty()) {
+                        val folderEntities = foldersFromApi.map { mailFolder: MailFolder ->
+                            val primaryKeyForDb: String = UUID.randomUUID().toString()
+                            mailFolder.toEntity(accountId, primaryKeyForDb)
                         }
-                        mailFolder.toEntity(accountId, primaryKeyForDb)
-                    }
-                    if (folderEntities.isNotEmpty()) {
                         database.folderDao().insertOrUpdateFolders(folderEntities)
+                        Timber.d("doWork: Upserted ${folderEntities.size} folders for account $accountId from API list.")
+                    }
+
+                    // 2. Identify and delete stale local folders
+                    val localFolders = database.folderDao().getFoldersForAccount(accountId)
+                        .first() // Get current local state
+                    val staleRemoteIds =
+                        localFolders.mapNotNull { it.remoteId }.filter { it !in remoteIdsFromApi }
+
+                    if (staleRemoteIds.isNotEmpty()) {
+                        val deletedStaleCount =
+                            database.folderDao().deleteFoldersByRemoteIds(accountId, staleRemoteIds)
+                        Timber.d("doWork: Deleted $deletedStaleCount stale local folders for account $accountId.")
+                    }
+
+                    // 3. Process explicit deletions from delta, if any (belt and suspenders)
+                    //    This might be redundant if the above diffing is comprehensive, but harmless.
+                    if (deltaData.deletedItemIds.isNotEmpty()) {
+                        // Ensure these IDs are distinct from those just deleted as stale, though unlikely to overlap significantly.
+                        val explicitlyDeletedRemoteIds =
+                            deltaData.deletedItemIds.filter { it !in staleRemoteIds }
+                        if (explicitlyDeletedRemoteIds.isNotEmpty()) {
+                            val deletedCount = database.folderDao()
+                                .deleteFoldersByRemoteIds(accountId, explicitlyDeletedRemoteIds)
+                            Timber.d("doWork: Deleted $deletedCount folders for account $accountId based on explicit delta.deletedItemIds.")
+                        }
                     }
                 }
-                Timber.d("doWork: Successfully synced ${remoteFolders.size} folders for account $accountId")
+                // Update the sync token for the next delta sync (even if we forced a full refresh, API provides next token)
+                accountDao.updateFolderListSyncToken(accountId, deltaData.nextSyncToken)
                 accountDao.updateFolderListSyncSuccess(accountId, System.currentTimeMillis())
+                Timber.d("doWork: Successfully full-synced folders for account $accountId. Next token: ${deltaData.nextSyncToken}")
                 return Result.success()
             } else {
-                val exception = remoteFoldersResult.exceptionOrNull()
+                val exception = deltaSyncResult.exceptionOrNull()
                 val errorMessage = exception?.message ?: "Failed to fetch folders from API"
                 Timber.e(
                     exception,

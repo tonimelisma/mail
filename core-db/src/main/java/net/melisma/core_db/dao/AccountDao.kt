@@ -40,6 +40,9 @@ interface AccountDao {
     @Query("UPDATE accounts SET lastFolderListSyncError = :errorMessage WHERE id = :accountId")
     suspend fun updateFolderListSyncError(accountId: String, errorMessage: String)
 
+    @Query("UPDATE accounts SET folderListSyncToken = :syncToken WHERE id = :accountId")
+    suspend fun updateFolderListSyncToken(accountId: String, syncToken: String?)
+
     // Generic sync error update for the account
     @Query("UPDATE accounts SET lastGenericSyncError = :errorMessage WHERE id = :accountId")
     suspend fun updateAccountSyncError(accountId: String, errorMessage: String)

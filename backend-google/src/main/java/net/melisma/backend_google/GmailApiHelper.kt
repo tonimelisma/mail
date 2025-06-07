@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.util.Base64
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
+import io.ktor.client.plugins.ClientRequestException
 import io.ktor.client.request.accept
 import io.ktor.client.request.get
 import io.ktor.client.request.parameter
@@ -21,6 +22,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonObject
@@ -40,6 +42,7 @@ import net.melisma.backend_google.model.MessagePartHeader
 import net.melisma.core_data.datasource.MailApiService
 import net.melisma.core_data.errors.ApiServiceException
 import net.melisma.core_data.errors.ErrorMapperService
+import net.melisma.core_data.model.DeltaSyncResult
 import net.melisma.core_data.model.EmailAddress
 import net.melisma.core_data.model.MailFolder
 import net.melisma.core_data.model.Message
@@ -53,6 +56,57 @@ import java.util.Locale
 import java.util.TimeZone
 import javax.inject.Inject
 import javax.inject.Singleton
+
+// Data classes for Gmail Profile and History API
+@kotlinx.serialization.Serializable
+data class GmailProfile(
+    val emailAddress: String,
+    val messagesTotal: Int,
+    val threadsTotal: Int,
+    val historyId: String
+)
+
+@kotlinx.serialization.Serializable
+data class GmailHistoryResponse(
+    val history: List<GmailHistoryEntry>? = null,
+    @SerialName("nextPageToken") val nextPageToken: String? = null,
+    val historyId: String // The history ID of the EOD for this batch of history.
+)
+
+@kotlinx.serialization.Serializable
+data class GmailHistoryEntry(
+    val id: String, // History record ID
+    // "messages": Messages that were affected by this history record.
+    // The GmailMessage here might be sparsely populated (e.g. id, threadId, labelIds only)
+    // unless format=FULL was used in history.list (default is not FULL).
+    val messages: List<GmailMessage>? = null,
+    val messagesAdded: List<GmailMessageContainer>? = null,
+    val messagesDeleted: List<GmailMessageContainer>? = null,
+    val labelsAdded: List<GmailLabelEvent>? = null,
+    val labelsRemoved: List<GmailLabelEvent>? = null
+)
+
+// Container for messages in history events (messagesAdded, messagesDeleted).
+// The GmailMessage inside typically only has id, threadId, and labelIds from history API.
+@kotlinx.serialization.Serializable
+data class GmailMessageContainer(
+    val message: GmailMessage
+)
+
+// For labelsAdded/labelsRemoved events in history.
+@kotlinx.serialization.Serializable
+data class GmailLabelEvent(
+    // The message object here usually only contains id and threadId.
+    val message: GmailMessageIdOnly,
+    val labelIds: List<String>
+)
+
+// Represents a message with only an ID and threadId, as often found in history label events.
+@kotlinx.serialization.Serializable
+data class GmailMessageIdOnly(
+    val id: String,
+    val threadId: String? = null
+)
 
 @Singleton
 class GmailApiHelper @Inject constructor(
@@ -98,6 +152,35 @@ class GmailApiHelper @Inject constructor(
             ?: throw IllegalStateException("Active account ID not found")
     }
 
+    private suspend fun getCurrentGmailHistoryId(): String = withContext(ioDispatcher) {
+        Timber.d("Fetching current Gmail history ID...")
+        try {
+            val response: HttpResponse = httpClient.get("$BASE_URL/profile") {
+                accept(ContentType.Application.Json)
+            }
+            if (response.status.isSuccess()) {
+                val profile = jsonParser.decodeFromString<GmailProfile>(response.bodyAsText())
+                Timber.d("Successfully fetched profile. History ID: ${profile.historyId}")
+                profile.historyId
+            } else {
+                val errorBody = response.bodyAsText()
+                Timber.e("Error fetching Gmail profile: ${response.status} - Body: $errorBody")
+                // Consider a more specific exception or default/fallback behavior if appropriate
+                throw ApiServiceException(
+                    errorMapper.mapExceptionToErrorDetails(
+                        ClientRequestException(response, errorBody)
+                    )
+                )
+            }
+        } catch (e: GoogleNeedsReauthenticationException) {
+            Timber.w(e, "Google account needs re-authentication during getCurrentGmailHistoryId.")
+            throw e // Re-throw to be handled by the caller
+        } catch (e: Exception) {
+            Timber.e(e, "Exception fetching Gmail profile history ID")
+            throw ApiServiceException(errorMapper.mapExceptionToErrorDetails(e))
+        }
+    }
+
     private fun formatEmailAddressesRfc2822(addresses: List<EmailAddress>): String {
         return addresses.joinToString(", ") {
             val displayNameString = it.displayName
@@ -127,7 +210,7 @@ class GmailApiHelper @Inject constructor(
             if (!response.status.isSuccess()) {
                 Timber.e("Error fetching labels: ${response.status} - Body: $responseBodyText")
                 val httpEx =
-                    io.ktor.client.plugins.ClientRequestException(response, responseBodyText)
+                    ClientRequestException(response, responseBodyText)
                 val mappedDetails = errorMapper.mapExceptionToErrorDetails(httpEx)
                 Result.failure(ApiServiceException(mappedDetails))
             } else {
@@ -633,7 +716,7 @@ class GmailApiHelper @Inject constructor(
                 Timber.e(
                     "Error modifying message labels for $messageId: ${response.status} - $errorBody"
                 )
-                val httpEx = io.ktor.client.plugins.ClientRequestException(response, errorBody)
+                val httpEx = ClientRequestException(response, errorBody)
                 val mappedDetails = errorMapper.mapExceptionToErrorDetails(httpEx)
                 Result.failure(ApiServiceException(mappedDetails))
             }
@@ -665,7 +748,7 @@ class GmailApiHelper @Inject constructor(
                 Timber.e(
                     "Error deleting (trashing) message $messageId: ${response.status} - $errorBody"
                 )
-                val httpEx = io.ktor.client.plugins.ClientRequestException(response, errorBody)
+                val httpEx = ClientRequestException(response, errorBody)
                 val mappedDetails = errorMapper.mapExceptionToErrorDetails(httpEx)
                 Result.failure(ApiServiceException(mappedDetails))
             }
@@ -765,7 +848,7 @@ class GmailApiHelper @Inject constructor(
                 Timber.e(
                     "Error moving message $messageId (modifying labels): ${response.status} - $errorBody"
                 )
-                val httpEx = io.ktor.client.plugins.ClientRequestException(response, errorBody)
+                val httpEx = ClientRequestException(response, errorBody)
                 val mappedDetails = errorMapper.mapExceptionToErrorDetails(httpEx)
                 Result.failure(ApiServiceException(mappedDetails))
             }
@@ -813,7 +896,7 @@ class GmailApiHelper @Inject constructor(
             if (!response.status.isSuccess()) {
                 val errorBody = response.bodyAsText()
                 Timber.e("Error fetching thread $threadId: ${response.status} - $errorBody")
-                val httpEx = io.ktor.client.plugins.ClientRequestException(response, errorBody)
+                val httpEx = ClientRequestException(response, errorBody)
                 val mappedDetails = errorMapper.mapExceptionToErrorDetails(httpEx)
                 Result.failure(ApiServiceException(mappedDetails))
             } else {
@@ -930,7 +1013,7 @@ class GmailApiHelper @Inject constructor(
             } else {
                 val errorBody = response.bodyAsText()
                 Timber.e("Error trashing thread $threadId: ${response.status} - $errorBody")
-                val httpEx = io.ktor.client.plugins.ClientRequestException(response, errorBody)
+                val httpEx = ClientRequestException(response, errorBody)
                 val mappedDetails = errorMapper.mapExceptionToErrorDetails(httpEx)
                 Result.failure(ApiServiceException(mappedDetails))
             }
@@ -1029,7 +1112,7 @@ class GmailApiHelper @Inject constructor(
                 Timber.e(
                     "Error modifying labels for thread $threadId: ${response.status} - $errorBody"
                 )
-                val httpEx = io.ktor.client.plugins.ClientRequestException(response, errorBody)
+                val httpEx = ClientRequestException(response, errorBody)
                 val mappedDetails = errorMapper.mapExceptionToErrorDetails(httpEx)
                 Result.failure(ApiServiceException(mappedDetails))
             }
@@ -1065,7 +1148,7 @@ class GmailApiHelper @Inject constructor(
                 Timber.e(
                     "Failed to fetch message attachments for $messageId: ${response.status} - $errorBody"
                 )
-                val httpEx = io.ktor.client.plugins.ClientRequestException(response, errorBody)
+                val httpEx = ClientRequestException(response, errorBody)
                 val mappedDetails = errorMapper.mapExceptionToErrorDetails(httpEx)
                 Result.failure(ApiServiceException(mappedDetails))
             }
@@ -1106,7 +1189,7 @@ class GmailApiHelper @Inject constructor(
                 Timber.e(
                     "Failed to download attachment $attachmentId for message $messageId: ${response.status} - $errorBody"
                 )
-                val httpEx = io.ktor.client.plugins.ClientRequestException(response, errorBody)
+                val httpEx = ClientRequestException(response, errorBody)
                 val mappedDetails = errorMapper.mapExceptionToErrorDetails(httpEx)
                 Result.failure(ApiServiceException(mappedDetails))
             }
@@ -1147,7 +1230,7 @@ class GmailApiHelper @Inject constructor(
             } else {
                 val errorBody = response.bodyAsText().take(500)
                 Timber.e("Failed to create draft: ${response.status} - $errorBody")
-                val httpEx = io.ktor.client.plugins.ClientRequestException(response, errorBody)
+                val httpEx = ClientRequestException(response, errorBody)
                 val mappedDetails = errorMapper.mapExceptionToErrorDetails(httpEx)
                 Result.failure(ApiServiceException(mappedDetails))
             }
@@ -1190,7 +1273,7 @@ class GmailApiHelper @Inject constructor(
             } else {
                 val errorBody = response.bodyAsText().take(500)
                 Timber.e("Failed to update draft $messageId: ${response.status} - $errorBody")
-                val httpEx = io.ktor.client.plugins.ClientRequestException(response, errorBody)
+                val httpEx = ClientRequestException(response, errorBody)
                 val mappedDetails = errorMapper.mapExceptionToErrorDetails(httpEx)
                 Result.failure(ApiServiceException(mappedDetails))
             }
@@ -1226,7 +1309,7 @@ class GmailApiHelper @Inject constructor(
             } else {
                 val errorBody = response.bodyAsText().take(500)
                 Timber.e("Failed to send message: ${response.status} - $errorBody")
-                val httpEx = io.ktor.client.plugins.ClientRequestException(response, errorBody)
+                val httpEx = ClientRequestException(response, errorBody)
                 val mappedDetails = errorMapper.mapExceptionToErrorDetails(httpEx)
                 Result.failure(ApiServiceException(mappedDetails))
             }
@@ -1297,7 +1380,7 @@ class GmailApiHelper @Inject constructor(
             } else {
                 val errorBody = response.bodyAsText().take(500)
                 Timber.e("Failed to search messages: ${response.status} - $errorBody")
-                val httpEx = io.ktor.client.plugins.ClientRequestException(response, errorBody)
+                val httpEx = ClientRequestException(response, errorBody)
                 val mappedDetails = errorMapper.mapExceptionToErrorDetails(httpEx)
                 Result.failure(ApiServiceException(mappedDetails))
             }
@@ -1553,7 +1636,7 @@ class GmailApiHelper @Inject constructor(
             if (!listResponse.status.isSuccess()) {
                 val errorBody = listResponse.bodyAsText()
                 Timber.e("getMessagesForFolder: Error listing messages: ${listResponse.status} - Body: $errorBody")
-                val httpEx = io.ktor.client.plugins.ClientRequestException(listResponse, errorBody)
+                val httpEx = ClientRequestException(listResponse, errorBody)
                 return@withContext Result.failure(
                     ApiServiceException(
                         errorMapper.mapExceptionToErrorDetails(
@@ -1620,6 +1703,221 @@ class GmailApiHelper @Inject constructor(
         } catch (e: Exception) {
             Timber.e(e, "getMessagesForFolder: Exception for folderId '$folderId'")
             Result.failure(ApiServiceException(errorMapper.mapExceptionToErrorDetails(e)))
+        }
+    }
+
+    // Stub implementation for new delta sync method for folders
+    override suspend fun syncFolders(
+        accountId: String,
+        syncToken: String? // This is the startHistoryId for delta, or null for initial sync
+    ): Result<DeltaSyncResult<MailFolder>> = withContext(ioDispatcher) {
+        Timber.i("syncFolders called for account $accountId. SyncToken (startHistoryId): $syncToken")
+        try {
+            // Regardless of initial or delta, we fetch the current complete list of folders.
+            // The worker is responsible for diffing and detecting actual changes/deletions.
+            val foldersResult = getMailFolders(activity = null, accountId = accountId)
+
+            if (foldersResult.isFailure) {
+                Timber.e(
+                    foldersResult.exceptionOrNull(),
+                    "syncFolders: Failed to get mail folders."
+                )
+                return@withContext Result.failure(
+                    foldersResult.exceptionOrNull() ?: ApiServiceException(
+                        errorMapper.mapExceptionToErrorDetails(Exception("Unknown error fetching folders during syncFolders"))
+                    )
+                )
+            }
+
+            val currentFolders = foldersResult.getOrThrow()
+            val latestHistoryId =
+                getCurrentGmailHistoryId() // Get the latest historyId as the next sync token
+
+            Timber.i("syncFolders: Successfully fetched ${currentFolders.size} folders. Next historyId: $latestHistoryId")
+            Result.success(
+                DeltaSyncResult(
+                    newOrUpdatedItems = currentFolders,
+                    deletedItemIds = emptyList(), // Gmail API for labels doesn't directly give deleted IDs list. Worker will diff.
+                    nextSyncToken = latestHistoryId
+                )
+            )
+        } catch (e: GoogleNeedsReauthenticationException) {
+            Timber.w(e, "Google account $accountId needs re-authentication during syncFolders.")
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(ApiServiceException(mappedDetails))
+        } catch (e: ApiServiceException) {
+            Timber.e(e, "ApiServiceException during syncFolders for account $accountId")
+            Result.failure(e)
+        } catch (e: Exception) {
+            Timber.e(e, "Generic exception during syncFolders for account $accountId")
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(ApiServiceException(mappedDetails))
+        }
+    }
+
+    // Stub implementation for new delta sync method for messages
+    override suspend fun syncMessagesForFolder(
+        folderId: String,
+        syncToken: String?, // This is the startHistoryId for delta, or null to get a fresh historyId for future deltas
+        maxResultsFromInterface: Int? // Hint, may be used for internal API call limits if applicable
+    ): Result<DeltaSyncResult<Message>> = withContext(ioDispatcher) {
+        Timber.i("syncMessagesForFolder called for folderId: $folderId. SyncToken (startHistoryId): $syncToken")
+        var localAccountIdForLogging: String? = null // For logging in catch blocks
+        try {
+            val accountId = getCurrentAccountId()
+            localAccountIdForLogging = accountId
+
+            if (syncToken == null) {
+                Timber.d("syncMessagesForFolder: syncToken is null. Fetching current historyId as nextSyncToken for future delta syncs.")
+                val currentHistoryId = getCurrentGmailHistoryId()
+                return@withContext Result.success(
+                    DeltaSyncResult(
+                        newOrUpdatedItems = emptyList(),
+                        deletedItemIds = emptyList(),
+                        nextSyncToken = currentHistoryId
+                    )
+                )
+            }
+
+            // Actual delta sync using provided startHistoryId (syncToken)
+            val messageIdsToFetchDetailsFor = mutableSetOf<String>()
+            val deletedMessageIdsCollector = mutableSetOf<String>()
+
+            var pageTokenForHistoryInternal: String? = null
+            var nextSyncTokenToReturnUltimately =
+                syncToken // Initialize with current token, will be updated by the last page's historyId
+
+            Timber.d("Starting delta sync for folder $folderId from historyId: $syncToken")
+
+            do {
+                val response: HttpResponse = httpClient.get("$BASE_URL/history") {
+                    accept(ContentType.Application.Json)
+                    parameter(
+                        "startHistoryId",
+                        syncToken
+                    ) // The initial startHistoryId for the window remains constant
+                    parameter("labelId", folderId)
+                    // Specify historyTypes to get only relevant events and potentially more detailed messages in messagesAdded
+                    parameter("historyTypes", "messageAdded,messageDeleted,labelAdded,labelRemoved")
+                    maxResultsFromInterface?.let {
+                        parameter(
+                            "maxResults",
+                            it.coerceIn(1, 100)
+                        )
+                    } // Gmail history maxResults is 500, but use interface hint bounded.
+                    pageTokenForHistoryInternal?.let { parameter("pageToken", it) }
+                }
+
+                if (!response.status.isSuccess()) {
+                    val errorBody = response.bodyAsText()
+                    Timber.e("syncMessagesForFolder: Error fetching Gmail history: ${response.status} - Body: $errorBody")
+                    throw ApiServiceException(
+                        errorMapper.mapExceptionToErrorDetails(
+                            ClientRequestException(response, errorBody)
+                        )
+                    )
+                }
+
+                val historyResponse =
+                    jsonParser.decodeFromString<GmailHistoryResponse>(response.bodyAsText())
+                nextSyncTokenToReturnUltimately =
+                    historyResponse.historyId // This is the historyId at the end of THIS page.
+
+                Timber.v("Processing history page. HistoryId for this page end: ${historyResponse.historyId}, next page token: ${historyResponse.nextPageToken}")
+
+                historyResponse.history?.forEach { historyEntry ->
+                    // Messages added to the account AND having the folderId label
+                    historyEntry.messagesAdded?.forEach { msgContainer ->
+                        if (msgContainer.message.labelIds?.contains(folderId) == true) {
+                            msgContainer.message.id?.let { messageIdsToFetchDetailsFor.add(it) }
+                        }
+                    }
+
+                    // Messages deleted from the account (that had folderId label due to labelId filter in query)
+                    historyEntry.messagesDeleted?.forEach { msgContainer ->
+                        msgContainer.message.id?.let { deletedMessageIdsCollector.add(it) }
+                    }
+
+                    // Messages that had folderId label added
+                    historyEntry.labelsAdded?.forEach { labelEvent ->
+                        if (labelEvent.labelIds.contains(folderId)) {
+                            messageIdsToFetchDetailsFor.add(labelEvent.message.id)
+                        }
+                    }
+
+                    // Messages that had folderId label removed
+                    historyEntry.labelsRemoved?.forEach { labelEvent ->
+                        if (labelEvent.labelIds.contains(folderId)) {
+                            deletedMessageIdsCollector.add(labelEvent.message.id)
+                        }
+                    }
+                }
+                pageTokenForHistoryInternal = historyResponse.nextPageToken
+            } while (pageTokenForHistoryInternal != null)
+
+            Timber.d("Finished processing history pages. Messages to fetch details for: ${messageIdsToFetchDetailsFor.size}, Deleted IDs collected: ${deletedMessageIdsCollector.size}")
+
+            val newOrUpdatedMessageDetails = mutableListOf<Message>()
+            if (messageIdsToFetchDetailsFor.isNotEmpty()) {
+                supervisorScope {
+                    val deferreds = messageIdsToFetchDetailsFor.map { msgId ->
+                        async(ioDispatcher) {
+                            try {
+                                Timber.v("Fetching details for messageId $msgId for delta sync folder $folderId")
+                                fetchRawGmailMessage(msgId)?.let {
+                                    mapGmailMessageToMessage(
+                                        it,
+                                        accountId,
+                                        folderId,
+                                        isForBodyContent = false
+                                    )
+                                }
+                            } catch (e: Exception) {
+                                Timber.e(
+                                    e,
+                                    "syncMessagesForFolder: Failed to fetch/map details for msgId $msgId"
+                                )
+                                null
+                            }
+                        }
+                    }
+                    newOrUpdatedMessageDetails.addAll(deferreds.awaitAll().filterNotNull())
+                }
+            }
+
+            // Ensure messages marked for deletion are not included in new/updated items
+            val finalNewOrUpdatedItems =
+                newOrUpdatedMessageDetails.filterNot { it.id in deletedMessageIdsCollector }
+
+            Timber.i("syncMessagesForFolder (delta): Fetched ${finalNewOrUpdatedItems.size} new/updated, ${deletedMessageIdsCollector.size} deleted for folder $folderId. Next sync token: $nextSyncTokenToReturnUltimately")
+            Result.success(
+                DeltaSyncResult(
+                    newOrUpdatedItems = finalNewOrUpdatedItems,
+                    deletedItemIds = deletedMessageIdsCollector.toList(),
+                    nextSyncToken = nextSyncTokenToReturnUltimately
+                )
+            )
+
+        } catch (e: GoogleNeedsReauthenticationException) {
+            Timber.w(
+                e,
+                "Google account ${e.accountId} needs re-authentication during syncMessagesForFolder (folder: $folderId)."
+            ) // Used e.accountId
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(ApiServiceException(mappedDetails))
+        } catch (e: ApiServiceException) {
+            Timber.e(
+                e,
+                "ApiServiceException during syncMessagesForFolder for folder $folderId (Account: $localAccountIdForLogging)"
+            )
+            Result.failure(e)
+        } catch (e: Exception) {
+            Timber.e(
+                e,
+                "Generic exception during syncMessagesForFolder for folder $folderId (Account: $localAccountIdForLogging)"
+            )
+            val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
+            Result.failure(ApiServiceException(mappedDetails))
         }
     }
 }

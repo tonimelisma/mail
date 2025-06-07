@@ -3,36 +3,45 @@
 
 package net.melisma.mail.ui
 
+// import androidx.compose.runtime.Composable // <-- REMOVED this import
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.LabelImportant
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Drafts
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Inbox
 import androidx.compose.material.icons.filled.Report
-// import androidx.compose.runtime.Composable // <-- REMOVED this import
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.ui.graphics.vector.ImageVector
+import net.melisma.core_data.model.WellKnownFolderType
+import timber.log.Timber
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.util.Locale
-import timber.log.Timber
 
 /**
  * Helper to get appropriate icon for common folders using updated names.
  * This is now a regular function, not a @Composable function.
  */
 // @Composable // <-- REMOVED this annotation
-fun getIconForFolder(folderName: String): ImageVector { // Now a regular function
-    return when (folderName.lowercase(Locale.ROOT)) {
-        "inbox" -> Icons.Filled.Inbox
-        "sent items" -> Icons.AutoMirrored.Filled.Send // Use AutoMirrored version
-        "drafts" -> Icons.Filled.Drafts
-        "deleted items", "trash" -> Icons.Filled.Delete
-        "junk email", "spam" -> Icons.Filled.Report
-        "archive", "all mail" -> Icons.Filled.Archive
-        else -> Icons.Filled.Folder
+fun getIconForFolder(folderType: WellKnownFolderType): ImageVector {
+    return when (folderType) {
+        WellKnownFolderType.INBOX -> Icons.Filled.Inbox
+        WellKnownFolderType.SENT_ITEMS -> Icons.AutoMirrored.Filled.Send
+        WellKnownFolderType.DRAFTS -> Icons.Filled.Drafts
+        WellKnownFolderType.TRASH -> Icons.Filled.Delete
+        WellKnownFolderType.SPAM -> Icons.Filled.Report
+        WellKnownFolderType.ARCHIVE -> Icons.Filled.Archive
+        WellKnownFolderType.STARRED -> Icons.Filled.Star
+        WellKnownFolderType.IMPORTANT -> Icons.AutoMirrored.Filled.LabelImportant
+        WellKnownFolderType.USER_CREATED -> Icons.Filled.Folder
+        WellKnownFolderType.OTHER -> Icons.Filled.FolderOpen
+        WellKnownFolderType.HIDDEN -> Icons.Filled.VisibilityOff
     }
 }
 

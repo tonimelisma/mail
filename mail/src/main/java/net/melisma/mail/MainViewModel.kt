@@ -435,7 +435,7 @@ class MainViewModel @Inject constructor(
         Timber.d("handleAuthenticationResult in ViewModel. Provider: $providerType, ResultCode: $resultCode, Data: ${data != null}")
         // Set loading state. This will be cleared when the signIn flow (that initially emitted UiActionRequired)
         // receives the final result (Success/Error) from the GoogleAuthResultChannel and updates the state.
-        _uiState.update { it.copy(isLoadingAccountAction = true) } // Set true, signIn flow will set to false on completion
+        // _uiState.update { it.copy(isLoadingAccountAction = true) } // Let the collecting signIn flow manage this.
 
         viewModelScope.launch {
             defaultAccountRepository.handleAuthenticationResult(providerType, resultCode, data)

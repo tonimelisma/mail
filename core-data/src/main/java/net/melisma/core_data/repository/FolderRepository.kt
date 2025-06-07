@@ -2,10 +2,10 @@ package net.melisma.core_data.repository
 
 import android.app.Activity
 import kotlinx.coroutines.flow.Flow
-import net.melisma.core_data.model.Account // Updated import
-import net.melisma.core_data.model.FolderFetchState // Updated import
-import net.melisma.core_data.model.MailThread // Added import
-import net.melisma.core_data.model.Message // Added import
+import net.melisma.core_data.model.Account
+import net.melisma.core_data.model.FolderFetchState
+import net.melisma.core_data.model.MailThread
+import net.melisma.core_data.model.Message
 
 /**
  * Interface defining the contract for managing mail folders for user accounts.
@@ -58,4 +58,10 @@ interface FolderRepository {
     fun getMessagesInFolder(accountId: String, folderId: String): Flow<List<Message>>
     fun getFolderById(folderId: String): Flow<net.melisma.core_data.model.MailFolder?>
     suspend fun getFolderByIdSuspend(folderId: String): net.melisma.core_data.model.MailFolder?
+
+    /**
+     * Retrieves the local UUID primary key of a FolderEntity based on its accountId and remoteId.
+     * Returns null if not found.
+     */
+    suspend fun getLocalFolderUuidByRemoteId(accountId: String, remoteFolderId: String): String?
 }

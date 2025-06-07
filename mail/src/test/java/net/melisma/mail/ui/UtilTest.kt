@@ -2,14 +2,19 @@
 package net.melisma.mail.ui
 
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.LabelImportant
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Archive
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Drafts
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Inbox
 import androidx.compose.material.icons.filled.Report
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.VisibilityOff
 // Import androidx.compose.ui.graphics.vector.ImageVector // Not strictly needed for equals check
+import net.melisma.core_data.model.WellKnownFolderType
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import java.time.OffsetDateTime
@@ -22,19 +27,24 @@ class UtilTest {
 
     // This test should now work because getIconForFolder is no longer @Composable
     @Test
-    fun `getIconForFolder returns correct icons`() {
-        assertEquals(Icons.Filled.Inbox, getIconForFolder("Inbox"))
-        assertEquals(Icons.Filled.Inbox, getIconForFolder("INBOX")) // Case-insensitivity
-        assertEquals(Icons.AutoMirrored.Filled.Send, getIconForFolder("Sent Items"))
-        assertEquals(Icons.Filled.Drafts, getIconForFolder("Drafts"))
-        assertEquals(Icons.Filled.Delete, getIconForFolder("Deleted Items"))
-        assertEquals(Icons.Filled.Delete, getIconForFolder("Trash")) // Alias
-        assertEquals(Icons.Filled.Report, getIconForFolder("Junk Email")) // Alias
-        assertEquals(Icons.Filled.Report, getIconForFolder("Spam"))
-        assertEquals(Icons.Filled.Archive, getIconForFolder("Archive"))
-        assertEquals(Icons.Filled.Archive, getIconForFolder("All Mail")) // Alias
-        assertEquals(Icons.Filled.Folder, getIconForFolder("Custom Folder"))
-        assertEquals(Icons.Filled.Folder, getIconForFolder("wEiRd CasE")) // Default fallback
+    fun `getIconForFolder returns correct icons for WellKnownFolderType`() {
+        assertEquals(Icons.Filled.Inbox, getIconForFolder(WellKnownFolderType.INBOX))
+        assertEquals(
+            Icons.AutoMirrored.Filled.Send,
+            getIconForFolder(WellKnownFolderType.SENT_ITEMS)
+        )
+        assertEquals(Icons.Filled.Drafts, getIconForFolder(WellKnownFolderType.DRAFTS))
+        assertEquals(Icons.Filled.Delete, getIconForFolder(WellKnownFolderType.TRASH))
+        assertEquals(Icons.Filled.Report, getIconForFolder(WellKnownFolderType.SPAM))
+        assertEquals(Icons.Filled.Archive, getIconForFolder(WellKnownFolderType.ARCHIVE))
+        assertEquals(Icons.Filled.Star, getIconForFolder(WellKnownFolderType.STARRED))
+        assertEquals(
+            Icons.AutoMirrored.Filled.LabelImportant,
+            getIconForFolder(WellKnownFolderType.IMPORTANT)
+        )
+        assertEquals(Icons.Filled.Folder, getIconForFolder(WellKnownFolderType.USER_CREATED))
+        assertEquals(Icons.Filled.FolderOpen, getIconForFolder(WellKnownFolderType.OTHER))
+        assertEquals(Icons.Filled.VisibilityOff, getIconForFolder(WellKnownFolderType.HIDDEN))
     }
 
     // --- Tests for formatMessageDate remain the same ---

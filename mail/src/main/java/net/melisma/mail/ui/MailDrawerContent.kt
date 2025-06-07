@@ -274,8 +274,8 @@ private fun FolderItem(folder: MailFolder, isSelected: Boolean, onClick: () -> U
         // *** NOTE: The following line WILL cause a build error if getIconForFolder is not defined/imported ***
         icon = {
             Icon(
-                getIconForFolder(folder.displayName),
-                folder.displayName
+                imageVector = getIconForFolder(folder.type),
+                contentDescription = folder.displayName
             )
         }, // Icon and getIconForFolder call might still be unresolved
         badge = { if (folder.unreadItemCount > 0) Badge { Text(folder.unreadItemCount.toString()) } } // Now resolved

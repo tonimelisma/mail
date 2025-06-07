@@ -279,4 +279,13 @@ class DefaultFolderRepository @Inject constructor(
     override suspend fun getFolderByIdSuspend(folderId: String): MailFolder? {
         return folderDao.getFolderByIdSuspend(folderId)?.toDomainModel()
     }
+
+    override suspend fun getLocalFolderUuidByRemoteId(
+        accountId: String,
+        remoteFolderId: String
+    ): String? {
+        return withContext(ioDispatcher) {
+            folderDao.getFolderByAccountIdAndRemoteId(accountId, remoteFolderId)?.id
+        }
+    }
 }

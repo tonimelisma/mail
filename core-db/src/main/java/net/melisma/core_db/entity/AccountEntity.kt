@@ -27,6 +27,7 @@ data class AccountEntity(
     // Sync metadata specific to folder list synchronization
     val lastFolderListSyncTimestamp: Long? = null,
     val lastFolderListSyncError: String? = null,
+    val folderListSyncToken: String? = null, // Token for delta syncing the folder list
 
     // Sync metadata for other potential top-level sync errors not covered by folder list or general status
     val lastGenericSyncError: String? = null

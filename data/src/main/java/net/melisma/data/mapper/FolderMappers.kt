@@ -9,27 +9,28 @@ import net.melisma.core_db.entity.FolderEntity
 
 fun MailFolder.toEntity(accountId: String, localId: String): FolderEntity {
     return FolderEntity(
-        id = localId, // Use a locally unique ID
+        id = localId, // This will now always be a UUID provided by the caller
         accountId = accountId,
         remoteId = this.id, // The ID from the API is the remoteId
         name = this.displayName,
+        wellKnownType = this.type, // ADDED: MailFolder.type is WellKnownFolderType enum
         totalCount = this.totalItemCount,
-        unreadCount = this.unreadItemCount,
-        type = this.type.name // Convert enum to String
+        unreadCount = this.unreadItemCount
+        // Other FolderEntity fields like parentFolderId, syncStatus etc., are not set here.
+        // They would be set either by default in FolderEntity or updated later by sync workers if needed.
     )
 }
 
 fun FolderEntity.toDomainModel(): MailFolder {
     return MailFolder(
-        id = this.remoteId ?: this.id, // Prefer remoteId as the canonical ID for the domain
+        id = this.id, // ALWAYS use the local UUID as the ID for the domain model
         displayName = this.name ?: "Unnamed Folder",
         totalItemCount = this.totalCount ?: 0,
         unreadItemCount = this.unreadCount ?: 0,
-        type = try {
-            this.type?.let { WellKnownFolderType.valueOf(it) }
-                ?: WellKnownFolderType.USER_CREATED
-        } catch (e: IllegalArgumentException) {
-            WellKnownFolderType.OTHER // Fallback for unknown types
-        }
+        type = this.wellKnownType
+            ?: WellKnownFolderType.USER_CREATED, // Use new wellKnownType field
+        // Add remoteId to MailFolder if it's needed by the UI for other purposes,
+        // or if parts of the ViewModel layer still need to reference folders by their remoteId transiently.
+        // For example: remoteId = this.remoteId 
     )
 } 

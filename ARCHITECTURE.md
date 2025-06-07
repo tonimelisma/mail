@@ -68,7 +68,10 @@ The application is architected to be "offline-first". The UI layer is completely
 network. It observes Flows directly from the Room database DAOs. All user mutations (deleting,
 marking as read, sending) are applied to the local database first (optimistic updates), then queued
 for synchronization with the server. The local database, defined in :core-db, is the **single source
-of truth** for the entire application state. Data management policies (initial sync, cache size
+of truth** for the entire application state. Key entities like folders (`FolderEntity`) are
+identified internally by a consistent local UUID primary key, with functional types (e.g., Inbox,
+Drafts) managed by a dedicated `wellKnownType: WellKnownFolderType` enum, ensuring robust and
+provider-agnostic referencing. Data management policies (initial sync, cache size
 limits, eviction rules based on age and recent access) ensure a balance between offline availability
 and device resource usage.
 
@@ -193,7 +196,10 @@ SyncEngine orchestrating WorkManager tasks.
 
 * **Purpose & Scope:** Defines Room database schema, entities (with syncStatus,
   lastAccessedTimestamp, etc.), DAOs, FTS tables for messages.
-* **Key Components & Classes:** AppDatabase.kt, Entity classes, DAO interfaces.
+* **Key Components & Classes:** AppDatabase.kt, Entity classes (e.g., `FolderEntity` now uses a
+  local UUID `id` as its primary key and includes a `wellKnownType: WellKnownFolderType` enum to
+  identify its functional type, replacing the previous string-based `type` and mixed PK strategy),
+  DAO interfaces.
 
 ### **3.5. :backend-microsoft Module**
 

@@ -106,6 +106,10 @@ interface MessageDao {
     @Query("DELETE FROM messages WHERE messageId = :messageId")
     suspend fun deletePermanentlyById(messageId: String)
 
+    // Deletes messages whose IDs are in the provided list
+    @Query("DELETE FROM messages WHERE messageId IN (:messageIds)")
+    suspend fun deleteMessagesByRemoteIds(messageIds: List<String>): Int
+
     @Query("UPDATE messages SET folderId = :newFolderId, syncStatus = :syncStatus, lastSyncError = :lastSyncError WHERE messageId = :messageId")
     suspend fun updateMessageFolderSyncStateAndError(
         messageId: String,

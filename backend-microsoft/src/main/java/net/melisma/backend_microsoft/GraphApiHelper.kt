@@ -5,6 +5,7 @@ import io.ktor.client.call.body
 import io.ktor.client.plugins.ClientRequestException
 import io.ktor.client.request.accept
 import io.ktor.client.request.get
+import io.ktor.client.request.parameter
 import io.ktor.client.statement.HttpResponse
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
@@ -22,6 +23,7 @@ import net.melisma.core_data.datasource.MailApiService
 import net.melisma.core_data.di.Dispatcher
 import net.melisma.core_data.di.MailDispatchers
 import net.melisma.core_data.errors.ApiServiceException
+import net.melisma.core_data.model.DeltaSyncResult
 import net.melisma.core_data.model.ErrorDetails
 import net.melisma.core_data.model.MailFolder
 import net.melisma.core_data.model.Message
@@ -42,30 +44,32 @@ private data class GraphCollection<T>( // Used by Ktor getMailFolders
 )
 
 @Serializable
-private data class GraphMailFolder( // Used by Ktor getMailFolders
+private data class GraphMailFolder( // Used by Ktor getMailFolders and Delta Sync
     val id: String,
-    val displayName: String,
-    val totalItemCount: Int = 0,
-    val unreadItemCount: Int = 0,
-    val wellKnownName: String? = null
+    val displayName: String?, // Made nullable for delta
+    val totalItemCount: Int? = 0, // Made nullable for delta
+    val unreadItemCount: Int? = 0, // Made nullable for delta
+    val wellKnownName: String? = null,
+    @SerialName("@removed") val removed: GraphRemovedReason? = null // For delta sync
 )
 
 // Ktor specific DTOs for messages, used by getMessagesForFolder
 @Serializable
 private data class KtorGraphMessage(
     val id: String,
-    @SerialName("conversationId") val conversationId: String?,
+    @SerialName("conversationId") val conversationId: String? = null,
     val receivedDateTime: String? = null,
     val sentDateTime: String? = null,
     val subject: String? = null,
     val sender: KtorGraphRecipient? = null,
     val from: KtorGraphRecipient? = null,
-    val toRecipients: List<KtorGraphRecipient> = emptyList(),
-    val isRead: Boolean = true,
+    val toRecipients: List<KtorGraphRecipient>? = emptyList(), // Made nullable for delta
+    val isRead: Boolean? = true, // Made nullable for delta
     val bodyPreview: String? = null,
     val body: KtorGraphItemBody? = null,
     val hasAttachments: Boolean? = null,
-    val flag: KtorGraphFlag? = null // Represents the 'starred' status via its flagStatus field
+    val flag: KtorGraphFlag? = null, // Represents the 'starred' status via its flagStatus field
+    @SerialName("@removed") val removed: GraphRemovedReason? = null // For delta sync
 )
 
 @Serializable
@@ -91,6 +95,28 @@ private data class KtorGraphFlag(
     val flagStatus: String? = null
 )
 
+// Data class for MS Graph Delta API responses
+@Serializable
+data class GraphDeltaResponse<T>(
+    @SerialName("@odata.context") val context: String? = null,
+    val value: List<T>,
+    @SerialName("@odata.nextLink") val nextLink: String? = null,
+    @SerialName("@odata.deltaLink") val deltaLink: String? = null
+)
+
+// Represents an item that might have been removed in a delta query
+// This class itself might not be directly used in GraphDeltaResponse<T> value list
+// if T is made to include the @removed field directly.
+@Serializable
+data class GraphDeltaItem(
+    val id: String, // Always present
+    @SerialName("@removed") val removed: GraphRemovedReason? = null // Present if the item was removed
+)
+
+@Serializable
+data class GraphRemovedReason(
+    val reason: String? = null // e.g., "deleted" or "changed"
+)
 
 @Singleton
 class GraphApiHelper @Inject constructor(
@@ -158,9 +184,9 @@ class GraphApiHelper @Inject constructor(
 
     private fun mapGraphFolderToMailFolder(graphFolder: GraphMailFolder): MailFolder? {
         val type: WellKnownFolderType
-        var finalDisplayName = graphFolder.displayName
+        var finalDisplayName = graphFolder.displayName ?: "Unknown Folder"
         val wellKnownNameLower = graphFolder.wellKnownName?.lowercase()
-        val displayNameLower = graphFolder.displayName.lowercase() // For fallback matching
+        val displayNameLower = graphFolder.displayName?.lowercase() // For fallback matching
 
         when (wellKnownNameLower) {
             WKNAME_INBOX -> {
@@ -226,8 +252,8 @@ class GraphApiHelper @Inject constructor(
         return MailFolder(
             id = graphFolder.id,
             displayName = finalDisplayName,
-            totalItemCount = graphFolder.totalItemCount,
-            unreadItemCount = graphFolder.unreadItemCount,
+            totalItemCount = graphFolder.totalItemCount ?: 0, // Default to 0 if null
+            unreadItemCount = graphFolder.unreadItemCount ?: 0, // Default to 0 if null
             type = type
         )
     }
@@ -238,7 +264,8 @@ class GraphApiHelper @Inject constructor(
         accountId: String,
         folderId: String
     ): Message? {
-        val receivedDateTimeStr = ktorGraphMessage.receivedDateTime ?: return null
+        val receivedDateTimeStr = ktorGraphMessage.receivedDateTime
+            ?: return null // Return null if essential date is missing
 
         return Message.fromApi(
             id = ktorGraphMessage.id,
@@ -253,11 +280,11 @@ class GraphApiHelper @Inject constructor(
             senderAddress = ktorGraphMessage.sender?.emailAddress?.address
                 ?: ktorGraphMessage.from?.emailAddress?.address,
             bodyPreview = ktorGraphMessage.bodyPreview ?: "",
-            isRead = ktorGraphMessage.isRead,
+            isRead = ktorGraphMessage.isRead != false, // Default to true (read) if null
             body = ktorGraphMessage.body?.content,
             bodyContentType = ktorGraphMessage.body?.contentType ?: "text",
-            recipientNames = ktorGraphMessage.toRecipients.mapNotNull { it.emailAddress?.name },
-            recipientAddresses = ktorGraphMessage.toRecipients.mapNotNull { it.emailAddress?.address },
+            recipientNames = ktorGraphMessage.toRecipients?.mapNotNull { it.emailAddress?.name },
+            recipientAddresses = ktorGraphMessage.toRecipients?.mapNotNull { it.emailAddress?.address },
             isStarred = ktorGraphMessage.flag?.flagStatus == "flagged", // Assuming "flagged" string from API
             hasAttachments = ktorGraphMessage.hasAttachments == true
         )
@@ -422,8 +449,203 @@ class GraphApiHelper @Inject constructor(
         query: String,
         folderId: String?,
         maxResults: Int
-    ): Result<List<Message>> =
-        withContext(ioDispatcher) { Result.failure(NotImplementedError("searchMessages not implemented (SDK removed)")) }
+    ): Result<List<Message>> {
+        throw NotImplementedError("Search messages not implemented for Graph yet.")
+    }
+
+    // Stub implementation for new delta sync method for folders
+    override suspend fun syncFolders(
+        accountId: String,
+        syncToken: String?
+    ): Result<DeltaSyncResult<MailFolder>> = withContext(ioDispatcher) {
+        Timber.i("syncFolders (Graph) called for account $accountId. SyncToken (deltaLink): $syncToken")
+        try {
+            val collectedNewOrUpdatedFolders = mutableListOf<MailFolder>()
+            val collectedDeletedFolderIds = mutableListOf<String>()
+
+            // Initial URL must be non-null. syncToken is String?, fallback is String.
+            val initialRequestUrl: String =
+                syncToken ?: "$MS_GRAPH_ROOT_ENDPOINT/me/mailFolders/delta"
+            var currentRequestUrlAsNullable: String? =
+                initialRequestUrl // Explicitly String? for loop control
+            var finalDeltaLinkForNextSync: String? =
+                syncToken // Initialize with incoming, update with last page's deltaLink
+
+            Timber.d("Starting Graph folder delta sync. Initial URL: $initialRequestUrl")
+
+            do {
+                val urlToFetch =
+                    currentRequestUrlAsNullable!! // Safe due to loop condition and initialization
+                val response: HttpResponse = httpClient.get(urlToFetch) {
+                    accept(ContentType.Application.Json)
+                    // MS Graph recommends specific headers for delta queries, like Prefer: odata.track-changes
+                    // For simplicity, Ktor defaults might be okay, but for production, review MS Graph docs.
+                }
+
+                if (!response.status.isSuccess()) {
+                    val errorBody = response.bodyAsText()
+                    Timber.e("syncFolders (Graph): Error fetching delta: ${response.status} - Body: $errorBody")
+                    val httpEx = ClientRequestException(response, errorBody)
+                    return@withContext Result.failure(
+                        ApiServiceException(
+                            errorMapper.mapExceptionToErrorDetails(
+                                httpEx
+                            )
+                        )
+                    )
+                }
+
+                val deltaResponse = response.body<GraphDeltaResponse<GraphMailFolder>>()
+                Timber.v("Graph folder delta page received. NextLink: ${deltaResponse.nextLink}, DeltaLink: ${deltaResponse.deltaLink}")
+
+                deltaResponse.value.forEach { graphFolder ->
+                    if (graphFolder.removed != null) {
+                        collectedDeletedFolderIds.add(graphFolder.id)
+                        Timber.v("Folder ${graphFolder.id} marked as removed.")
+                    } else {
+                        if (graphFolder.displayName == null) {
+                            Timber.w("Graph folder ${graphFolder.id} is not marked removed but has null displayName. Skipping.")
+                        } else {
+                            mapGraphFolderToMailFolder(graphFolder)?.let {
+                                collectedNewOrUpdatedFolders.add(it)
+                                Timber.v("Folder ${graphFolder.id} mapped as new/updated: ${it.displayName}")
+                            }
+                        }
+                    }
+                }
+
+                deltaResponse.deltaLink?.let {
+                    finalDeltaLinkForNextSync = it
+                }
+                currentRequestUrlAsNullable = deltaResponse.nextLink // Assign String? to String?
+
+            } while (currentRequestUrlAsNullable != null)
+
+            Timber.i("syncFolders (Graph): Completed. ${collectedNewOrUpdatedFolders.size} new/updated, ${collectedDeletedFolderIds.size} deleted. Next deltaLink: $finalDeltaLinkForNextSync")
+            Result.success(
+                DeltaSyncResult(
+                    newOrUpdatedItems = collectedNewOrUpdatedFolders,
+                    deletedItemIds = collectedDeletedFolderIds.distinct(), // Ensure distinct IDs
+                    nextSyncToken = finalDeltaLinkForNextSync
+                )
+            )
+
+        } catch (e: Exception) {
+            Timber.e(e, "syncFolders (Graph): Exception for accountId $accountId")
+            Result.failure(ApiServiceException(errorMapper.mapExceptionToErrorDetails(e)))
+        }
+    }
+
+    // Stub implementation for new delta sync method for messages
+    override suspend fun syncMessagesForFolder(
+        folderId: String,
+        syncToken: String?,
+        maxResultsFromInterface: Int?
+    ): Result<DeltaSyncResult<Message>> = withContext(ioDispatcher) {
+        Timber.i("syncMessagesForFolder (Graph) called for folderId: $folderId. SyncToken (deltaLink): $syncToken")
+        try {
+            val accountId = credentialStore.getActiveAccountId() ?: throw ApiServiceException(
+                errorMapper.mapExceptionToErrorDetails(IllegalStateException("No active Microsoft account found for syncMessagesForFolder"))
+            )
+
+            if (syncToken == null) {
+                // Initial call to get the first deltaLink.
+                // The messages on this first page are ignored; caller should have already done a full sync.
+                val initialDeltaUrl =
+                    "$MS_GRAPH_ROOT_ENDPOINT/me/mailFolders/$folderId/messages/delta"
+                Timber.d("syncMessagesForFolder (Graph): syncToken is null. Fetching initial deltaLink from: $initialDeltaUrl")
+
+                val response: HttpResponse = httpClient.get(initialDeltaUrl) {
+                    accept(ContentType.Application.Json)
+                    maxResultsFromInterface?.let { parameter("\$top", it.toString()) }
+                }
+
+                if (!response.status.isSuccess()) {
+                    val errorBody = response.bodyAsText()
+                    Timber.e("syncMessagesForFolder (Graph): Error fetching initial delta link for $folderId: ${response.status} - Body: $errorBody")
+                    throw ApiServiceException(
+                        errorMapper.mapExceptionToErrorDetails(
+                            ClientRequestException(response, errorBody)
+                        )
+                    )
+                }
+                val deltaResponse = response.body<GraphDeltaResponse<KtorGraphMessage>>()
+                val initialDeltaLink = deltaResponse.deltaLink
+                Timber.i("syncMessagesForFolder (Graph): Successfully fetched initial deltaLink for folder $folderId: $initialDeltaLink")
+                return@withContext Result.success(
+                    DeltaSyncResult(
+                        newOrUpdatedItems = emptyList(),
+                        deletedItemIds = emptyList(),
+                        nextSyncToken = initialDeltaLink
+                    )
+                )
+            }
+
+            // Actual delta sync using provided deltaLink (syncToken)
+            val collectedNewOrUpdatedMessages = mutableListOf<Message>()
+            val collectedDeletedMessageIds = mutableListOf<String>()
+            var currentRequestUrl: String? = syncToken // Start with the provided deltaLink
+            var finalDeltaLinkForNextSync: String? =
+                syncToken // Initialize, will be updated by the last page's deltaLink
+
+            Timber.d("Starting Graph message delta sync for folder $folderId. Initial URL: $currentRequestUrl")
+
+            while (currentRequestUrl != null) { // Loop as long as there is a nextLink or it's the first deltaLink
+                val requestUrlForLoop =
+                    currentRequestUrl!! // Use !! as currentRequestUrl is confirmed non-null by the loop condition
+                val response: HttpResponse = httpClient.get(requestUrlForLoop) {
+                    accept(ContentType.Application.Json)
+                }
+
+                if (!response.status.isSuccess()) {
+                    val errorBody = response.bodyAsText()
+                    Timber.e("syncMessagesForFolder (Graph): Error fetching delta page: ${response.status} - Body: $errorBody")
+                    throw ApiServiceException(
+                        errorMapper.mapExceptionToErrorDetails(
+                            ClientRequestException(response, errorBody)
+                        )
+                    )
+                }
+
+                val deltaResponse = response.body<GraphDeltaResponse<KtorGraphMessage>>()
+                Timber.v("Graph message delta page received. NextLink: ${deltaResponse.nextLink}, DeltaLink: ${deltaResponse.deltaLink}")
+
+                deltaResponse.value.forEach { ktorGraphMessage ->
+                    if (ktorGraphMessage.removed != null) {
+                        collectedDeletedMessageIds.add(ktorGraphMessage.id)
+                        Timber.v("Message ${ktorGraphMessage.id} in folder $folderId marked as removed.")
+                    } else {
+                        mapKtorGraphMessageToDomainMessage(
+                            ktorGraphMessage,
+                            accountId,
+                            folderId
+                        )?.let {
+                            collectedNewOrUpdatedMessages.add(it)
+                            Timber.v("Message ${ktorGraphMessage.id} mapped as new/updated for folder $folderId: ${it.subject}")
+                        }
+                    }
+                }
+
+                deltaResponse.deltaLink?.let {
+                    finalDeltaLinkForNextSync = it
+                }
+                currentRequestUrl = deltaResponse.nextLink
+            }
+
+            Timber.i("syncMessagesForFolder (Graph): Completed delta for folder $folderId. ${collectedNewOrUpdatedMessages.size} new/updated, ${collectedDeletedMessageIds.size} deleted. Next deltaLink: $finalDeltaLinkForNextSync")
+            Result.success(
+                DeltaSyncResult(
+                    newOrUpdatedItems = collectedNewOrUpdatedMessages,
+                    deletedItemIds = collectedDeletedMessageIds.distinct(),
+                    nextSyncToken = finalDeltaLinkForNextSync
+                )
+            )
+
+        } catch (e: Exception) {
+            Timber.e(e, "syncMessagesForFolder (Graph): Exception for folderId $folderId")
+            Result.failure(ApiServiceException(errorMapper.mapExceptionToErrorDetails(e)))
+        }
+    }
 
     // Removed GraphSdkMessage.toDomainMessage() extension function as GraphSdkMessage (SDK type) is gone.
     // The mapKtorGraphMessageToDomainMessage handles mapping from Ktor DTOs.

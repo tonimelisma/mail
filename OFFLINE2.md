@@ -57,63 +57,124 @@ local data to provide a rich offline experience while respecting device storage 
           minor code quality issue regarding mixed `Boolean` and `Result` types was identified and
           refactored for clarity and type safety.
 
-* **Phase 1.B/C/D (Sync Workers & Offline Queuing): SKELETONS IMPLEMENTED, LOGIC PENDING/PARTIALLY
-  ADDRESSED.**
-    * The foundational classes for the sync engine (`SyncEngine`) and all related workers (
-      `FolderListSyncWorker`, `FolderContentSyncWorker`, `MessageBodyDownloadWorker`,
-      `AttachmentDownloadWorker`, `ActionUploadWorker`) exist and compile.
-    * Basic interactions with DAOs and API services are in place.
-    * However, the core synchronization logic (robust error handling, comprehensive delta sync,
-      etc.) and particularly the **orchestration logic within `SyncEngine`** are not yet fully
-      implemented.
+* **Phase 1.B (SyncEngine Orchestration & Core Sync Enhancement): LARGELY COMPLETED.**
+    * `SyncEngine.kt` has been implemented. It orchestrates `FolderListSyncWorker` and, upon
+      its success, triggers `FolderContentSyncWorker` for key folders ("INBOX", "DRAFTS", "SENT").
+      This addresses the critical need for ordered synchronization.
+    * `FolderListSyncWorker.kt` and `FolderContentSyncWorker.kt` have been enhanced.
+      `FolderContentSyncWorker` now includes logic to attempt delta sync if a token is present,
+      falling back to paged sync. It also primes `RemoteKeyEntity` for `MessageRemoteMediator`.
+      The previous "basic delta sync check" (time-based) in `FolderContentSyncWorker` was removed
+      in favor of the more robust token-based delta approach.
+
+* **Phase 1.C (On-Demand and Action-Based Workers): COMPLETED.**
+    * `MessageBodyDownloadWorker.kt` was finalized and now checks if content is already synced
+      before downloading.
+    * `ActionUploadWorker.kt` was finalized. Build issues were resolved (KSP, type ambiguities),
+      and it now robustly handles local database updates after successful API calls for mark
+      read/unread, star, move, and send actions. Draft creation/update logic was also refined to
+      use server responses for local DB updates.
+
+* **Phase 2.1 (Delta Sync for Server-Side Deletions - Foundation & Implementation): COMPLETED.**
+    * `DeltaSyncResult.kt` data class created.
+    * `MailApiService.kt` interface updated with `syncFolders(...)` and `syncMessagesForFolder(...)`
+      methods designed for delta synchronization.
+    * **`GmailApiHelper.kt` and `GraphApiHelper.kt` now have fully implemented delta sync logic
+      for `syncFolders` and `syncMessagesForFolder`, utilizing Gmail's `historyId` and
+      Microsoft Graph's `deltaToken` respectively.**
+    * `AccountEntity.kt` updated with `folderListSyncToken`.
+    * `FolderEntity.kt` refactored: `id` is now always a local UUID, `type: String?` removed,
+      `wellKnownType: WellKnownFolderType?` added, `messageListSyncToken` field added. An
+      `@Index(value = ["accountId", "remoteId"], unique = true)` was added to prevent duplicate
+      local folders for the same remote folder.
+    * `AppDatabase.kt` version incremented to 13 to reflect schema changes.
+      `fallbackToDestructiveMigration()` is confirmed to be in use, addressing crashes due to
+      schema changes on development builds (app reinstall may be needed for existing builds).
+    * `FolderDao.kt` refactored: `insertOrUpdateFolders` now uses a `@Transaction` and manually
+      checks for existing folders by `accountId` and `remoteId` to update them in place, preserving
+      the local `id` and respecting the unique constraint. `getFolderByWellKnownType` and other
+      methods updated.
+    * `AccountDao.kt`, and `MessageDao.kt` updated with methods to update relevant
+      tokens and to delete entities by a list of remote IDs.
+    * `FolderMappers.kt` updated for new `FolderEntity` structure.
+    * `FolderListSyncWorker.kt` updated to always use UUID for `FolderEntity.id`, correctly map
+      `wellKnownType`, and to perform a full folder refresh, deleting local folders not present
+      in the server response to handle stale data. It also processes `deltaData.deletedItemIds`.
+    * `SyncEngine.kt` updated to use `workManager.enqueueUniqueWork` with
+      `ExistingWorkPolicy.KEEP` for `FolderListSyncWorker` to prevent redundant sync runs.
+    * `FolderContentSyncWorker.kt` refactored to utilize these new delta sync structures,
+      including processing deleted item IDs from `DeltaSyncResult`.
+    * UI layer (`Util.kt`, `MailDrawerContent.kt`, `UtilTest.kt`) updated for `WellKnownFolderType`
+      based icon logic.
+
+* **Architectural Refinement (Well-Known Folders): COMPLETED.**
+    * Implemented a robust strategy for handling well-known folders ("Inbox", "Sent", etc.).
+    * `FolderEntity.id` (local PK) is now always a locally generated UUID.
+    * `FolderEntity.wellKnownType: WellKnownFolderType` (enum) identifies functional folder types.
+    * `FolderDao` uses `wellKnownType` for lookups.
+    * All layers (Data, UI) consistently use this new approach, enhancing provider-agnosticism
+      and data integrity for folder identification.
+    * Database migration uses `fallbackToDestructiveMigration()` for this development phase.
 
 **Key Technical Debt & Immediate Concerns (Revised):**
 
-1. **Implement `SyncEngine` for Orchestration (TOP PRIORITY):**
-    * **Problem:** There is no central mechanism (`SyncEngine`) to manage the order and dependencies
-      of synchronization tasks. This is the root cause of issues like messages being fetched before
-      their parent folders are synced, leading to empty folder displays (even if crashes are now
-      mitigated).
-    * **Impact:** The app cannot reliably sync data in the correct order, leading to an inconsistent
-      and incomplete offline state.
-    * **Next Steps:** Design and implement `SyncEngine.kt`. It must ensure `FolderListSyncWorker`
-      completes for an account before `FolderContentSyncWorker` or `MessageRemoteMediator` attempts
-      to process messages for that account.
+1. **Duplicate Folder Issue & Resolution (COMPLETED):**
+    * **Problem:** Folders were appearing duplicated in the UI. This was caused by
+      `FolderListSyncWorker`
+      being enqueued multiple times on startup and `FolderEntity` using a local UUID as its primary
+      key without a server-side unique constraint, allowing multiple local entities for the same
+      server folder.
+    * **Impact:** Inconsistent UI, potential for incorrect data association, and violation of data
+      integrity.
+    * **Resolution:**
+        * `SyncEngine` was modified to use `workManager.enqueueUniqueWork` with
+          `ExistingWorkPolicy.KEEP`
+          for `FolderListSyncWorker`, ensuring it only runs once per account even if rapidly
+          enqueued.
+        * `FolderEntity` had a unique index
+          `(@Index(value = ["accountId", "remoteId"], unique = true))`
+          added to enforce that only one local folder entity can exist for a given server folder
+          within an account.
+        * `FolderDao.insertOrUpdateFolders` was refactored into a `@Transaction` method. It now
+          queries for an existing folder by `accountId` and `remoteId`. If one exists, the existing
+          entity is updated (preserving its local UUID `id`). If not, the new folder is inserted.
+        * `FolderListSyncWorker` was updated to always fetch the full list of folders from the API
+          (passing `null` sync token) and then remove any local folders for that account that are
+          not present in the API's response, ensuring stale local folders are deleted.
 
-2. **Incomplete Sync Worker Logic (High Priority):**
-    * **Problem:** While workers compile and some have basic API interactions, they lack complete,
-      robust logic for handling all edge cases, comprehensive delta synchronization (especially for
-      deletions), and sophisticated error recovery.
-    * **Impact:** The app cannot yet sync data reliably in the background, queue actions with full
-      resilience, or provide a truly meaningful and up-to-date offline mode.
-    * **Next Steps:** This remains a main body of work. Each worker's logic needs to be fully
-      implemented and tested in conjunction with `SyncEngine`.
+2. **Room Database Schema Migration Crash (ADDRESSED):**
+    * **Problem:** The application crashed on initial startup after the unique index was added to
+      `FolderEntity` due to a Room schema change without a specific migration path defined for
+      that version increment.
+    * **Impact:** Users with existing installations on development/test builds would experience a
+      crash, preventing app use.
+    * **Resolution:** The `AppDatabase` version was incremented from 12 to 13. The project already
+      uses `.fallbackToDestructiveMigration()` in `DatabaseModule.kt`. This means that during
+      development, Room will clear the database if a migration is missing, resolving the crash.
+      For users with older development builds, an app uninstall and reinstall (or clearing app data)
+      was the recommended solution to ensure the new schema is correctly applied.
 
-3. **Delta Sync for Deletions (High Priority):**
-    * **Problem:** The current sync logic does not adequately account for messages, folders, etc.,
-      that have been deleted on the server. The local database will not reflect these removals.
-    * **Impact:** The local cache will become stale, showing items that no longer exist, leading to
-      a confusing and broken user experience.
-    * **Next Steps:** Design and implement a strategy for delta sync that explicitly handles
-      deletions from the server. This is critical for data integrity.
-
-4. **Pagination and `MessageRemoteMediator` Verification (Medium Priority):**
-    * **Problem:** It remains unconfirmed if the `MessageRemoteMediator` correctly loads and
-      displays *all* pages of messages when a user scrolls.
-    * **Impact:** Users may not be able to scroll through their full message history.
-    * **Next Steps:** After `SyncEngine` ensures folders are present, thoroughly test and verify the
-      pagination mechanism.
+3. **Pagination and `MessageRemoteMediator` Verification (Medium Priority):**
+    * **Problem:** While `FolderContentSyncWorker` now primes `RemoteKeyEntity`, it remains
+      unconfirmed if `MessageRemoteMediator` correctly loads and displays *all* pages of messages
+      when a user scrolls, especially after delta sync operations might reset pagination.
+    * **Impact:** Users may not be able to scroll through their full message history seamlessly.
+    * **Next Steps:** Thoroughly test and verify the pagination mechanism in conjunction with the
+      new delta sync flows.
 
 **Original Key Assumptions (Re-evaluated):**
 
-* The existing Room database schema is largely suitable. `FolderEntity.id` (local PK) correctly uses
-  well-known remote IDs (e.g., "SENT") for Gmail standard folders. **(VALID)**
+* The existing Room database schema is largely suitable. `FolderEntity.id` (local PK) now **always
+  uses a locally generated UUID**. The previous strategy of using well-known remote IDs (e.g., "
+  SENT") for Gmail standard folder PKs has been **superseded by the UUID approach combined with a
+  dedicated `wellKnownType: WellKnownFolderType` field** for functional identification. **(UPDATED &
+  VALID)**
 * WorkManager is the chosen framework. **(VALID)**
-* Existing MailApiService implementations are functional. **(VALID)**
+* Existing MailApiService implementations are functional (for non-delta operations). **(VALID)**
 * UI will be made fully reactive. **(ASSUMED, NEEDS VERIFICATION)**
 * Server is the ultimate source of truth. **(VALID)**
-* Server APIs provide mechanisms for delta sync. **(ASSUMED, FULL IMPLEMENTATION PENDING)** This is
-  critical.
+* Server APIs provide mechanisms for delta sync. **(IMPLEMENTED)** This is
+  critical, and API helper work is the next step.
 
 ## **3\. Phased Implementation Plan (Revised & Detailed)**
 
@@ -143,27 +204,22 @@ With the build stabilized and critical crash mitigated, the plan focuses on robu
 **Objective:** Establish reliable, ordered synchronization for accounts and folders.
 
 * **Task 1.B.1: Design and Implement `SyncEngine.kt` (Initial Version)**
-    * **Status: NOT STARTED.**
-  * **Objective:** Build the `SyncEngine` to manage and trigger `FolderListSyncWorker` for an
-    account. Only upon its success should message-related sync (`FolderContentSyncWorker`, or
-    signaling readiness for `MessageRemoteMediator`) for that account proceed.
-  * **DoD:** `SyncEngine` can successfully orchestrate the full sync of folder lists for an account.
-    Subsequent attempts to view a folder's content will find the `FolderEntity` present.
+    * **Status: COMPLETED.**
+    * **Details:** `SyncEngine` implemented to manage `FolderListSyncWorker` and trigger
+      `FolderContentSyncWorker` for key folders (INBOX, DRAFTS, SENT) on success. DAO method
+      (`FolderDao.getFolderByAccountIdAndRemoteId`) added and used.
 
 * **Task 1.B.2: Verify `MessageRemoteMediator` and Pagination (Post `SyncEngine` folder readiness)**
-    * **Status: NOT STARTED.**
-  * **Objective:** Once `SyncEngine` ensures `FolderEntity` records are present, run the application
-    and confirm that `MessageRemoteMediator` correctly fetches and displays subsequent pages of
-    messages.
-  * **DoD:** Scrolling to the bottom of the message list triggers a network request and appends new
-    messages. All messages for a folder can be loaded.
+    * **Status: PARTIALLY ADDRESSED / PENDING VERIFICATION.**
+    * **Details:** `FolderContentSyncWorker` now updates `RemoteKeyEntity` to prime
+      `MessageRemoteMediator`. Full verification of pagination behavior after sync changes is
+      pending.
 
 * **Task 1.B.3: Enhance `FolderListSyncWorker.kt` & `FolderContentSyncWorker.kt`**
-    * **Status: PARTIAL (Basic logic + recent crash fixes).**
-    * **Objective:** Implement more robust error handling, and basic delta sync capabilities (if API
-      supports it simply, e.g., only fetching newer items if a timestamp is available). Full
-      deletion handling is a separate major task.
-    * **DoD:** Workers are more resilient and attempt basic delta updates.
+    * **Status: SIGNIFICANTLY ADDRESSED.**
+    * **Details:** Workers enhanced for initial sync. `FolderContentSyncWorker` now uses
+      `messageListSyncToken` to decide between delta or paged sync. Foundational support for
+      delta sync (tokens, DAO methods for deletions) added.
 
 ---
 
@@ -173,16 +229,16 @@ With the build stabilized and critical crash mitigated, the plan focuses on robu
 action queue, orchestrated by `SyncEngine`.
 
 * **Task 1.C.1: Finalize `MessageBodyDownloadWorker.kt` (Integrated with `SyncEngine`)**
-    * **Status: SKELETON IMPLEMENTED.**
-    * **Objective:** Implement full logic, triggered via `SyncEngine` when a message detail is
-      requested.
-    * **DoD:** Requesting message detail downloads and saves full content.
+    * **Status: COMPLETED.**
+    * **Details:** Worker logic enhanced to check if the message body is already synced before
+      attempting download.
 
 * **Task 1.C.2: Finalize `ActionUploadWorker.kt` (Integrated with `SyncEngine`)**
-    * **Status: SKELETON IMPLEMENTED.**
-    * **Objective:** Implement complete logic for all action types, robust error/retry, managed by
-      `SyncEngine`.
-    * **DoD:** Offline actions are reliably queued and executed.
+    * **Status: COMPLETED.**
+    * **Details:** Resolved KSP build errors and type ambiguities. Implemented local database
+      updates
+      for mark read/unread, star, move, and send actions. Draft creation/update also updates local
+      DB.
 
 ---
 
@@ -192,10 +248,26 @@ action queue, orchestrated by `SyncEngine`.
 action queue.
 
 * **Task 2.1: Implement Delta Sync for Server-Side Deletions**
-    * **Status: NOT STARTED.**
-  * **Objective:** Design and implement mechanisms in relevant workers (FolderList, FolderContent)
-    and `SyncEngine` to detect and apply server-side deletions to the local cache.
-  * **DoD:** Deleting an email on the server eventually removes it from the local app cache.
+    * **Status: COMPLETED.**
+    * **Details:**
+        * Created `DeltaSyncResult.kt`.
+        * Added `syncFolders` and `syncMessagesForFolder` to `MailApiService`.
+        * **Implemented delta sync logic (Gmail `historyId`, MS Graph `deltaToken`) in
+          `GmailApiHelper.kt` and `GraphApiHelper.kt` for both folder and message synchronization.**
+        * Added `folderListSyncToken` to `AccountEntity`, `messageListSyncToken` and unique index
+          (`accountId`, `remoteId`) to `FolderEntity`.
+        * Incremented `AppDatabase` version to 13, using `fallbackToDestructiveMigration`.
+        * Added DAO methods for token updates, batch deletions (`deleteFoldersByRemoteIds`,
+          `deleteMessagesByRemoteIds`), and refactored `FolderDao.insertOrUpdateFolders` for
+          conflict resolution based on `accountId` and `remoteId`.
+        * Refactored `FolderListSyncWorker` for full folder refresh and stale data removal, and to
+          use `enqueueUniqueWork` via `SyncEngine`.
+        * Refactored `FolderContentSyncWorker` to use new delta sync methods and process
+          `DeltaSyncResult` (including deleted IDs).
+    * **Outcome:** Core delta synchronization capabilities are now implemented across the stack,
+      from
+      API helpers through the data layer and into the sync workers, including handling of
+      server-side deletions and prevention of duplicate local data.
 
 * **Task 2.2: Refine Offline Action Queueing Mechanism**
     * **Status: NOT STARTED.** (Original task from previous plan)
@@ -207,43 +279,49 @@ action queue.
 
 ## 4\. Next Steps & Current Build Status
 
-### Current Build Status: SUCCESSFUL & MORE STABLE
+### Current Build Status: SUCCESSFUL & STABLE
 
-The project **builds and compiles successfully**. Critical crashes related to message sync foreign
-key constraints have been mitigated with defensive checks in `MessageRemoteMediator` and
-`FolderContentSyncWorker`.
+The project **builds and compiles successfully**. `SyncEngine` orchestrates initial folder list and
+key folder content sync. Delta synchronization for folders and messages, including handling of
+server-side deletions, is implemented in the API helpers and integrated into the sync workers.
+Duplicate folder issues have been resolved, and database schema changes are handled via
+`fallbackToDestructiveMigration` (DB version 13). Workers for on-demand actions and body
+downloads are functional.
 
 ### Immediate Priorities:
 
-1. **Implement `SyncEngine` for Sync Orchestration (CRITICAL):**
-    * **The Problem:** The lack of ordered execution of sync tasks (`FolderListSyncWorker` before
-      message sync) is the primary reason folders may appear empty or data may be inconsistent, even
-      if crashes are avoided.
-    * **What Needs to Be Done:** Design and implement `SyncEngine.kt`. This engine must ensure
-      `FolderListSyncWorker` runs and completes successfully for an account *before*
-      `FolderContentSyncWorker` is run for any folder in that account, and before
-      `MessageRemoteMediator` attempts to load messages.
-    * **Next Step:** Begin design and implementation of `SyncEngine.kt`.
-
-2. **Verify Message Pagination (Post `SyncEngine` basic folder readiness):**
-    * **The Problem:** Unconfirmed if `MessageRemoteMediator` correctly loads all pages.
-    * **What Needs to Be Done:** Once `SyncEngine` ensures folders are present, thoroughly test
-      pagination.
+1. **Verify Message Pagination (Post Delta Sync Implementation):**
+    * **The Problem:** Unconfirmed if `MessageRemoteMediator` correctly handles pagination after
+      the introduction of delta sync and changes to how `RemoteKeyEntity` and `FolderEntity`
+      paging tokens are managed.
+    * **What Needs to Be Done:** Thoroughly test pagination for message lists.
     * **Next Step:** Perform manual and automated tests for message pagination.
 
-3. **Implement Full Logic for Sync Workers (including Deletion Handling):**
-    * **The Problem:** Sync workers have basic structures but need full, robust logic, especially
-      for delta sync (including deletions) and comprehensive error handling.
-    * **What Needs to Be Done:** Methodically complete the business logic for each sync worker,
-      integrated with and orchestrated by `SyncEngine`. Prioritize handling server-side deletions.
-    * **Next Step:** After `SyncEngine` basics, enhance `FolderListSyncWorker` and
-      `FolderContentSyncWorker` with full delta sync logic.
+2. **Monitor & Refine Sync Robustness:**
+    * **The Problem:** With significant changes to sync logic, unknown edge cases or performance
+      bottlenecks might exist.
+    * **What Needs to Be Done:** Monitor application behavior, logs, and user feedback (if
+      applicable)
+      for any issues related to data consistency, sync frequency, or performance.
+    * **Next Step:** Ongoing observation during testing and development.
 
 ### Path to Vision (Post-Crash Mitigation)
 
-1. **Implement `SyncEngine` Orchestration.** **(Immediate Next Step)**
-2. **Verify Pagination** (once `SyncEngine` ensures folder data is present).
-3. **Implement Full Sync Workers Logic** (including robust delta sync for changes and deletions).
-4. **Implement Offline Actions & Queuing** (fully integrated with `SyncEngine`).
-5. **Refine and Test:** Continuously test the offline experience, refine sync logic, and handle edge
+1. **Implement `SyncEngine` Orchestration.** **(COMPLETED)**
+2. **Implement Full Sync Workers Logic (Core Functionality & Delta Sync Foundation).** **(COMPLETED)
+   **
+3. **Implement Offline Actions & Queuing (Core Functionality).** **(COMPLETED)**
+4. **Implement Delta Sync in API Helpers (`GmailApiHelper`, `GraphApiHelper`).** **(COMPLETED)**
+5. **Verify Pagination & `MessageRemoteMediator`** (post delta sync implementation). **(Next
+   Critical Step)**
+6. **Refine and Test:** Continuously test the offline experience, refine sync logic, and handle edge
    cases and errors.
+
+* **API Helpers (`GmailApiHelper`, `GraphApiHelper`)**
+    *   [x] Implement `syncFolders`
+        * Gmail: Use labels list + current historyId as sync token. Worker to diff.
+        * Graph: Use mailFolder delta query.
+    *   [x] Implement `syncMessagesForFolder`
+        * Gmail: Use messages history list.
+        * Graph: Use message delta query for the folder.
+* **`DeltaSyncResult<T>` (`core-data`)**

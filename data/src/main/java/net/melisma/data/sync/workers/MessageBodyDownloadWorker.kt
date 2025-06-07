@@ -37,6 +37,15 @@ class MessageBodyDownloadWorker @AssistedInject constructor(
         Timber.d("Worker started for accountId: $accountId, messageId: $messageId")
 
         try {
+            // Check if body is already successfully synced
+            val existingBodyEntity = messageBodyDao.getMessageBodyByIdSuspend(messageId)
+            if (existingBodyEntity != null && existingBodyEntity.syncStatus == SyncStatus.SYNCED && existingBodyEntity.content != null) {
+                Timber.i("$TAG: Message body for $messageId already synced. Skipping download.")
+                // Optionally update lastSuccessfulSyncTimestamp if we want to track "access" or "check" time
+                // messageBodyDao.insertOrUpdateMessageBody(existingBodyEntity.copy(lastSuccessfulSyncTimestamp = System.currentTimeMillis()))
+                return Result.success()
+            }
+
             // Get MailApiService for accountId
             val mailService = mailApiServiceSelector.getServiceByAccountId(accountId)
             if (mailService == null) {

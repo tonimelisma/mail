@@ -41,7 +41,7 @@ class SyncStatusConverter {
         AttachmentEntity::class,
         RemoteKeyEntity::class
     ],
-    version = 11,
+    version = 13,
     exportSchema = false // Set to true for production apps for schema migration history
 )
 @TypeConverters(WellKnownFolderTypeConverter::class, StringListConverter::class, SyncStatusConverter::class)
