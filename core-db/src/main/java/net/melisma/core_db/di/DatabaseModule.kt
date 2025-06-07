@@ -31,7 +31,7 @@ object DatabaseModule {
             AppDatabase::class.java,
             "melisma_mail.db"
         )
-            .fallbackToDestructiveMigration()
+            .fallbackToDestructiveMigrationFrom(true, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13) // For current version 14, dropAllTables = true
             .build()
     }
 
