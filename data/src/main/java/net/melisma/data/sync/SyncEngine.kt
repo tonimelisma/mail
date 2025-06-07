@@ -192,31 +192,8 @@ class SyncEngine @Inject constructor(
                 return@launch
             }
 
-            // Diagnostic check
-            val isPotentiallyRemoteIdByName = listOf(
-                "INBOX",
-                "SENT",
-                "DRAFT",
-                "TRASH",
-                "SPAM",
-                "ARCHIVE",
-                "OUTBOX",
-                "DELETED"
-            ).any { it.equals(folderId, ignoreCase = true) }
-            val isPotentiallyRemoteIdByPrefix =
-                folderId.startsWith("Label_", ignoreCase = true) || folderId.startsWith(
-                    "LF-",
-                    ignoreCase = true
-                ) // Common prefixes for some remote IDs
-            val looksLikeUuid = try {
-                java.util.UUID.fromString(folderId); true
-            } catch (e: IllegalArgumentException) {
-                false
-            }
-
-            if ((isPotentiallyRemoteIdByName || isPotentiallyRemoteIdByPrefix) && !looksLikeUuid && folderId.length < 30) { // UUIDs are 36 chars
-                Timber.e(IllegalArgumentException("CRITICAL_SYNC_ENGINE_CALL: syncFolderContent called with folderId='$folderId' which appears to be a remoteId, NOT a local UUID PK. folderRemoteId was '$folderRemoteId'. Account: $accountId. This indicates a bug in the caller within SyncEngine."))
-            }
+            // Diagnostic check REMOVED as upstream UUID handling for folder.id is now robust.
+            // The folderId parameter here is expected to be the local UUID (FolderEntity.id).
 
             Timber.d("Enqueuing FolderContentSyncWorker for accountId: $accountId, folderId: $folderId, folderRemoteId: $folderRemoteId")
             _overallSyncState.value = SyncProgress.SYNCING

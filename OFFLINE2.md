@@ -165,9 +165,14 @@ local data to provide a rich offline experience while respecting device storage 
       new delta sync flows.
 
 4. **`SyncEngine` Robustness for `FolderContentSyncWorker` (Medium Priority - Diagnostic Added):**
-    * **Problem:** Logs indicated that `SyncEngine` sometimes enqueues `FolderContentSyncWorker` with the folder's `remoteId` as the `"FOLDER_ID"` input instead of the local UUID, causing those worker instances to fail. This is likely due to concurrency or how multiple calls are handled after `FolderListSyncWorker` success.
+    * **Problem:** Logs indicated that `SyncEngine` sometimes enqueues `FolderContentSyncWorker` with the folder's `remoteId` as the `"FOLDER_ID"` input instead of the local UUID, causing those worker instances to fail. This was likely due to concurrency or how multiple calls were handled after `FolderListSyncWorker` success. A diagnostic log was added to `SyncEngine.syncFolderContent` to detect occurrences.
     * **Impact:** Inconsistent background sync for folder contents.
-    * **Mitigation/Next Steps:** A diagnostic log has been added to `SyncEngine.syncFolderContent` to detect and log occurrences of this incorrect parameterization. Further investigation using these diagnostics is needed to pinpoint the exact cause within `SyncEngine`'s logic (e.g., concurrency in `collect` block for `FolderListSyncWorker` status) and implement a permanent fix.
+    * **Resolution (June 2025 - Investigation & Cleanup):**
+        * **Investigation:** A thorough review of `SyncEngine.kt`, `FolderListSyncWorker.kt`, `FolderDao.kt`, `FolderEntity.kt`, and `FolderMappers.kt` was conducted.
+        * **Findings:** The current implementation of `FolderListSyncWorker` correctly generates a new local UUID for each `FolderEntity.id`. The `FolderMappers.toEntity()` function correctly assigns this UUID to `FolderEntity.id`. The `FolderDao.insertOrUpdateFolders()` method preserves existing local UUIDs when updating folders. `SyncEngine.syncFolders()` correctly retrieves the `FolderEntity` (with its local UUID `id`) using `folderDao.getFolderByWellKnownTypeSuspend()` and then passes this `folder.id` to `syncFolderContent()`.
+        * **Conclusion:** The architectural changes ensuring `FolderEntity.id` is always a local UUID and is correctly propagated have made the specific concern of passing a `remoteId` as the local `FOLDER_ID` highly unlikely. The diagnostic log added previously is now considered obsolete.
+        * **Action:** The diagnostic logging block within `SyncEngine.syncFolderContent()` has been removed.
+    * **Status: ADDRESSED / OBSOLETE.** Further monitoring for any new, unexpected behavior in `SyncEngine`'s worker enqueuing remains part of general sync robustness checks.
 
 **Original Key Assumptions (Re-evaluated):**
 
