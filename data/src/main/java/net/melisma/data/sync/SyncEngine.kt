@@ -1,6 +1,7 @@
 package net.melisma.data.sync
 
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
@@ -21,6 +22,8 @@ import net.melisma.core_data.model.WellKnownFolderType
 import net.melisma.core_db.dao.AccountDao
 import net.melisma.core_db.dao.FolderDao
 import net.melisma.core_db.dao.MessageDao
+import net.melisma.core_db.dao.PendingActionDao
+import net.melisma.core_db.entity.PendingActionEntity
 import net.melisma.data.sync.workers.ActionUploadWorker
 import net.melisma.data.sync.workers.AttachmentDownloadWorker
 import net.melisma.data.sync.workers.CacheCleanupWorker
@@ -33,6 +36,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 const val FOLDER_LIST_SYNC_WORK_NAME_PREFIX = "folderListSync_"
+const val ACTION_UPLOAD_WORK_NAME = "actionUploadWork"
 
 enum class SyncProgress {
     IDLE,
@@ -43,9 +47,10 @@ enum class SyncProgress {
 @Singleton
 class SyncEngine @Inject constructor(
     private val workManager: WorkManager,
-    private val accountDao: AccountDao, // Example DAO, add others as needed
-    private val folderDao: FolderDao,   // Example DAO
-    private val messageDao: MessageDao,  // Example DAO
+    private val accountDao: AccountDao,
+    private val folderDao: FolderDao,
+    private val messageDao: MessageDao,
+    private val pendingActionDao: PendingActionDao,
     private val mailApiServiceSelector: MailApiServiceSelector,
     private val networkMonitor: NetworkMonitor,
     @ApplicationScope private val externalScope: CoroutineScope,
@@ -61,49 +66,31 @@ class SyncEngine @Inject constructor(
     // Map<String (accountId), StateFlow<AccountSyncProgress>>
     // AccountSyncProgress could be: IDLE, FOLDER_LIST_SYNCING, FOLDER_LIST_FAILED, CONTENT_SYNCING_INBOX, etc.
 
-    // --- Action Enqueuing (from Phase 2) ---
-    fun enqueueMessageAction(accountId: String, messageId: String, actionType: String, payload: Map<String, Any?>) {
+    // --- Action Enqueuing ---
+    fun queueAction(
+        accountId: String,
+        entityId: String,
+        actionType: String,
+        payload: Map<String, String?>
+    ) {
         externalScope.launch(ioDispatcher) {
-            if (!networkMonitor.isOnline.first()) {
-                Timber.w("$TAG: Network offline. Skipping ActionUploadWorker for message action: $actionType, messageId: $messageId")
-                return@launch
-            }
-            Timber.d("$TAG: Enqueuing ActionUploadWorker for message action: $actionType, messageId: $messageId")
-            val workRequestBuilder = OneTimeWorkRequestBuilder<ActionUploadWorker>()
-                .setInputData(
-                    workDataOf(
-                        ActionUploadWorker.KEY_ACCOUNT_ID to accountId,
-                        ActionUploadWorker.KEY_ENTITY_ID to messageId,
-                        ActionUploadWorker.KEY_ACTION_TYPE to actionType,
-                        *payload.toList().toTypedArray()
-                    )
-                )
-                .addTag("${actionType}_${accountId}_${messageId}")
-            workManager.enqueue(workRequestBuilder.build())
-            _overallSyncState.value = SyncProgress.SYNCING
-        }
-    }
+            Timber.d("$TAG: Queuing action: $actionType for entityId: $entityId, accountId: $accountId")
+            
+            val pendingAction = PendingActionEntity(
+                accountId = accountId,
+                entityId = entityId,
+                actionType = actionType,
+                payload = payload
+            )
+            pendingActionDao.insertAction(pendingAction)
+            Timber.d("$TAG: Saved action to DB with id: ${pendingAction.id}. Enqueuing ActionUploadWorker.")
 
-    fun enqueueThreadAction(accountId: String, threadId: String, actionType: String, payload: Map<String, Any?>) {
-        externalScope.launch(ioDispatcher) {
-            if (!networkMonitor.isOnline.first()) {
-                Timber.w("$TAG: Network offline. Skipping ActionUploadWorker for thread action: $actionType, threadId: $threadId")
-                return@launch
-            }
-            Timber.d("$TAG: Enqueuing ActionUploadWorker for thread action: $actionType, threadId: $threadId")
-            val workRequest = OneTimeWorkRequestBuilder<ActionUploadWorker>()
-                .setInputData(
-                    workDataOf(
-                        ActionUploadWorker.KEY_ACCOUNT_ID to accountId,
-                        ActionUploadWorker.KEY_ENTITY_ID to threadId,
-                        ActionUploadWorker.KEY_ACTION_TYPE to actionType,
-                        *payload.toList().toTypedArray()
-                    )
-                )
-                .addTag("${actionType}_${accountId}_${threadId}")
-                .build()
-            workManager.enqueue(workRequest)
-            _overallSyncState.value = SyncProgress.SYNCING
+            val workRequestBuilder = OneTimeWorkRequestBuilder<ActionUploadWorker>()
+            workManager.enqueueUniqueWork(
+                ACTION_UPLOAD_WORK_NAME,
+                ExistingWorkPolicy.KEEP,
+                workRequestBuilder.build()
+            )
         }
     }
 

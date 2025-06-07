@@ -29,6 +29,7 @@ import net.melisma.core_db.dao.MessageDao
 import net.melisma.core_db.entity.MessageEntity
 import net.melisma.data.mapper.toDomainModel
 import net.melisma.data.sync.SyncEngine
+import net.melisma.data.sync.workers.ActionUploadWorker
 import timber.log.Timber
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -227,21 +228,21 @@ class DefaultThreadRepository @Inject constructor(
                 if (messageIds.isEmpty()) {
                     Timber.w("$TAG: No messages found for threadId $threadId and account ${account.id} to mark read state.")
                 }
-                messageDao.updateReadStateForMessages(messageIds, isRead, syncStatus = net.melisma.core_data.model.SyncStatus.PENDING_UPLOAD)
-                Timber.i("$TAG: Optimistically updated isRead=$isRead for ${messageIds.size} messages in thread $threadId, syncStatus=PENDING_UPLOAD")
+                messageDao.updateReadStateForMessages(messageIds, isRead, syncStatus = net.melisma.core_data.model.SyncStatus.IDLE)
+                Timber.i("$TAG: Optimistically updated isRead=$isRead for ${messageIds.size} messages in thread $threadId")
             }
 
             val actionType = if (isRead) {
-                "MARK_THREAD_AS_READ"
+                ActionUploadWorker.ACTION_MARK_THREAD_AS_READ
             } else {
-                "MARK_THREAD_AS_UNREAD"
+                ActionUploadWorker.ACTION_MARK_THREAD_AS_UNREAD
             }
 
-            syncEngine.enqueueThreadAction(
+            syncEngine.queueAction(
                 accountId = account.id,
-                threadId = threadId,
+                entityId = threadId,
                 actionType = actionType,
-                payload = mapOf("isRead" to isRead)
+                payload = mapOf(ActionUploadWorker.KEY_IS_READ to isRead.toString())
             )
             return Result.success(Unit)
         } catch (e: Exception) {
@@ -255,22 +256,24 @@ class DefaultThreadRepository @Inject constructor(
         try {
             appDatabase.withTransaction {
                 val messageIds = messageDao.getMessageIdsByThreadId(threadId, account.id)
-                 if (messageIds.isEmpty()) {
+                if (messageIds.isEmpty()) {
                     Timber.w("$TAG: No messages found for threadId $threadId and account ${account.id} to delete.")
+                } else {
+                    messageDao.markMessagesAsLocallyDeleted(messageIds, syncStatus = net.melisma.core_data.model.SyncStatus.IDLE)
+                    Timber.i("$TAG: Optimistically marked ${messageIds.size} messages in thread $threadId as locally deleted.")
                 }
-                messageDao.markMessagesAsLocallyDeleted(messageIds, syncStatus = net.melisma.core_data.model.SyncStatus.PENDING_UPLOAD)
-                Timber.i("$TAG: Optimistically marked ${messageIds.size} messages in thread $threadId as locally deleted, syncStatus=PENDING_UPLOAD")
             }
 
-            syncEngine.enqueueThreadAction(
+            syncEngine.queueAction(
                 accountId = account.id,
-                threadId = threadId,
-                actionType = net.melisma.data.sync.workers.ActionUploadWorker.ACTION_DELETE_MESSAGE,
-                payload = mapOf("APPLY_TO_THREAD" to true)
+                entityId = threadId,
+                actionType = ActionUploadWorker.ACTION_DELETE_THREAD,
+                payload = emptyMap()
             )
+
             return Result.success(Unit)
         } catch (e: Exception) {
-            Timber.e(e, "$TAG: Error in deleteThread for threadId $threadId")
+            Timber.e(e, "$TAG: Error deleting thread $threadId")
             return Result.failure(e)
         }
     }
@@ -281,34 +284,31 @@ class DefaultThreadRepository @Inject constructor(
         currentFolderId: String,
         destinationFolderId: String
     ): Result<Unit> {
-        Timber.d("moveThread: threadId=$threadId, account=${account.id}, from $currentFolderId to $destinationFolderId")
-        if (currentFolderId == destinationFolderId) {
-            Timber.i("$TAG: Source and destination folder are the same ($currentFolderId). No action needed for thread $threadId.")
-            return Result.success(Unit)
-        }
+        Timber.d("moveThread: threadId=$threadId, newFolderId=$destinationFolderId, account=${account.id}")
         try {
             appDatabase.withTransaction {
                 val messageIds = messageDao.getMessageIdsByThreadIdAndFolder(threadId, account.id, currentFolderId)
                 if (messageIds.isEmpty()) {
-                     Timber.w("$TAG: No messages found for threadId $threadId in folder $currentFolderId for account ${account.id} to move.")
+                    Timber.w("$TAG: No messages found for threadId $threadId in folder $currentFolderId for account ${account.id} to move.")
+                } else {
+                    messageDao.updateFolderIdForMessages(messageIds, destinationFolderId, syncStatus = net.melisma.core_data.model.SyncStatus.IDLE)
+                    Timber.i("$TAG: Optimistically moved ${messageIds.size} messages in thread $threadId to folder $destinationFolderId.")
                 }
-                messageDao.updateFolderIdForMessages(messageIds, destinationFolderId, syncStatus = net.melisma.core_data.model.SyncStatus.PENDING_UPLOAD)
-                Timber.i("$TAG: Optimistically moved ${messageIds.size} messages in thread $threadId to folder $destinationFolderId, syncStatus=PENDING_UPLOAD")
             }
 
-            syncEngine.enqueueThreadAction(
+            syncEngine.queueAction(
                 accountId = account.id,
-                threadId = threadId,
-                actionType = net.melisma.data.sync.workers.ActionUploadWorker.ACTION_MOVE_MESSAGE,
+                entityId = threadId,
+                actionType = ActionUploadWorker.ACTION_MOVE_THREAD,
                 payload = mapOf(
-                    "NEW_FOLDER_ID" to destinationFolderId,
-                    "OLD_FOLDER_ID" to currentFolderId,
-                    "APPLY_TO_THREAD" to true
+                    ActionUploadWorker.KEY_NEW_FOLDER_ID to destinationFolderId,
+                    ActionUploadWorker.KEY_OLD_FOLDER_ID to currentFolderId
                 )
             )
+
             return Result.success(Unit)
         } catch (e: Exception) {
-            Timber.e(e, "$TAG: Error in moveThread for threadId $threadId to $destinationFolderId")
+            Timber.e(e, "$TAG: Error moving thread $threadId to folder $destinationFolderId")
             return Result.failure(e)
         }
     }

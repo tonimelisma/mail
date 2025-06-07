@@ -42,7 +42,7 @@ local data to provide a rich offline experience while respecting device storage 
         * Fixing various compilation errors in `:data`, `:core-db`, and `:mail` modules.
         * Resolving KSP Hilt `CoroutineDispatcher` and Room Foreign Key errors.
         * Correcting unresolved references (`ACTION_STAR_MESSAGE`, `username`).
-        * Adding missing method overrides to interfaces (`observeMessageAttachments`).
+        * Adding missing method overrides to interfaces (`observeMessageAttachments`, `getLocalFolderUuidByRemoteId`).
         * Standardizing payload keys and action names between `DefaultMessageRepository` and
           `ActionUploadWorker`.
     * **Investigation of former "showstoppers" from the previous report:**
@@ -70,7 +70,7 @@ local data to provide a rich offline experience while respecting device storage 
 * **Phase 1.C (On-Demand and Action-Based Workers): COMPLETED.**
     * `MessageBodyDownloadWorker.kt` was finalized and now checks if content is already synced
       before downloading.
-    * `ActionUploadWorker.kt` was finalized. Build issues were resolved (KSP, type ambiguities),
+    * `ActionUploadWorker.kt` was finalized. Build issues were resolved (KSP, type ambiguities related to `kotlin.Result` vs. `androidx.work.ListenableWorker.Result`, and incorrect DAO method calls),
       and it now robustly handles local database updates after successful API calls for mark
       read/unread, star, move, and send actions. Draft creation/update logic was also refined to
       use server responses for local DB updates.
@@ -96,12 +96,12 @@ local data to provide a rich offline experience while respecting device storage 
       methods updated.
     * `AccountDao.kt`, and `MessageDao.kt` updated with methods to update relevant
       tokens and to delete entities by a list of remote IDs.
-    * `FolderMappers.kt` updated for new `FolderEntity` structure.
+    * `FolderMappers.kt` updated for new `FolderEntity` structure. `FolderEntity.toDomainModel()` now correctly maps the local UUID `FolderEntity.id` to `MailFolder.id`, crucial for UI stability.
     * `FolderListSyncWorker.kt` updated to always use UUID for `FolderEntity.id`, correctly map
       `wellKnownType`, and to perform a full folder refresh, deleting local folders not present
       in the server response to handle stale data. It also processes `deltaData.deletedItemIds`.
     * `SyncEngine.kt` updated to use `workManager.enqueueUniqueWork` with
-      `ExistingWorkPolicy.KEEP` for `FolderListSyncWorker` to prevent redundant sync runs.
+      `ExistingWorkPolicy.KEEP` for `FolderListSyncWorker` to prevent redundant sync runs. A diagnostic log has been added to `syncFolderContent` to help trace instances where `FolderContentSyncWorker` might be enqueued with incorrect parameters (using remoteId instead of local UUID for FOLDER_ID).
     * `FolderContentSyncWorker.kt` refactored to utilize these new delta sync structures,
       including processing deleted item IDs from `DeltaSyncResult`.
     * UI layer (`Util.kt`, `MailDrawerContent.kt`, `UtilTest.kt`) updated for `WellKnownFolderType`
@@ -115,6 +115,10 @@ local data to provide a rich offline experience while respecting device storage 
     * All layers (Data, UI) consistently use this new approach, enhancing provider-agnosticism
       and data integrity for folder identification.
     * Database migration uses `fallbackToDestructiveMigration()` for this development phase.
+
+* **UI Stability Fixes (Message Loading & Settings):**
+    * **Message Display:** Resolved an issue where messages wouldn't load and "Parent folder not found" errors occurred. This was due to `MessageRemoteMediator` receiving the folder's `remoteId` instead of its local UUID. The fix involved correcting `FolderMappers.kt` to ensure `MailFolder.id` (domain model) uses the local UUID from `FolderEntity.id`.
+    * **Settings Screen Buttons (Google Sign-In Cancellation):** Addressed an issue where "Add Account" buttons could remain disabled after cancelling a Google sign-in attempt. The fix involved adding a `.catch` block in `DefaultAccountRepository.handleAuthenticationResult` for Google. This ensures that an `AuthorizationException` from a user cancellation is caught and correctly propagates a `GenericAuthResult.Error` to the `MainViewModel`. The ViewModel can then reset its `isLoadingAccountAction` state, re-enabling the buttons.
 
 **Key Technical Debt & Immediate Concerns (Revised):**
 
@@ -154,20 +158,23 @@ local data to provide a rich offline experience while respecting device storage 
       For users with older development builds, an app uninstall and reinstall (or clearing app data)
       was the recommended solution to ensure the new schema is correctly applied.
 
-3. **Pagination and `MessageRemoteMediator` Verification (Medium Priority):**
-    * **Problem:** While `FolderContentSyncWorker` now primes `RemoteKeyEntity`, it remains
-      unconfirmed if `MessageRemoteMediator` correctly loads and displays *all* pages of messages
-      when a user scrolls, especially after delta sync operations might reset pagination.
+3. **Pagination and `MessageRemoteMediator` Verification (Medium Priority - Unblocked):**
+    * **Problem:** While `FolderContentSyncWorker` now primes `RemoteKeyEntity`, and `MessageRemoteMediator` now receives the correct folder UUID, it remains to be thoroughly confirmed if it correctly loads and displays *all* pages of messages when a user scrolls, especially after delta sync operations might reset pagination. The critical blocker (incorrect folder ID) for `MessageRemoteMediator` is now resolved.
     * **Impact:** Users may not be able to scroll through their full message history seamlessly.
     * **Next Steps:** Thoroughly test and verify the pagination mechanism in conjunction with the
       new delta sync flows.
+
+4. **`SyncEngine` Robustness for `FolderContentSyncWorker` (Medium Priority - Diagnostic Added):**
+    * **Problem:** Logs indicated that `SyncEngine` sometimes enqueues `FolderContentSyncWorker` with the folder's `remoteId` as the `"FOLDER_ID"` input instead of the local UUID, causing those worker instances to fail. This is likely due to concurrency or how multiple calls are handled after `FolderListSyncWorker` success.
+    * **Impact:** Inconsistent background sync for folder contents.
+    * **Mitigation/Next Steps:** A diagnostic log has been added to `SyncEngine.syncFolderContent` to detect and log occurrences of this incorrect parameterization. Further investigation using these diagnostics is needed to pinpoint the exact cause within `SyncEngine`'s logic (e.g., concurrency in `collect` block for `FolderListSyncWorker` status) and implement a permanent fix.
 
 **Original Key Assumptions (Re-evaluated):**
 
 * The existing Room database schema is largely suitable. `FolderEntity.id` (local PK) now **always
   uses a locally generated UUID**. The previous strategy of using well-known remote IDs (e.g., "
   SENT") for Gmail standard folder PKs has been **superseded by the UUID approach combined with a
-  dedicated `wellKnownType: WellKnownFolderType` field** for functional identification. **(UPDATED &
+  dedicated `wellKnownType: WellKnownFolderType` field** for functional identification. `MailFolder.id` in the domain layer now also correctly reflects this local UUID. **(UPDATED &
   VALID)**
 * WorkManager is the chosen framework. **(VALID)**
 * Existing MailApiService implementations are functional (for non-delta operations). **(VALID)**
@@ -189,7 +196,7 @@ With the build stabilized and critical crash mitigated, the plan focuses on robu
 **Sprint/Phase 1.A.2: Mitigate Message Sync Crashes (June 2025)**
 
 * **Status: COMPLETED.**
-* **Objective:** Prevent `SQLiteConstraintException` during message sync.
+* **Objective:** Prevent `SQLiteConstraintException` during message sync. Address "Parent folder not found" errors.
 * **Tasks:**
     * Added defensive checks in `MessageRemoteMediator` to ensure `FolderEntity` exists locally
       before message load.
@@ -270,10 +277,18 @@ action queue.
       server-side deletions and prevention of duplicate local data.
 
 * **Task 2.2: Refine Offline Action Queueing Mechanism**
-    * **Status: NOT STARTED.** (Original task from previous plan)
-    * **Objective:** Define and implement the database table and DAOs for storing pending offline
-      actions if not already robust. Refactor repositories to write to this queue.
+    * **Status: COMPLETED.**
+    * **Objective:** Define and implement the database table and DAOs for storing pending offline actions if not already robust. Refactor repositories to write to this queue.
     * **DoD:** Offline actions use a persistent queue read by `ActionUploadWorker`.
+    * **Details:**
+        * Created `PendingActionEntity` to store action details (type, payload, status, retries) in the database.
+        * Created `PendingActionDao` for DB operations on the queue.
+        * Updated `AppDatabase` (incremented to version 14) and `DatabaseModule` with the new components.
+        * Refactored `SyncEngine` to replace direct worker enqueuing with a `queueAction` method that saves the action to the DB and triggers a single unique `ActionUploadWorker`.
+        * Removed network checks from repositories and `SyncEngine`'s queuing logic, ensuring actions are *always* saved offline.
+        * Refactored `DefaultMessageRepository` and `DefaultThreadRepository` to use `SyncEngine.queueAction`.
+        * Re-architected `ActionUploadWorker` to be stateless. It now fetches the next available action from the `PendingActionDao`, processes it, and handles its lifecycle (success/delete, retry, or fail) within a loop. It also includes a network check before processing.
+        * Added handling for thread-level actions (mark read, delete) to the worker.
 
 ---
 
@@ -285,8 +300,8 @@ The project **builds and compiles successfully**. `SyncEngine` orchestrates init
 key folder content sync. Delta synchronization for folders and messages, including handling of
 server-side deletions, is implemented in the API helpers and integrated into the sync workers.
 Duplicate folder issues have been resolved, and database schema changes are handled via
-`fallbackToDestructiveMigration` (DB version 13). Workers for on-demand actions and body
-downloads are functional.
+`fallbackToDestructiveMigration` (DB version 14). Workers for on-demand actions and body
+downloads are functional. The offline action queue is now persistent and robust.
 
 ### Immediate Priorities:
 
@@ -305,16 +320,12 @@ downloads are functional.
       for any issues related to data consistency, sync frequency, or performance.
     * **Next Step:** Ongoing observation during testing and development.
 
-### Path to Vision (Post-Crash Mitigation)
-
-1. **Implement `SyncEngine` Orchestration.** **(COMPLETED)**
-2. **Implement Full Sync Workers Logic (Core Functionality & Delta Sync Foundation).** **(COMPLETED)
-   **
 3. **Implement Offline Actions & Queuing (Core Functionality).** **(COMPLETED)**
 4. **Implement Delta Sync in API Helpers (`GmailApiHelper`, `GraphApiHelper`).** **(COMPLETED)**
-5. **Verify Pagination & `MessageRemoteMediator`** (post delta sync implementation). **(Next
+5. **Refine Offline Action Queue.** **(COMPLETED)**
+6. **Verify Pagination & `MessageRemoteMediator`** (post delta sync implementation). **(Next
    Critical Step)**
-6. **Refine and Test:** Continuously test the offline experience, refine sync logic, and handle edge
+7. **Refine and Test:** Continuously test the offline experience, refine sync logic, and handle edge
    cases and errors.
 
 * **API Helpers (`GmailApiHelper`, `GraphApiHelper`)**

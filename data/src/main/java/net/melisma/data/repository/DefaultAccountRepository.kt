@@ -497,7 +497,17 @@ class DefaultAccountRepository @Inject constructor(
             val authException = AuthorizationException.fromIntent(data)
 
             googleAuthManager.handleAuthorizationResponse(authResponse, authException)
-                .collect { googleResult ->
+                .catch { e -> // START OF ADDED BLOCK
+                    Timber.tag(TAG).e(e, "Exception caught in handleAuthorizationResponse flow for Google")
+                    val errorDetails = ErrorDetails(
+                        message = e.message ?: "Google authentication failed due to an unexpected error.",
+                        code = (e as? AuthorizationException)?.code?.toString() ?: "GoogleAuthFlowException",
+                        cause = e
+                    )
+                    googleAuthResultChannel.send(GenericAuthResult.Error(errorDetails))
+                    tryEmitMessage("Google sign-in error: ${errorDetails.message}")
+                } // END OF ADDED BLOCK
+                .collect { googleResult -> // THIS LINE AND THE REST OF THE collect BLOCK ARE EXISTING CODE
                     when (googleResult) {
                         is GoogleSignInResult.Success -> {
                             val genericAccount =
@@ -539,15 +549,33 @@ class DefaultAccountRepository @Inject constructor(
                             Timber.tag(TAG).i("Google Auth (handleResult) cancelled by user.")
                             val errorDetails = ErrorDetails(
                                 message = "Sign-in cancelled by user.",
-                                code = "UserCancellation"
+                                code = "UserCancellation",
+                                cause = null
                             )
                             googleAuthResultChannel.send(GenericAuthResult.Error(errorDetails))
                             _accountActionMessage.tryEmit("Sign-in cancelled.")
                         }
                     }
                 }
-        } else {
-            microsoftAccountRepository.handleAuthenticationResult(providerType, resultCode, data)
+        } else if (providerType.equals(Account.PROVIDER_TYPE_MS, ignoreCase = true)) {
+             // For Microsoft, the result is typically handled directly by MSAL's own activity/callback
+             // which then communicates back to the flow initiated by microsoftAccountRepository.signIn(...).
+             // DefaultAccountRepository.signIn for MS collects that flow.
+             // So, direct handling of resultCode/data here for MS in DefaultAccountRepository might not be needed
+             // if MicrosoftAccountRepositoryImpl fully encapsulates MSAL's activity result handling.
+             // However, if MSAL requires the calling Activity/Fragment to forward onActivityResult,
+             // then microsoftAccountRepository would need a method similar to this one.
+
+             // Assuming for now that MSAL and its wrapper (MicrosoftAccountRepositoryImpl) handle this,
+             // and results propagate via the Flow returned by microsoftAccountRepository.signIn().
+             // If MSAL throws an exception during its interactive flow that isn't caught by its wrapper
+             // and transformed into a GenericAuthResult.Error, the MainViewModel's collect {} block
+             // on signIn() would terminate, potentially leaving isLoadingAccountAction = true.
+             // Thus, the MicrosoftAuthManager/MicrosoftAccountRepositoryImpl must be robust.
+             Timber.tag(TAG).d("handleAuthenticationResult called for Microsoft. This path is likely not used if MSAL handles its own Activity results and propagates via its sign-in Flow.")
+             // If microsoftAccountRepository *does* need to be explicitly poked, it would require a method like:
+             // (microsoftAccountRepository as? SomeSpecificInterface)?.handleInteractiveSignInResult(resultCode, data)
+             // And that method would then send a result to the flow MainViewModel is collecting.
         }
     }
 

@@ -367,7 +367,7 @@ class DefaultMessageRepository @Inject constructor(
         isRead: Boolean
     ): Result<Unit> = withContext(ioDispatcher) {
         messageDao.updateReadStatus(messageId, isRead)
-        syncEngine.enqueueMessageAction(
+        syncEngine.queueAction(
             account.id,
             messageId,
             if (isRead) ActionUploadWorker.ACTION_MARK_AS_READ else ActionUploadWorker.ACTION_MARK_AS_UNREAD,
@@ -382,7 +382,7 @@ class DefaultMessageRepository @Inject constructor(
         isStarred: Boolean
     ): Result<Unit> = withContext(ioDispatcher) {
         messageDao.updateStarredStatus(messageId, isStarred)
-        syncEngine.enqueueMessageAction(
+        syncEngine.queueAction(
             account.id,
             messageId,
             ActionUploadWorker.ACTION_STAR_MESSAGE,
@@ -396,7 +396,7 @@ class DefaultMessageRepository @Inject constructor(
         messageId: String
     ): Result<Unit> = withContext(ioDispatcher) {
         messageDao.deleteMessageById(messageId)
-        syncEngine.enqueueMessageAction(
+        syncEngine.queueAction(
             account.id,
             messageId,
             ActionUploadWorker.ACTION_DELETE_MESSAGE,
@@ -411,33 +411,35 @@ class DefaultMessageRepository @Inject constructor(
         newFolderId: String
     ): Result<Unit> = withContext(ioDispatcher) {
         val currentMessage = messageDao.getMessageByIdSuspend(messageId)
-            ?: return@withContext Result.failure(Exception("Message not found"))
+            ?: return@withContext Result.failure(Exception("Message $messageId not found for move op"))
 
+        val oldFolderId = currentMessage.folderId
         messageDao.updateFolderId(messageId, newFolderId)
 
-        syncEngine.enqueueMessageAction(
+        syncEngine.queueAction(
             account.id,
             messageId,
             ActionUploadWorker.ACTION_MOVE_MESSAGE,
             mapOf(
-                ActionUploadWorker.KEY_OLD_FOLDER_ID to currentMessage.folderId,
+                ActionUploadWorker.KEY_OLD_FOLDER_ID to oldFolderId,
                 ActionUploadWorker.KEY_NEW_FOLDER_ID to newFolderId
             )
         )
         Result.success(Unit)
     }
 
-    override suspend fun sendMessage(draft: MessageDraft, account: Account): Result<String> {
-        val tempId = "local-sent-${UUID.randomUUID()}"
-        syncEngine.enqueueMessageAction(
+    override suspend fun sendMessage(draft: MessageDraft, account: Account): Result<String> = withContext(ioDispatcher) {
+        val tempSentMessageId = "local-sent-${UUID.randomUUID()}"
+
+        syncEngine.queueAction(
             account.id,
-            tempId,
+            tempSentMessageId,
             ActionUploadWorker.ACTION_SEND_MESSAGE,
             mapOf(
                 ActionUploadWorker.KEY_DRAFT_DETAILS to Json.encodeToString(draft)
             )
         )
-        return Result.success(tempId)
+        Result.success(tempSentMessageId)
     }
 
     override fun searchMessages(
@@ -573,76 +575,93 @@ class DefaultMessageRepository @Inject constructor(
         val account = accountRepository.getAccountById(accountId).firstOrNull()
             ?: return@withContext Result.failure(Exception("Account not found"))
 
-        // Create a temporary local-only message
-        val tempId = "local-draft-${UUID.randomUUID()}"
+        val tempId = draftDetails.existingMessageId ?: "local-draft-${UUID.randomUUID()}"
         val draftFolder =
             folderDao.getFolderByWellKnownTypeSuspend(accountId, WellKnownFolderType.DRAFTS)
-            ?: return@withContext Result.failure(Exception("Drafts folder not found"))
+            ?: return@withContext Result.failure(Exception("Drafts folder not found for account $accountId"))
 
-        val newMessage = MessageEntity(
+        // Consolidate recipients
+        val allRecipients = draftDetails.to + draftDetails.cc + draftDetails.bcc
+        val recipientAddresses = allRecipients.map { it.emailAddress }
+        val recipientNames = allRecipients.mapNotNull { it.displayName }.filter { it.isNotBlank() }
+
+        // Optimistically save to local DB
+        val newMessageEntity = MessageEntity(
             id = tempId,
-            messageId = null,
+            messageId = null, 
             accountId = accountId,
             folderId = draftFolder.id,
-            threadId = null,
+            threadId = draftDetails.inReplyTo, // Corrected: Use inReplyTo for threadId
             subject = draftDetails.subject,
-            snippet = draftDetails.body.take(100),
+            snippet = draftDetails.body.take(255), 
             body = draftDetails.body,
-            senderName = account.emailAddress,
+            senderName = account.displayName ?: account.emailAddress,
             senderAddress = account.emailAddress,
-            recipientNames = draftDetails.to.mapNotNull { emailAddressObj: EmailAddress -> emailAddressObj.displayName },
-            recipientAddresses = draftDetails.to.map { emailAddressObj: EmailAddress -> emailAddressObj.emailAddress },
+            recipientAddresses = recipientAddresses, // Corrected
+            recipientNames = recipientNames.ifEmpty { null }, // Corrected, use null if empty
             timestamp = System.currentTimeMillis(),
             sentTimestamp = null,
-            isRead = true,
+            isRead = true, 
             isStarred = false,
-            hasAttachments = false
+            hasAttachments = draftDetails.attachments.isNotEmpty(),
+            isDraft = true
         )
+        messageDao.insertOrUpdateMessages(listOf(newMessageEntity))
+        // TODO: Handle attachments associated with the draft locally
 
-        messageDao.insertOrUpdateMessages(listOf(newMessage))
-
-        // Enqueue the actual creation
-        syncEngine.enqueueMessageAction(
+        syncEngine.queueAction(
             accountId,
-            tempId,
+            tempId, 
             ActionUploadWorker.ACTION_CREATE_DRAFT,
             mapOf(
                 ActionUploadWorker.KEY_DRAFT_DETAILS to Json.encodeToString(draftDetails)
             )
         )
 
-        Result.success(newMessage.toDomainModel())
+        Result.success(newMessageEntity.toDomainModel())
     }
 
     override suspend fun updateDraftMessage(
         accountId: String,
-        messageId: String,
+        messageId: String, 
         draftDetails: MessageDraft
     ): Result<Message> = withContext(ioDispatcher) {
         accountRepository.getAccountById(accountId).firstOrNull()
-            ?: return@withContext Result.failure(Exception("Account not found"))
+            ?: return@withContext Result.failure(Exception("Account not found for draft update"))
 
-        // Update the local message optimistically
         val existingMessage = messageDao.getMessageByIdSuspend(messageId)
-            ?: return@withContext Result.failure(Exception("Message not found"))
+            ?: return@withContext Result.failure(Exception("Draft message with id $messageId not found for update"))
 
-        val updatedMessage = existingMessage.copy(
+        // Consolidate recipients
+        val allRecipients = draftDetails.to + draftDetails.cc + draftDetails.bcc
+        val recipientAddresses = allRecipients.map { it.emailAddress }
+        val recipientNames = allRecipients.mapNotNull { it.displayName }.filter { it.isNotBlank() }
+
+        // Optimistically update local DB
+        val updatedMessageEntity = existingMessage.copy(
             subject = draftDetails.subject,
+            snippet = draftDetails.body.take(255),
             body = draftDetails.body,
-            // ... other fields
+            recipientAddresses = recipientAddresses, // Corrected
+            recipientNames = recipientNames.ifEmpty { null }, // Corrected, use null if empty
+            threadId = draftDetails.inReplyTo ?: existingMessage.threadId, // Update threadId if provided
+            timestamp = System.currentTimeMillis(), 
+            hasAttachments = draftDetails.attachments.isNotEmpty(),
+            isDraft = true 
         )
-        messageDao.insertOrUpdateMessages(listOf(updatedMessage))
+        messageDao.insertOrUpdateMessages(listOf(updatedMessageEntity))
+        // TODO: Handle changes in attachments for the draft locally
 
-        syncEngine.enqueueMessageAction(
+        syncEngine.queueAction(
             accountId,
-            messageId,
+            messageId, 
             ActionUploadWorker.ACTION_UPDATE_DRAFT,
             mapOf(
                 ActionUploadWorker.KEY_DRAFT_DETAILS to Json.encodeToString(draftDetails)
             )
         )
 
-        Result.success(updatedMessage.toDomainModel())
+        Result.success(updatedMessageEntity.toDomainModel())
     }
 
     override fun observeMessageAttachments(messageId: String): Flow<List<Attachment>> {

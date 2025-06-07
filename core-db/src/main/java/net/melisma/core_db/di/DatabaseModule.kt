@@ -14,6 +14,7 @@ import net.melisma.core_db.dao.AttachmentDao
 import net.melisma.core_db.dao.FolderDao
 import net.melisma.core_db.dao.MessageBodyDao
 import net.melisma.core_db.dao.MessageDao
+import net.melisma.core_db.dao.PendingActionDao
 import net.melisma.core_db.dao.RemoteKeyDao
 import javax.inject.Singleton
 
@@ -68,5 +69,11 @@ object DatabaseModule {
     @Singleton
     fun provideRemoteKeyDao(appDatabase: AppDatabase): RemoteKeyDao {
         return appDatabase.remoteKeyDao()
+    }
+
+    @Provides
+    @Singleton
+    fun providePendingActionDao(appDatabase: AppDatabase): PendingActionDao {
+        return appDatabase.pendingActionDao()
     }
 } 
