@@ -1,6 +1,8 @@
 package net.melisma.core_db.di
 
 import android.content.Context
+import android.util.Log
+import androidx.room.Room
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -21,7 +23,14 @@ object DatabaseModule {
     @Provides
     @Singleton
     fun provideAppDatabase(@ApplicationContext context: Context): AppDatabase {
-        return AppDatabase.getDatabase(context)
+        Log.d("DatabaseModule", "Providing AppDatabase instance.")
+        return Room.databaseBuilder(
+            context,
+            AppDatabase::class.java,
+            "melisma_mail.db"
+        )
+            .fallbackToDestructiveMigration()
+            .build()
     }
 
     @Provides

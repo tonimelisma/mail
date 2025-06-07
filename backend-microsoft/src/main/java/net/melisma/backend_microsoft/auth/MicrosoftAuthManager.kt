@@ -48,6 +48,7 @@ import net.melisma.core_data.di.ApplicationScope
 import net.melisma.core_data.di.AuthConfigProvider
 import net.melisma.core_data.di.Dispatcher
 import net.melisma.core_data.di.MailDispatchers
+import net.melisma.core_db.dao.AccountDao
 import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -119,6 +120,7 @@ class MicrosoftAuthManager @Inject constructor(
     // private val secureEncryptionService: SecureEncryptionService, // Injected into persistence service
     private val tokenPersistenceService: MicrosoftTokenPersistenceService, // New service
     private val activeMicrosoftAccountHolder: ActiveMicrosoftAccountHolder, // New injection
+    private val accountDao: AccountDao,
     @Dispatcher(MailDispatchers.IO) private val ioDispatcher: CoroutineDispatcher
 ) : MicrosoftAuthUserCredentials {
     private val TAG = "MicrosoftAuthManager"
@@ -294,6 +296,29 @@ class MicrosoftAuthManager @Inject constructor(
             Timber.tag(TAG).w("loadPersistedAccounts: MSAL client not ready.")
             return
         }
+
+        // <<< NEW LOGGING START >>>
+        try {
+            val msalCachedAccounts = currentApp.accounts // Synchronous call
+            if (msalCachedAccounts.isNullOrEmpty()) {
+                Timber.tag(TAG)
+                    .i("loadPersistedAccounts: MSAL cache snapshot - MSAL reports NO accounts in its cache at this point.")
+            } else {
+                Timber.tag(TAG)
+                    .i("loadPersistedAccounts: MSAL cache snapshot - MSAL reports ${msalCachedAccounts.size} account(s) in its cache. Usernames: ${msalCachedAccounts.joinToString { it.username }}")
+                msalCachedAccounts.forEachIndexed { index, acc ->
+                    Timber.tag(TAG)
+                        .d("  MSAL Cache Account [$index]: Username: ${acc.username}, ID: ${acc.id}")
+                }
+            }
+        } catch (e: Exception) {
+            Timber.tag(TAG).e(
+                e,
+                "loadPersistedAccounts: Exception while trying to get MSAL's current accounts list (currentApp.accounts)."
+            )
+        }
+        // <<< NEW LOGGING END >>>
+
         withContext(ioDispatcher) {
             Timber.tag(TAG)
                 .d("loadPersistedAccounts: Loading accounts from TokenPersistenceService.")
@@ -323,22 +348,26 @@ class MicrosoftAuthManager @Inject constructor(
                         // Let's try to load using that first. If it fails, we will need to adjust to use HomeAccountId.
 
                         var msalLoadedAccount: IAccount? = null
+                        Timber.tag(TAG)
+                            .d("loadPersistedAccounts: Attempting currentApp.getAccount for msalAccountId: ${persistedAccount.msalAccountId} (User from our persistence: ${persistedAccount.username})")
                         try {
                             msalLoadedAccount =
                                 currentApp.getAccount(persistedAccount.msalAccountId)
                         } catch (e: MsalException) {
                             Timber.tag(TAG).e(
                                 e,
-                                "loadPersistedAccounts: MsalException during getAccount for ID ${persistedAccount.msalAccountId}. Trying to find matching username."
+                                "loadPersistedAccounts: MsalException DIRECTLY from getAccount for ID ${persistedAccount.msalAccountId}. MSAL logs (like decryption errors) should precede this if related."
                             )
                         }
 
 
                         if (msalLoadedAccount != null) {
                             Timber.tag(TAG)
-                                .i("loadPersistedAccounts: Successfully loaded IAccount from MSAL for ID: ${persistedAccount.msalAccountId} (User: ${msalLoadedAccount.username})")
+                                .i("loadPersistedAccounts: Successfully loaded IAccount from MSAL for ID: ${persistedAccount.msalAccountId} (User: ${msalLoadedAccount.username}). MSAL decryption errors might have been logged by MSAL during this call but an IAccount object was returned.")
                             loadedMsalAccounts.add(msalLoadedAccount)
                         } else {
+                            Timber.tag(TAG)
+                                .w("loadPersistedAccounts: currentApp.getAccount returned NULL for msalAccountId: ${persistedAccount.msalAccountId} (User from our persistence: ${persistedAccount.username}). This means MSAL could not retrieve this account from its cache, possibly due to prior decryption errors or it's not in cache.")
                             // Fallback or alternative: try getting all accounts from MSAL and matching by username or other persisted fields if getAccount by ID fails.
                             // This indicates a potential mismatch in how accountId is persisted vs how MSAL expects it for retrieval.
                             // For now, log it. A robust solution might involve persisting homeAccountId.
@@ -363,7 +392,7 @@ class MicrosoftAuthManager @Inject constructor(
                     } catch (e: Exception) { // Catch broader exceptions during account loading
                         Timber.tag(TAG).e(
                             e,
-                            "loadPersistedAccounts: Generic error loading account with persisted ID ${persistedAccount.msalAccountId}."
+                            "loadPersistedAccounts: Generic error processing persisted account with msalAccountId ${persistedAccount.msalAccountId}."
                         )
                     }
                 }
@@ -941,36 +970,57 @@ class MicrosoftAuthManager @Inject constructor(
 
         Timber.tag(TAG)
             .d("getAccessToken: Attempting silent token acquisition for account: ${account.username}")
-        // Use a simplified version of acquireTokenSilent or a direct call if suitable
-        // For simplicity, adapting acquireTokenSilentInternal logic here:
         if (mMultipleAccountApp == null) {
             Timber.tag(TAG).e("getAccessToken: MSAL app not initialized.")
             return@withContext null
         }
 
         val silentParameters = AcquireTokenSilentParameters.Builder()
-            .withScopes(MICROSOFT_SCOPES.toList()) // Ensure MICROSOFT_SCOPES is accessible
+            .withScopes(MICROSOFT_SCOPES.toList())
             .forAccount(account)
-            .fromAuthority(account.authority) // It's good practice to specify authority
+            .fromAuthority(account.authority)
             .build()
 
         return@withContext try {
             val authResult = mMultipleAccountApp!!.acquireTokenSilent(silentParameters)
             Timber.tag(TAG)
                 .i("getAccessToken: Silent token acquisition successful for ${account.username}")
+            // If successful, ensure needsReauthentication is false for this account
+            try {
+                accountDao.setNeedsReauthentication(account.id, false)
+            } catch (dbExc: Exception) {
+                Timber.tag(TAG).e(
+                    dbExc,
+                    "getAccessToken: Failed to update needsReauthentication to false for account ${account.id} after successful token acquisition."
+                )
+            }
             authResult.accessToken
         } catch (e: MsalUiRequiredException) {
             Timber.tag(TAG).w(
                 e,
                 "getAccessToken: MsalUiRequiredException for ${account.username}. UI interaction needed."
             )
-            // Optionally, notify about re-authentication needed, though GraphApiHelper might not handle UI.
+            // Set needsReauthentication to true when MsalUiRequiredException occurs
+            try {
+                accountDao.setNeedsReauthentication(account.id, true)
+                Timber.tag(TAG)
+                    .i("getAccessToken: Set needsReauthentication to true for account ${account.id} due to MsalUiRequiredException.")
+            } catch (dbExc: Exception) {
+                Timber.tag(TAG).e(
+                    dbExc,
+                    "getAccessToken: Failed to update needsReauthentication to true for account ${account.id}."
+                )
+            }
             null // Token cannot be acquired silently
         } catch (e: MsalException) {
             Timber.tag(TAG).e(
                 e,
                 "getAccessToken: MsalException during silent token acquisition for ${account.username}"
             )
+            // For other MsalExceptions, we might also consider it a state requiring re-authentication
+            // if the error is severe (e.g., invalid_grant often means refresh token is bad).
+            // However, MsalUiRequiredException is the most explicit signal. For now, only flagging on MsalUiRequiredException.
+            // Consider adding more logic here if other MsalErrorCodes should also trigger needsReauthentication.
             null
         } catch (e: Exception) {
             Timber.tag(TAG).e(

@@ -77,9 +77,9 @@ class ActionUploadWorker @AssistedInject constructor(
         }
 
         return try {
-            val success =
+            val result =
                 performAction(mailService, accountId, entityId, actionType, inputData.keyValueMap)
-            if (success) {
+            if (result.isSuccess) {
                 Timber.d("$TAG: Action '$actionType' completed successfully for entity $entityId")
                 Result.success()
             } else {
@@ -98,7 +98,7 @@ class ActionUploadWorker @AssistedInject constructor(
         entityId: String,
         actionType: String,
         payload: Map<String, Any?>
-    ): Boolean {
+    ): Result<Unit> {
         val result: Result<out Any> = when (actionType) {
             ACTION_MARK_AS_READ, ACTION_MARK_AS_UNREAD -> {
                 val isReadStr = payload[KEY_IS_READ] as? String
@@ -182,12 +182,14 @@ class ActionUploadWorker @AssistedInject constructor(
             }
         }
 
-        if (result.isSuccess) {
+        return if (result.isSuccess) {
             appDatabase.withTransaction {
                 when (actionType) {
                     ACTION_DELETE_MESSAGE -> messageDao.deleteMessageById(entityId)
+                    // Potentially update local state for other successful actions here
                 }
             }
+            Result.success(Unit)
         } else {
             val error = result.exceptionOrNull()
             Timber.e(
@@ -195,9 +197,8 @@ class ActionUploadWorker @AssistedInject constructor(
                 "API Error for action $actionType on entity $entityId: ${error?.message}"
             )
             messageDao.updateLastSyncError(entityId, error?.message ?: "Unknown API error")
+            Result.failure(error ?: Exception("Unknown API error"))
         }
-
-        return result.isSuccess
     }
 
     sealed class Action {

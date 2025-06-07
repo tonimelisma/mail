@@ -70,6 +70,7 @@ abstract class BackendMicrosoftModule {
             @ApplicationScope externalScope: kotlinx.coroutines.CoroutineScope,
             tokenPersistenceService: MicrosoftTokenPersistenceService,
             activeMicrosoftAccountHolder: ActiveMicrosoftAccountHolder,
+            accountDao: net.melisma.core_db.dao.AccountDao,
             @net.melisma.core_data.di.Dispatcher(net.melisma.core_data.di.MailDispatchers.IO) ioDispatcher: CoroutineDispatcher
         ): MicrosoftAuthManager {
             Timber.d(
@@ -81,6 +82,7 @@ abstract class BackendMicrosoftModule {
                 externalScope,
                 tokenPersistenceService,
                 activeMicrosoftAccountHolder,
+                accountDao,
                 ioDispatcher
             )
         }

@@ -135,7 +135,7 @@ class GraphApiHelper @Inject constructor(
                     parameters.append("\$top", "100")
                     parameters.append(
                         "\$select",
-                        "id,displayName,totalItemCount,unreadItemCount,wellKnownName"
+                        "id,displayName,totalItemCount,unreadItemCount"
                     )
                 }
                 accept(ContentType.Application.Json)

@@ -29,263 +29,221 @@ local data to provide a rich offline experience while respecting device storage 
 8. **Intelligent Data Management:** Implement clear policies for initial data synchronization, cache
    eviction, and attachment handling to balance offline availability with resource constraints.
 
-## **2\. Current State, Technical Debt & Key Assumptions (Revised November 2023 - Updated by AI
-Assistant)**
+## **2\. Current State, Technical Debt & Key Assumptions (Updated by AI Assistant - June 2025)**
 
 **Current Implemented State (Summary):**
 
-* **Phase 0 (Foundation & Critical Bug Fixes):**
-    * MessageBodyEntity persistence bug: **ADDRESSED**.
-    * Room Entities enhanced with sync metadata (SyncStatus, timestamps, etc.): **COMPLETED**.
-  * Account/AccountEntity refactor (displayName/emailAddress): **IMPLEMENTED**.
-* **Build System & Core Libraries Fixes (Largely Addressed):**
-    * **KSP Hilt `CoroutineDispatcher` Resolution:** **FIXED**. The original build blocker in the
-      `backend-microsoft` module was resolved by explicitly including the `DispatchersModule` from
-      `core-data` in the `BackendMicrosoftModule` via
-      `@Module(includes = [DispatchersModule::class])`.
-    * **Data Layer Compilation Cascade:** **LARGELY FIXED**. A significant number of compilation
-      errors in
-      the `:data` module (`DefaultMessageRepository`, `DefaultFolderRepository`, various Workers)
-      and `:core-db`
-      module (various DAOs) were resolved. This involved:
-        * Adding missing methods to DAO interfaces (`FolderDao`, `MessageDao`, `AttachmentDao`,
-          `MessageBodyDao`, `AccountDao`).
-        * Correcting mismatched method signatures between repositories and their interfaces.
-        * Fixing unresolved references by aligning method calls with their new definitions.
-        * Updating data model classes (`MessageDraft`, `Attachment`, `Message`, `MessageEntity`,
-          `FolderEntity`, `MessageBodyEntity`, `EmailAddress`)
-          to include missing properties or align existing ones.
-        * Adding new mapper files (`AttachmentMapper.kt`) and correcting existing ones.
-        * Refactoring Worker classes to correctly parse action payloads and interact with DAOs and
-          API services.
-        * **OUTSTANDING ISSUE:** Persistent, unusual compiler errors in
-          `data/src/main/java/net/melisma/data/mapper/MessageMappers.kt` ("No value passed for
-          parameter 'id'/'body'" on the function signature line) despite the constructor call
-          appearing correct.
-    * **Room Foreign Key Constraint:** **FIXED**. A KSP error in `:core-db` related to a missing
-      unique index for a foreign key in `MessageBodyEntity` was resolved by updating the entity's
-      schema definition.
-    * **API Helper and Worker Implementation Progress (Partial):**
-        * `GraphApiHelper.kt`: Initial `accountId`/`folderId` constructor fix for `Message.fromApi`,
-          `ErrorDetails` import/usage corrected.
-        * `GmailApiHelper.kt`: Linting fix applied. **STILL A PRIMARY BUILD BLOCKER** due to
-          outdated constructor calls for `Message` and `Attachment`.
-        * `DefaultMessageRepository.kt`: Resolved issues with `MessageEntity.toDomainModel()`
-          arguments, `PagedMessagesResponse` usage, `EmailAddress` import and mapping, and
-          `SyncStatus` enum usage.
-        * `ActionUploadWorker.kt`: Corrected `MailApiServiceSelector` usage, `moveMessage`
-          parameters, and switched to `kotlin.Result`. The `markMessageAsRead` call is **temporarily
-          commented out** due to an unresolved reference error specific to it.
-        * `AttachmentDownloadWorker.kt`: Refactored DAO interactions to use a fetch-update-save
-          pattern with `AttachmentEntity` and `AttachmentDao.updateAttachment()`.
-        * `FolderContentSyncWorker.kt`: Corrected `nextPageToken` field usage from `FolderEntity`
-          and implemented saving of the new page token via `FolderDao.updatePagingTokens()`.
-        * `FolderListSyncWorker.kt`: Fixed `workerParams` access, `MailApiServiceSelector` usage,
-          `withTransaction` import, lambda parameter typing for `MailFolder.toEntity()`, and
-          `FolderDao/AccountDao` method calls.
-        * `MessageBodyDownloadWorker.kt`: Refactored `MessageBodyDao` interactions to
-          fetch-update/create-insert `MessageBodyEntity`, corrected
-          `MailApiService.getMessageContent()` call, and adjusted `Message` result handling.
-* **Phase 1 (Decoupling Read Path & Initial Sync Workers - Original State):**
-    * Repository Read Methods (DB-Centric): **PARTIALLY IMPLEMENTED**.
-        * **CRITICAL ISSUE (PENDING VERIFICATION AFTER SPRINT 1.A FIXES):**
-          `DefaultMessageRepository`'s usage of `MessageRemoteMediator` previously resulted in only
-          the first page loading. This should be re-evaluated once the build is successful.
-  * `SyncEngine` and Initial SyncWorkers: Skeletons exist, significant progress made in making them
-    compile, but **NEED FULL LOGIC IMPLEMENTATION.**
-* **Phase 2 (Decoupling Write Path - Queuing Offline Actions - Original State):** **NOT STARTED.**
-* **Phase 3 (Building a Robust Sync Engine & Advanced Features - Original State):** **NOT STARTED.**
+* **Project Build Status: SUCCESSFUL.** The entire project, including all modules (`:mail`, `:data`,
+  `:domain`, `:core-data`, `:core-db`, `:backend-microsoft`, `:backend-google`), now compiles
+  successfully.
 
-**Key Technical Debt & Immediate Concerns (Updated):**
+* **Phase 0 & 1.A (Foundation & Build Stabilization): COMPLETED.**
+    * **All previously documented build blockers have been resolved.** This includes:
+        * Fixing various compilation errors in `:data`, `:core-db`, and `:mail` modules.
+        * Resolving KSP Hilt `CoroutineDispatcher` and Room Foreign Key errors.
+        * Correcting unresolved references (`ACTION_STAR_MESSAGE`, `username`).
+        * Adding missing method overrides to interfaces (`observeMessageAttachments`).
+        * Standardizing payload keys and action names between `DefaultMessageRepository` and
+          `ActionUploadWorker`.
+    * **Investigation of former "showstoppers" from the previous report:**
+        * **`GmailApiHelper.kt`:** This file now compiles. An in-depth review revealed that the
+          `Message.fromApi` factory function and the `Attachment` constructor were being used
+          correctly. The previous report's concern about outdated constructors was unfounded or
+          based on an intermediate state that has since been fixed.
+        * **`MessageMappers.kt`:** The "anomalous compiler errors" are no longer present. The file
+          compiles successfully, and the mapping logic appears correct. This was likely a phantom
+          error caused by upstream dependency issues that are now resolved.
+        * **`ActionUploadWorker.kt`:** The `markMessageAsRead` call is present and functional. A
+          minor code quality issue regarding mixed `Boolean` and `Result` types was identified and
+          refactored for clarity and type safety.
 
-1. **`GmailApiHelper.kt` Constructor Calls (TOP PRIORITY BUILD BLOCKER):**
-    * **Problem:** The `GmailApiHelper.kt` in the `backend-google` module is not updated to use the
-      current constructors of `Message` and `Attachment` from `core-data`, which now require
-      additional parameters (e.g., `accountId`, `folderId`).
-    * **Impact:** Project cannot build if this file is included in the build process.
-    * **Root Cause:** Incomplete refactoring.
-2. **Anomalous Compiler Errors in `MessageMappers.kt`:**
-    * **Problem:** Persistent compiler errors ("No value passed for parameter 'id'/'body'") on the
-      function signature line of `MessageEntity.toDomainModel()` in `MessageMappers.kt`. The
-      constructor call within the function appears correct.
-    * **Impact:** This is currently preventing a successful build of the `:data` module.
-    * **Root Cause:** Unknown; potentially a subtle compiler issue, build configuration problem, or
-      a very opaque coding error.
-3. **`ActionUploadWorker.kt` - `markMessageAsRead` issue:**
-    * **Problem:** The call to `mailService.markMessageAsRead()` is unresolved despite a matching
-      signature in `MailApiService`. It is currently commented out.
-    * **Impact:** "Mark as read" action will not work via this worker until resolved.
-4. **Incomplete `MailApiService` Pagination & Integration (Partially Addressed, Blocked by Build):**
-    * The `getMessagesForFolder` signature has been updated in the interface and
-      `GraphApiHelper.kt`. Full verification of `GmailApiHelper.kt`'s implementation is pending a
-      successful build.
-5. **Incomplete Sync Workers & `SyncEngine`:** Foundational work and compilation fixes are done for
-   many workers, but the core logic for all workers and the orchestration logic in `SyncEngine` is
-   not implemented. This is the main next step after the build is fixed.
-6. **Delta Sync for Deletions:** Not implemented. This is a critical feature for a good offline
-   experience.
+* **Phase 1.B/C/D (Sync Workers & Offline Queuing): SKELETONS IMPLEMENTED, LOGIC PENDING/PARTIALLY
+  ADDRESSED.**
+    * The foundational classes for the sync engine (`SyncEngine`) and all related workers (
+      `FolderListSyncWorker`, `FolderContentSyncWorker`, `MessageBodyDownloadWorker`,
+      `AttachmentDownloadWorker`, `ActionUploadWorker`) exist and compile.
+    * Basic interactions with DAOs and API services are in place.
+    * However, the core synchronization logic (robust error handling, comprehensive delta sync,
+      etc.) and particularly the **orchestration logic within `SyncEngine`** are not yet fully
+      implemented.
 
-**Original Key Assumptions (Still Mostly Valid, with Caveats):**
+**Key Technical Debt & Immediate Concerns (Revised):**
 
-* The existing Room database schema is largely suitable and was enhanced with sync metadata. **(
-  VALID)**
+1. **Implement `SyncEngine` for Orchestration (TOP PRIORITY):**
+    * **Problem:** There is no central mechanism (`SyncEngine`) to manage the order and dependencies
+      of synchronization tasks. This is the root cause of issues like messages being fetched before
+      their parent folders are synced, leading to empty folder displays (even if crashes are now
+      mitigated).
+    * **Impact:** The app cannot reliably sync data in the correct order, leading to an inconsistent
+      and incomplete offline state.
+    * **Next Steps:** Design and implement `SyncEngine.kt`. It must ensure `FolderListSyncWorker`
+      completes for an account before `FolderContentSyncWorker` or `MessageRemoteMediator` attempts
+      to process messages for that account.
+
+2. **Incomplete Sync Worker Logic (High Priority):**
+    * **Problem:** While workers compile and some have basic API interactions, they lack complete,
+      robust logic for handling all edge cases, comprehensive delta synchronization (especially for
+      deletions), and sophisticated error recovery.
+    * **Impact:** The app cannot yet sync data reliably in the background, queue actions with full
+      resilience, or provide a truly meaningful and up-to-date offline mode.
+    * **Next Steps:** This remains a main body of work. Each worker's logic needs to be fully
+      implemented and tested in conjunction with `SyncEngine`.
+
+3. **Delta Sync for Deletions (High Priority):**
+    * **Problem:** The current sync logic does not adequately account for messages, folders, etc.,
+      that have been deleted on the server. The local database will not reflect these removals.
+    * **Impact:** The local cache will become stale, showing items that no longer exist, leading to
+      a confusing and broken user experience.
+    * **Next Steps:** Design and implement a strategy for delta sync that explicitly handles
+      deletions from the server. This is critical for data integrity.
+
+4. **Pagination and `MessageRemoteMediator` Verification (Medium Priority):**
+    * **Problem:** It remains unconfirmed if the `MessageRemoteMediator` correctly loads and
+      displays *all* pages of messages when a user scrolls.
+    * **Impact:** Users may not be able to scroll through their full message history.
+    * **Next Steps:** After `SyncEngine` ensures folders are present, thoroughly test and verify the
+      pagination mechanism.
+
+**Original Key Assumptions (Re-evaluated):**
+
+* The existing Room database schema is largely suitable. `FolderEntity.id` (local PK) correctly uses
+  well-known remote IDs (e.g., "SENT") for Gmail standard folders. **(VALID)**
 * WorkManager is the chosen framework. **(VALID)**
-* Existing MailApiService implementations are functional for backend communication (now enhanced for
-  pagination). **(PARTIALLY VALID - Blocked by `GmailApiHelper.kt` compilation
-  and `MessageMappers.kt` mystery)**
+* Existing MailApiService implementations are functional. **(VALID)**
 * UI will be made fully reactive. **(ASSUMED, NEEDS VERIFICATION)**
 * Server is the ultimate source of truth. **(VALID)**
-* Server APIs provide mechanisms for delta sync (needs to be leveraged). **(ASSUMED, NEEDS
-  IMPLEMENTATION)**
+* Server APIs provide mechanisms for delta sync. **(ASSUMED, FULL IMPLEMENTATION PENDING)** This is
+  critical.
 
 ## **3\. Phased Implementation Plan (Revised & Detailed)**
 
-This plan focuses on fixing the build and then continuing with the phased implementation.
+With the build stabilized and critical crash mitigated, the plan focuses on robust synchronization.
 
 ---
 
-**Sprint/Phase 1.A: Fix Build & Stabilize Data Layer (The Critical Hurdle)**
+**Sprint/Phase 1.A: Fix Build & Stabilize Data Layer**
 
-**Objective:** Get the project into a buildable and runnable state to enable further development.
+* **Status: COMPLETED.** The project is in a buildable and runnable state.
 
-* **Task 1.A.1: Fix KSP/Hilt `CoroutineDispatcher` error in `backend-microsoft`**
-    * **Status: COMPLETED.**
-  * **Resolution:** Explicitly included `DispatchersModule` in `BackendMicrosoftModule`.
+**Sprint/Phase 1.A.2: Mitigate Message Sync Crashes (June 2025)**
 
-* **Task 1.A.2: Resolve Compilation Cascade in `:data` and `:core-db`**
-    * **Status: LARGELY COMPLETED.** Significant progress in `DefaultMessageRepository`,
-      `DefaultFolderRepository`, DAOs, and Worker classes.
-    * **Remaining:** Resolve `MessageMappers.kt` compiler errors.
-
-* **Task 1.A.3: Fix Room Foreign Key KSP Error**
-    * **Status: COMPLETED.**
-  * **Resolution:** Corrected the foreign key reference in `MessageBodyEntity`.
-
-* **Task 1.A.4: Fix Compilation Errors in `GmailApiHelper.kt`**
-    * **Status: BLOCKED (Primary Blocker for Full Project Build).**
-    * **Objective:** Update `GmailApiHelper` to correctly use the updated `Message` and `Attachment`
-      data models.
-
-* **Task 1.A.5: Resolve `markMessageAsRead` in `ActionUploadWorker.kt`**
-    * **Status: PENDING.** The call is currently commented out.
-    * **Objective:** Investigate and fix the "Unresolved reference" error.
-
-* **Task 1.A.6: Verify `MessageRemoteMediator` and Pagination**
-    * **Status: NOT STARTED (Blocked by Build).**
-    * **Objective:** Once the application builds, verify `MessageRemoteMediator` pages correctly.
+* **Status: COMPLETED.**
+* **Objective:** Prevent `SQLiteConstraintException` during message sync.
+* **Tasks:**
+    * Added defensive checks in `MessageRemoteMediator` to ensure `FolderEntity` exists locally
+      before message load.
+    * Added similar checks in `FolderContentSyncWorker`.
+* **Outcome:** App is more stable, but underlying sync orchestration is still required for data to
+  appear correctly.
 
 ---
 
-**Sprint/Phase 1.B: Implement Core Sync Workers (Folder List & Basic Content)**
+**Sprint/Phase 1.B (Focus on Orchestration & Core Sync): Implement `SyncEngine`**
 
-**Objective:** Get foundational data synced without user interaction.
+**Objective:** Establish reliable, ordered synchronization for accounts and folders.
 
-* **Task 1.B.1: Finalize `FolderListSyncWorker.kt`**
-    * **Status: SIGNIFICANT PROGRESS MADE (Compiles).** Needs full logic implementation and testing.
-
-* **Task 1.B.2: Finalize `FolderContentSyncWorker.kt`**
-    * **Status: SIGNIFICANT PROGRESS MADE (Compiles).** Needs full logic implementation and testing.
-
-* **Task 1.B.3: Implement `SyncEngine.kt` (Basic Folder & Content Sync Scheduling)**
+* **Task 1.B.1: Design and Implement `SyncEngine.kt` (Initial Version)**
     * **Status: NOT STARTED.**
-    * **DoD:** `SyncEngine` can schedule folder list and folder content syncs.
+  * **Objective:** Build the `SyncEngine` to manage and trigger `FolderListSyncWorker` for an
+    account. Only upon its success should message-related sync (`FolderContentSyncWorker`, or
+    signaling readiness for `MessageRemoteMediator`) for that account proceed.
+  * **DoD:** `SyncEngine` can successfully orchestrate the full sync of folder lists for an account.
+    Subsequent attempts to view a folder's content will find the `FolderEntity` present.
+
+* **Task 1.B.2: Verify `MessageRemoteMediator` and Pagination (Post `SyncEngine` folder readiness)**
+    * **Status: NOT STARTED.**
+  * **Objective:** Once `SyncEngine` ensures `FolderEntity` records are present, run the application
+    and confirm that `MessageRemoteMediator` correctly fetches and displays subsequent pages of
+    messages.
+  * **DoD:** Scrolling to the bottom of the message list triggers a network request and appends new
+    messages. All messages for a folder can be loaded.
+
+* **Task 1.B.3: Enhance `FolderListSyncWorker.kt` & `FolderContentSyncWorker.kt`**
+    * **Status: PARTIAL (Basic logic + recent crash fixes).**
+    * **Objective:** Implement more robust error handling, and basic delta sync capabilities (if API
+      supports it simply, e.g., only fetching newer items if a timestamp is available). Full
+      deletion handling is a separate major task.
+    * **DoD:** Workers are more resilient and attempt basic delta updates.
 
 ---
 
-**Sprint/Phase 1.C: Message Body & Attachment Download Workers**
+**Sprint/Phase 1.C: Implement On-Demand and Action-Based Workers (Reliably)**
 
-**Objective:** Allow on-demand download of message bodies and attachments.
+**Objective:** Allow on-demand download of full message bodies and enable a more robust offline
+action queue, orchestrated by `SyncEngine`.
 
-* **Task 1.C.1: Finalize `MessageBodyDownloadWorker.kt`**
-    * **Status: SIGNIFICANT PROGRESS MADE (Compiles).** Needs full logic implementation and testing.
+* **Task 1.C.1: Finalize `MessageBodyDownloadWorker.kt` (Integrated with `SyncEngine`)**
+    * **Status: SKELETON IMPLEMENTED.**
+    * **Objective:** Implement full logic, triggered via `SyncEngine` when a message detail is
+      requested.
+    * **DoD:** Requesting message detail downloads and saves full content.
 
-* **Task 1.C.2: Finalize `AttachmentDownloadWorker.kt`**
-    * **Status: SIGNIFICANT PROGRESS MADE (Compiles).** Needs full logic implementation and testing.
-
-* **Task 1.C.3: `SyncEngine` Methods for On-Demand Downloads**
-    * **Status: NOT STARTED.**
-    * **DoD:** `SyncEngine` can trigger these downloads.
+* **Task 1.C.2: Finalize `ActionUploadWorker.kt` (Integrated with `SyncEngine`)**
+    * **Status: SKELETON IMPLEMENTED.**
+    * **Objective:** Implement complete logic for all action types, robust error/retry, managed by
+      `SyncEngine`.
+    * **DoD:** Offline actions are reliably queued and executed.
 
 ---
 
-**Sprint/Phase 1.D: Action Upload Worker & Offline Queuing Foundation**
+**Sprint/Phase 2: Advanced Sync Features & Offline Queue**
 
-**Objective:** Enable basic offline actions to be queued and synced.
+**Objective:** Implement comprehensive delta sync (including deletions) and refine the offline
+action queue.
 
-* **Task 1.D.1: Finalize `ActionUploadWorker.kt`**
-    * **Status: SIGNIFICANT PROGRESS MADE (Compiles, `markMessageAsRead` pending).** Needs full
-      logic implementation for all actions and testing.
-
-* **Task 1.D.2: Design and Implement Offline Action Queueing Mechanism**
+* **Task 2.1: Implement Delta Sync for Server-Side Deletions**
     * **Status: NOT STARTED.**
-    * **Details:** Define how actions are stored locally (e.g., separate Room table) and how
-      `ActionUploadWorker` consumes them.
+  * **Objective:** Design and implement mechanisms in relevant workers (FolderList, FolderContent)
+    and `SyncEngine` to detect and apply server-side deletions to the local cache.
+  * **DoD:** Deleting an email on the server eventually removes it from the local app cache.
 
-* **Task 1.D.3: `SyncEngine` Integration for Action Uploads**
-    * **Status: NOT STARTED.**
-    * **DoD:** `SyncEngine` can trigger action uploads.
+* **Task 2.2: Refine Offline Action Queueing Mechanism**
+    * **Status: NOT STARTED.** (Original task from previous plan)
+    * **Objective:** Define and implement the database table and DAOs for storing pending offline
+      actions if not already robust. Refactor repositories to write to this queue.
+    * **DoD:** Offline actions use a persistent queue read by `ActionUploadWorker`.
 
 ---
 
 ## 4\. Next Steps & Current Build Status
 
-### Current Build Status: FAILED
+### Current Build Status: SUCCESSFUL & MORE STABLE
 
-The project currently **does not build** if all modules are included. The primary blocker for a full
-project build is `backend-google/src/main/java/net/melisma/backend_google/GmailApiHelper.kt`.
-However, the immediate blocker for the current set of changes in the `:data` module is the errors in
-`MessageMappers.kt`.
-
-**Errors in `:data` module:**
-
-* `MessageMappers.kt:50:9 No value passed for parameter 'id'.`
-* `MessageMappers.kt:50:9 No value passed for parameter 'body'.`
-
-**Errors in `backend-google` module (if compiled):**
-
-* Multiple "No value passed for parameter" errors when creating `Message` and `Attachment` objects (
-  e.g., `accountId`, `folderId`, `messageId`, `localUri`).
+The project **builds and compiles successfully**. Critical crashes related to message sync foreign
+key constraints have been mitigated with defensive checks in `MessageRemoteMediator` and
+`FolderContentSyncWorker`.
 
 ### Immediate Priorities:
 
-1. **Resolve `MessageMappers.kt` Errors:**
-    * **The Problem:** The compiler reports missing parameters for the `Message` constructor on the
-      `MessageEntity.toDomainModel()` function signature line, despite the constructor call within
-      the function appearing correct.
-    * **What Needs to Be Done:** This requires a deeper investigation. Since direct fixes to the
-      constructor call and even using fully qualified names haven't resolved it, the issue might be
-      more subtle. Possibilities include:
-        * An obscure interaction with other mappers or extension functions.
-        * A problem in the `Message.kt` data class itself that's manifesting indirectly here.
-        * Build configuration or compiler environment issues (though less likely given other files
-          compile).
-    * **Next Step:** Systematically re-examine `Message.kt` for any unusual constructor logic,
-      `init` blocks, or default parameter interactions. Then, analyze the usage of
-      `MessageEntity.toDomainModel()` throughout the `:data` module to see if any call site could be
-      providing misleading type information.
-2. **Uncomment and Fix `markMessageAsRead` in `ActionUploadWorker.kt`:**
-    * Once the `:data` module builds, uncomment the
-      `mailService.markMessageAsRead(entityId, isRead)` line and address the "Unresolved reference"
-      error. This might involve checking type inference again or looking for subtle differences in
-      that specific call compared to other `mailService` calls.
-3. **Fix `GmailApiHelper.kt` (Primary Project Build Blocker):**
-    * **The Problem:** The `mapGmailMessageToMessage` and other methods inside `GmailApiHelper.kt`
-      are attempting to create instances of `net.melisma.core_data.model.Message` and
-      `net.melisma.core_data.model.Attachment` using outdated constructors.
-    * **What Needs to Be Done:** Update all `Message` and `Attachment` instantiation points in
-      `GmailApiHelper.kt` to provide the new required parameters (e.g., `accountId`, `folderId` for
-      `Message`; `messageId`, `accountId`, `downloadStatus` for `Attachment`). Values need to be
-      sourced from available data (e.g., `accountId` from method scope) or sensible defaults.
+1. **Implement `SyncEngine` for Sync Orchestration (CRITICAL):**
+    * **The Problem:** The lack of ordered execution of sync tasks (`FolderListSyncWorker` before
+      message sync) is the primary reason folders may appear empty or data may be inconsistent, even
+      if crashes are avoided.
+    * **What Needs to Be Done:** Design and implement `SyncEngine.kt`. This engine must ensure
+      `FolderListSyncWorker` runs and completes successfully for an account *before*
+      `FolderContentSyncWorker` is run for any folder in that account, and before
+      `MessageRemoteMediator` attempts to load messages.
+    * **Next Step:** Begin design and implementation of `SyncEngine.kt`.
 
-### Path to Vision (Post-Build Fixes)
+2. **Verify Message Pagination (Post `SyncEngine` basic folder readiness):**
+    * **The Problem:** Unconfirmed if `MessageRemoteMediator` correctly loads all pages.
+    * **What Needs to Be Done:** Once `SyncEngine` ensures folders are present, thoroughly test
+      pagination.
+    * **Next Step:** Perform manual and automated tests for message pagination.
 
-1. **Verify Pagination:** Run the app and test `MessageRemoteMediator`.
-2. **Implement Sync Workers Logic:** Complete the actual synchronization logic within all the worker
-   classes.
-3. **Implement `SyncEngine` Orchestration:** Build out the `SyncEngine` to manage and trigger sync
-   tasks effectively.
-4. **Implement Offline Actions & Queuing:** Develop the system for storing and syncing user actions
-   performed offline.
+3. **Implement Full Logic for Sync Workers (including Deletion Handling):**
+    * **The Problem:** Sync workers have basic structures but need full, robust logic, especially
+      for delta sync (including deletions) and comprehensive error handling.
+    * **What Needs to Be Done:** Methodically complete the business logic for each sync worker,
+      integrated with and orchestrated by `SyncEngine`. Prioritize handling server-side deletions.
+    * **Next Step:** After `SyncEngine` basics, enhance `FolderListSyncWorker` and
+      `FolderContentSyncWorker` with full delta sync logic.
+
+### Path to Vision (Post-Crash Mitigation)
+
+1. **Implement `SyncEngine` Orchestration.** **(Immediate Next Step)**
+2. **Verify Pagination** (once `SyncEngine` ensures folder data is present).
+3. **Implement Full Sync Workers Logic** (including robust delta sync for changes and deletions).
+4. **Implement Offline Actions & Queuing** (fully integrated with `SyncEngine`).
 5. **Refine and Test:** Continuously test the offline experience, refine sync logic, and handle edge
    cases and errors.
-6. **Address Delta Sync for Deletions.**

@@ -1,9 +1,12 @@
 package net.melisma.mail
 
 import android.app.Application
+import android.util.Log
+import androidx.hilt.work.HiltWorkerFactory
+import androidx.work.Configuration
 import dagger.hilt.android.HiltAndroidApp
-import net.melisma.mail.BuildConfig
 import timber.log.Timber
+import javax.inject.Inject
 
 /**
  * Custom Application class required by Hilt and for app-wide initializations like Timber.
@@ -12,15 +15,38 @@ import timber.log.Timber
  * dependencies into other Android framework classes annotated with @AndroidEntryPoint.
  */
 @HiltAndroidApp
-class MailApplication : Application() {
+class MailApplication : Application(), Configuration.Provider {
+
+    @Inject
+    lateinit var workerFactory: HiltWorkerFactory
+
     override fun onCreate() {
+        Log.d("MailApplication", "MailApplication: onCreate CALLED - Direct Log")
         super.onCreate()
+        Timber.d("MailApplication: onCreate called - Timber Log")
+        Timber.d("MailApplication: Injected workerFactory instance: %s", workerFactory)
+
         if (BuildConfig.DEBUG) {
             Timber.plant(Timber.DebugTree())
+            Timber.d("Timber logging planted.")
         } else {
-            // Optionally plant a release tree for crash reporting, etc.
-            // Timber.plant(CrashReportingTree()) // Example: You would define CrashReportingTree
+            // TODO: Plant a crash reporting tree for release builds if needed
+            Timber.d("Timber logging NOT planted (release build or custom logic).")
         }
+        Timber.i("MailApplication fully initialized.")
     }
     // Hilt initialization is handled automatically by the annotation.
+
+    override val workManagerConfiguration: Configuration
+        get() {
+            Timber.d("MailApplication: workManagerConfiguration getter invoked.")
+            Timber.d(
+                "MailApplication: Using workerFactory for WorkManager config: %s",
+                workerFactory
+            )
+            return Configuration.Builder()
+                .setWorkerFactory(workerFactory)
+                .setMinimumLoggingLevel(Log.DEBUG) // Keep WM logs verbose for now
+                .build()
+        }
 }
