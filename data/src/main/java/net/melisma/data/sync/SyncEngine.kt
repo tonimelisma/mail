@@ -2,6 +2,7 @@ package net.melisma.data.sync
 
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequest
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
@@ -134,6 +135,7 @@ class SyncEngine @Inject constructor(
                                     WellKnownFolderType.DRAFTS,
                                     WellKnownFolderType.SENT_ITEMS
                                 )
+                                val workRequests = mutableListOf<OneTimeWorkRequest>()
 
                                 keyFolderTypesToSync.forEach { folderType ->
                                     val folder = folderDao.getFolderByWellKnownTypeSuspend(
@@ -141,22 +143,37 @@ class SyncEngine @Inject constructor(
                                         folderType
                                     )
                                     if (folder != null) {
-                                        Timber.d("$TAG: Found key folder type \'${folderType.name}\' (Name: \'${folder.name}\', local PK: ${folder.id}, remoteId: ${folder.remoteId ?: "N/A"}) for account $accountId. Enqueuing content sync.")
+                                        Timber.d("$TAG: Found key folder type '${folderType.name}' (Name: '${folder.name}', local PK: ${folder.id}, remoteId: ${folder.remoteId ?: "N/A"}) for account $accountId. Will enqueue content sync.")
                                         if (folder.remoteId != null) { // Ensure remoteId is not null for API calls
-                                            syncFolderContent(
-                                                accountId,
-                                                folder.id,
-                                                folder.remoteId!!
-                                            )
+                                            val workRequest = OneTimeWorkRequestBuilder<FolderContentSyncWorker>()
+                                                .setInputData(
+                                                    workDataOf(
+                                                        "ACCOUNT_ID" to accountId,
+                                                        "FOLDER_ID" to folder.id,
+                                                        "FOLDER_REMOTE_ID" to folder.remoteId
+                                                    )
+                                                )
+                                                .addTag("FolderContentSync_${accountId}_${folder.id}")
+                                                .build()
+                                            workRequests.add(workRequest)
                                         } else {
-                                            // This case should ideally not happen for well-known folders that require a remoteId for content sync.
-                                            // For some local-only or special types, remoteId might be null, but those usually don\'t need remote content sync.
-                                            Timber.w("$TAG: Key folder type \'${folderType.name}\' (Name: \'${folder.name}\', local PK: ${folder.id}) for account $accountId has null remoteId. Content sync might be N/A or fail.")
+                                            Timber.w("$TAG: Key folder type '${folderType.name}' (Name: '${folder.name}', local PK: ${folder.id}) for account $accountId has null remoteId. Content sync might be N/A or fail.")
                                         }
                                     } else {
-                                        Timber.w("$TAG: Key folder type \'${folderType.name}\' not found for account $accountId after folder list sync. Cannot sync its content.")
+                                        Timber.w("$TAG: Key folder type '${folderType.name}' not found for account $accountId after folder list sync. Cannot sync its content.")
                                     }
                                 }
+
+                                if(workRequests.isNotEmpty()){
+                                    val uniqueWorkNameChain = "KeyFolderContentSyncChain_$accountId"
+                                    var continuation = workManager.beginUniqueWork(uniqueWorkNameChain, ExistingWorkPolicy.KEEP, workRequests.first())
+                                    if (workRequests.size > 1) {
+                                        continuation = continuation.then(workRequests.drop(1))
+                                    }
+                                    continuation.enqueue()
+                                    Timber.d("$TAG: Enqueued a chain of ${workRequests.size} FolderContentSyncWorker requests for key folders of account $accountId.")
+                                }
+
                                 _overallSyncState.value =
                                     SyncProgress.IDLE // Or SYNCING if content sync started and we track it more granularly
                             }
@@ -355,3 +372,4 @@ class SyncEngine @Inject constructor(
         Timber.i("$TAG: Periodic cache cleanup worker enqueued.")
     }
 }
+

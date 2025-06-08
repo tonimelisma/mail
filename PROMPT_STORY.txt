@@ -1,4 +1,4 @@
-Read @OFFLINE.md and @BACKLOG.md and@ARCHITECTURE.md. What would be the next best working increment we should implement? Do we need to fix some tech debt or move forward with new functionality?
+Read @BACKLOG.md and@ARCHITECTURE.md. What would be the next best working increment we should implement? Do we need to fix some tech debt or move forward with new functionality?
 
 1. Define a well-sized increment of work to do next. Should you tackle tech debt or implement new functionality to move towards the vision? Explain clearly the body of work you seek to accomplish and the outcomes.
 2. Don't trust the markdown documents. Read the code as it is today on disk to understand its state and reason about it.

@@ -79,8 +79,7 @@ class MessageBodyDownloadWorker @AssistedInject constructor(
             val existingBodyEntity = messageBodyDao.getMessageBodyByIdSuspend(messageId)
             if (existingBodyEntity != null && existingBodyEntity.syncStatus == SyncStatus.SYNCED && existingBodyEntity.content != null) {
                 Timber.i("$TAG: Message body for $messageId already synced. Skipping download.")
-                val outputData = Data.Builder().putString(KEY_RESULT_BODY, existingBodyEntity.content).build()
-                return Result.success(outputData)
+                return Result.success()
             }
 
             val mailService = mailApiServiceSelector.getServiceByAccountId(accountId)
@@ -167,10 +166,7 @@ class MessageBodyDownloadWorker @AssistedInject constructor(
                 }
                 messageBodyDao.insertOrUpdateMessageBody(successEntity)
                 Timber.d("Saved message body for $messageId to DB.")
-                // Ensure bodyContent is not null before putting it in outputData
-                val outputBody = bodyContent ?: ""
-                val outputData = Data.Builder().putString(KEY_RESULT_BODY, outputBody).build()
-                return Result.success(outputData)
+                return Result.success()
             } else {
                 val exception = bodyResult.exceptionOrNull()
                 val errorMessage = exception?.message ?: "Failed to fetch message body"

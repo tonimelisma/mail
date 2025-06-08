@@ -122,15 +122,15 @@ The application uses a multi-faceted strategy for data synchronization, managed 
       new mail and other updates at user-defined intervals (e.g., every 15 minutes), ensuring
       battery efficiency. This performs delta synchronization for all relevant folders and enqueues body/attachment downloads based on preferences.
 3. **Foreground Sync & Activity-Driven Sync:**
-    * **Constant Polling (Key Folders):** When the app is in the foreground, the SyncEngine ensures
-      frequent, short-interval polling (delta sync) for critical folders: Inbox, Drafts, and Outbox.
+    * **Sequential Key Folder Sync:** When the app is in the foreground or on specific triggers (like network reconnection), the SyncEngine ensures
+      a sequential, chained sync for critical folders (Inbox, Drafts, Sent Items) to prevent API throttling.
     * **Folder Open Sync (Other Folders):** When a user opens any other folder, if the app is online
       and that folder's local data (based on lastSuccessfulSyncTimestamp) is older than 5 minutes (
       configurable) and hasn't been recently checked by general foreground polling, the SyncEngine
       initiates a sync for that specific folder.
     * **Individual Message Refresh:** When an individual email is opened for viewing, if online, the
       app automatically attempts to silently refresh that message's content (via `SyncEngine` enqueuing `SingleMessageSyncWorker`) if it's
-      potentially stale (e.g., older than 5 minutes since last full sync or specific local criteria).
+      potentially stale (e.g., older than 5 minutes since last full sync or specific local criteria) and not already being downloaded.
     * **Pull-to-Refresh:** User-initiated pull-to-refresh on message lists triggers an immediate,
       high-priority sync request to the SyncEngine for the current folder.
 4. **Delta Synchronization:** All sync operations (after initial) aim to fetch only changes (new
@@ -257,7 +257,7 @@ success, triggering initial sync processes.)*
 * **Pattern:** Offline-First MVVM with a domain layer is strictly followed.
 * **ViewModels (androidx.lifecycle.ViewModel):** Scoped to navigation destinations, they hold UI
   state, observe data from Use Cases (sourced from local DB), and manage UI feedback for sync/error
-  states. For message details, this includes managing `ContentDisplayState` for bodies/attachments and providing retry mechanisms for downloads.
+  states. For message details, this includes managing `ContentDisplayState` for bodies/attachments, providing retry mechanisms for downloads, and avoiding redundant refreshes for content already being downloaded.
 * **Views (Jetpack Compose Composables):** Observe StateFlow from ViewModels using
   collectAsStateWithLifecycle(). Implement pull-to-refresh, display sync status indicators, and present content download states with smooth transitions and retry options.
 * **State Management:** Immutable data classes represent screen state.

@@ -165,7 +165,7 @@ class MessageDetailViewModel @Inject constructor(
                         )
 
                         // Auto-refresh logic
-                        if (currentUiState.isOnline && this@MessageDetailViewModel.accountId != null && !message.remoteId.isNullOrBlank()) {
+                        if (currentUiState.isOnline && this@MessageDetailViewModel.accountId != null && !message.remoteId.isNullOrBlank() && currentUiState.bodyDisplayState != ContentDisplayState.DOWNLOADING) {
                             val lastSync = message.lastSuccessfulSyncTimestamp
                             val staleThresholdMs = 5 * 60 * 1000L // 5 minutes
                             val isStale = lastSync == null || (System.currentTimeMillis() - lastSync) > staleThresholdMs

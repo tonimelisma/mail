@@ -103,7 +103,7 @@
     * **Requirement 5.7 (Background Sync \- Functional):** As a user, I want the app to periodically
       check for new emails and sync changes.
         * **Status: Implemented** (SyncEngine and WorkManager from OFFLINE.MD Phases 1 & 3, refined
-          by Phase 4 sync strategies REQ-SYNC series (including REQ-SYNC-005 for individual message refresh being **Fully Implemented**), and now considers REQ-CACHE-003 download preferences for bodies/attachments during sync operations. DI for MailApiService refactored using a factory pattern. **`ActionUploadWorker` now uses direct thread-level API methods where applicable, and API helpers (`GmailApiHelper`, `GraphApiHelper`) have more complete action implementations, including robust attachment sending for Gmail and Microsoft Graph.**)
+          by Phase 4 sync strategies REQ-SYNC series (including REQ-SYNC-005 for individual message refresh being **Fully Implemented**), and now considers REQ-CACHE-003 download preferences for bodies/attachments during sync operations. DI for MailApiService refactored using a factory pattern. Key folder syncs are now chained sequentially to prevent API throttling. **`ActionUploadWorker` now uses direct thread-level API methods where applicable, and API helpers (`GmailApiHelper`, `GraphApiHelper`) have more complete action implementations, including robust attachment sending for Gmail and Microsoft Graph.**)
     * **Requirement 5.X (Transparent Sync Status \- Functional):** Users should have clear
       visibility into sync status and errors.
         * **Status: Implemented** (OFFLINE.MD Phase 3 UI Feedback, enhanced by Phase 4 REQ-ERR

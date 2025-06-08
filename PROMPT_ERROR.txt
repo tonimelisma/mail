@@ -1,0 +1,17 @@
+Read @BACKLOG.md and @ARCHITECTURE.md. Help me debug the following errors.
+
+1. Don't trust the markdown documents. Read the code as it is today on disk to understand its state and reason about it. Start by doing code searches and reading any relevant files to undertand how the app works and where the errors are.
+3. Create a detailed plan, step by step on changes needed. Show it to me.
+4. Where are the soft spots in your analysis? Enumerate them to me.
+5. Read the rest of the files on disk required to harden the soft spots. Ensure you know each and every API that will be affected by your changes and have read the actual files on disk and know them before moving to the next step.
+6. Implement the required fixes.
+7. Build and fix any build errors.
+8. Update ARCHITECTURE.md and BACKLOG.md. Ensure all current details are retained unless obsolete.
+9. Check to make sure you didn't introduce any placeholders in the documents such as parts that say "this section is just like before".
+10. Use your tools to do a git commit of everything changed. Ensure the comment is a one-liner.
+
+If you skip any step, you will be chastised. For instance, if you try to provide a plan before reading the code, a puppy dies.
+
+In the beginning of your first message, repeat these numbered steps and follow them to the letter. In the beginning of each and every message, repeat "I will not make changes in files before reading all relevant files first to understand their current state and APIs".
+
+If you find yourself thinking that it's an issue in the build cache and cleaning build might help, you must immediately say "I DON'T KNOW WHAT I'M DOING AND I'M JUST COMING UP WITH RANDOM IDEAS." That's your cue that you should read more files from disk and do Google searches to understand the issue in more detail.
