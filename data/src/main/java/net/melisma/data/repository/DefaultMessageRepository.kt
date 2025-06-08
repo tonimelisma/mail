@@ -465,7 +465,8 @@ class DefaultMessageRepository @Inject constructor(
             isStarred = false,
             hasAttachments = draft.attachments.isNotEmpty(),
             isDraft = false, // Not a draft anymore
-            isOutbox = true // This is an outbox message
+            isOutbox = true, // This is an outbox message
+            lastSuccessfulSyncTimestamp = null
         )
 
         val attachmentEntities = draft.attachments.mapNotNull { att ->
@@ -475,12 +476,14 @@ class DefaultMessageRepository @Inject constructor(
             AttachmentEntity(
                 attachmentId = att.id, // Should be a local unique ID for the draft attachment
                 messageId = newLocalMessageId, // Link to the outbox message
+                accountId = account.id, // Added: accountId from the sendMessage method's account parameter
                 fileName = att.fileName,
                 mimeType = att.contentType,
                 size = att.size,
                 isInline = att.isInline,
                 contentId = att.contentId,
                 localFilePath = att.localUri, // Crucial for ActionUploadWorker to find and upload
+                remoteAttachmentId = null, // Added: New attachments in an outgoing message don't have a remote ID yet
                 isDownloaded = att.localUri != null, // If localUri is present, it implies it's "downloaded"/available locally
                 downloadTimestamp = if (att.localUri != null) System.currentTimeMillis() else null,
                 syncStatus = SyncStatus.IDLE, // Will be processed by ActionUploadWorker
@@ -605,19 +608,22 @@ class DefaultMessageRepository @Inject constructor(
             isRead = true,
             isStarred = false,
             hasAttachments = draftDetails.attachments.isNotEmpty(),
-            body = draftDetails.body
+            body = draftDetails.body,
+            lastSuccessfulSyncTimestamp = null
         )
 
         val attachments = draftDetails.attachments.map {
             AttachmentEntity(
                 attachmentId = it.id,
                 messageId = messageId,
+                accountId = accountId, // Added: accountId from the saveLocalDraft method's parameter
                 fileName = it.fileName,
                 mimeType = it.contentType,
                 size = it.size,
                 isInline = it.isInline,
                 contentId = it.contentId,
                 localFilePath = it.localUri,
+                remoteAttachmentId = null, // Added: New attachments in a local draft don't have a remote ID yet
                 isDownloaded = it.localUri != null,
                 downloadTimestamp = if (it.localUri != null) System.currentTimeMillis() else null,
                 syncStatus = SyncStatus.IDLE,
@@ -659,23 +665,53 @@ class DefaultMessageRepository @Inject constructor(
             messageId = null, 
             accountId = accountId,
             folderId = draftFolder.id,
-            threadId = draftDetails.inReplyTo, // Corrected: Use inReplyTo for threadId
+            threadId = draftDetails.inReplyTo, 
             subject = draftDetails.subject,
             snippet = draftDetails.body.take(255), 
             body = draftDetails.body,
             senderName = account.displayName ?: account.emailAddress,
             senderAddress = account.emailAddress,
-            recipientAddresses = recipientAddresses, // Corrected
-            recipientNames = recipientNames.ifEmpty { null }, // Corrected, use null if empty
+            recipientAddresses = recipientAddresses, 
+            recipientNames = recipientNames.ifEmpty { null }, 
             timestamp = System.currentTimeMillis(),
             sentTimestamp = null,
             isRead = true, 
             isStarred = false,
             hasAttachments = draftDetails.attachments.isNotEmpty(),
-            isDraft = true
+            isDraft = true, // Mark as draft
+            isOutbox = false, // Not an outbox item yet
+            lastSuccessfulSyncTimestamp = null
         )
-        messageDao.insertOrUpdateMessages(listOf(newMessageEntity))
-        // TODO: Handle attachments associated with the draft locally
+
+        val localAttachmentEntities = draftDetails.attachments.map { domainAtt ->
+            // Domain Attachment ID is client-generated for new drafts.
+            // Domain RemoteID is null for new draft attachments.
+            // Use the corrected toEntity mapper or ensure all fields are set.
+            AttachmentEntity(
+                attachmentId = domainAtt.id, // client-gen ID from MessageDraft.Attachment
+                messageId = tempId, // link to the new local draft MessageEntity
+                accountId = accountId, // Populate accountId
+                fileName = domainAtt.fileName,
+                mimeType = domainAtt.contentType,
+                size = domainAtt.size,
+                isInline = domainAtt.isInline,
+                contentId = domainAtt.contentId,
+                localFilePath = domainAtt.localUri,
+                remoteAttachmentId = null, // New draft attachments don't have a remote ID yet
+                isDownloaded = domainAtt.localUri != null,
+                downloadTimestamp = if (domainAtt.localUri != null) System.currentTimeMillis() else null,
+                syncStatus = SyncStatus.IDLE, 
+                lastSyncError = null
+            )
+        }
+
+        appDatabase.withTransaction {
+            messageDao.insertOrUpdateMessages(listOf(newMessageEntity))
+            if (localAttachmentEntities.isNotEmpty()) {
+                attachmentDao.insertAttachments(localAttachmentEntities)
+            }
+        }
+        Timber.d("$TAG: Saved new draft $tempId locally with ${localAttachmentEntities.size} attachments.")
 
         syncEngine.queueAction(
             accountId,
@@ -694,7 +730,7 @@ class DefaultMessageRepository @Inject constructor(
         messageId: String, 
         draftDetails: MessageDraft
     ): Result<Message> = withContext(ioDispatcher) {
-        accountRepository.getAccountById(accountId).firstOrNull()
+        val account = accountRepository.getAccountById(accountId).firstOrNull()
             ?: return@withContext Result.failure(Exception("Account not found for draft update"))
 
         val existingMessage = messageDao.getMessageByIdSuspend(messageId)
@@ -710,15 +746,46 @@ class DefaultMessageRepository @Inject constructor(
             subject = draftDetails.subject,
             snippet = draftDetails.body.take(255),
             body = draftDetails.body,
-            recipientAddresses = recipientAddresses, // Corrected
-            recipientNames = recipientNames.ifEmpty { null }, // Corrected, use null if empty
+            recipientAddresses = recipientAddresses, 
+            recipientNames = recipientNames.ifEmpty { null }, 
             threadId = draftDetails.inReplyTo ?: existingMessage.threadId, // Update threadId if provided
             timestamp = System.currentTimeMillis(), 
             hasAttachments = draftDetails.attachments.isNotEmpty(),
-            isDraft = true 
+            isDraft = true,
+            isOutbox = false,
+            lastSuccessfulSyncTimestamp = null,
+            syncStatus = SyncStatus.PENDING_UPLOAD // Mark as pending upload for changes
         )
-        messageDao.insertOrUpdateMessages(listOf(updatedMessageEntity))
-        // TODO: Handle changes in attachments for the draft locally
+
+        val newAttachmentEntities = draftDetails.attachments.map { att ->
+            AttachmentEntity(
+                attachmentId = att.id, // Client-generated unique ID
+                messageId = messageId,    // Link to the existing draft message
+                accountId = accountId, // Populate accountId
+                fileName = att.fileName,
+                mimeType = att.contentType,
+                size = att.size,
+                isInline = att.isInline,
+                contentId = att.contentId,
+                localFilePath = att.localUri,
+                remoteAttachmentId = null, // Server ID reconciliation happens in ActionUploadWorker
+                isDownloaded = !att.localUri.isNullOrBlank(),
+                downloadTimestamp = if (!att.localUri.isNullOrBlank()) System.currentTimeMillis() else null,
+                syncStatus = SyncStatus.IDLE, // Will be processed by ActionUploadWorker
+                lastSyncError = null
+            )
+        }
+
+        appDatabase.withTransaction {
+            messageDao.insertOrUpdateMessages(listOf(updatedMessageEntity))
+            // For attachments: delete all existing ones for this draft and insert the new set.
+            // This simplifies logic; ActionUploadWorker will then deal with uploading what's needed.
+            attachmentDao.deleteAttachmentsForMessage(messageId)
+            if (newAttachmentEntities.isNotEmpty()) {
+                attachmentDao.insertAttachments(newAttachmentEntities)
+            }
+        }
+        Timber.d("$TAG: Updated draft $messageId locally. New attachment count: ${newAttachmentEntities.size}. All old attachments cleared and new set inserted.")
 
         syncEngine.queueAction(
             accountId,

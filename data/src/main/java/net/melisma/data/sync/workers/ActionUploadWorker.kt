@@ -16,12 +16,15 @@ import net.melisma.core_data.datasource.MailApiService
 import net.melisma.core_data.datasource.MailApiServiceSelector
 import net.melisma.core_data.model.MessageDraft
 import net.melisma.core_data.model.WellKnownFolderType
+import net.melisma.core_data.model.SyncStatus
 import net.melisma.core_db.AppDatabase
 import net.melisma.core_db.dao.AccountDao
 import net.melisma.core_db.dao.FolderDao
 import net.melisma.core_db.dao.MessageDao
 import net.melisma.core_db.dao.PendingActionDao
+import net.melisma.core_db.dao.AttachmentDao
 import net.melisma.core_db.entity.PendingActionEntity
+import net.melisma.core_db.entity.AttachmentEntity
 import net.melisma.core_db.model.PendingActionStatus
 import net.melisma.data.mapper.toEntity
 import timber.log.Timber
@@ -36,7 +39,8 @@ class ActionUploadWorker @AssistedInject constructor(
     private val accountDao: AccountDao,
     private val folderDao: FolderDao,
     private val pendingActionDao: PendingActionDao,
-    private val networkMonitor: NetworkMonitor
+    private val networkMonitor: NetworkMonitor,
+    private val attachmentDao: AttachmentDao
 ) : CoroutineWorker(appContext, workerParams) {
 
     private val TAG = "ActionUploadWorker"
@@ -213,7 +217,7 @@ class ActionUploadWorker @AssistedInject constructor(
             ACTION_CREATE_DRAFT -> {
                 val draftJson = payload[KEY_DRAFT_DETAILS]
                 if (draftJson == null) {
-                    Timber.w("$TAG: $actionType action missing '$KEY_DRAFT_DETAILS' payload for entity $entityId (temp local ID)." )
+                    Timber.w("$TAG: $actionType action missing '$KEY_DRAFT_DETAILS' payload for entity ${action.entityId} (temp local ID).")
                     kotlin.Result.failure(IllegalArgumentException("Missing '$KEY_DRAFT_DETAILS' for $actionType"))
                 } else {
                     try {
@@ -221,30 +225,85 @@ class ActionUploadWorker @AssistedInject constructor(
                         val createResult = mailService.createDraftMessage(draft)
                         if (createResult.isSuccess) {
                             val serverMessage = createResult.getOrThrow()
-                            val draftsFolder = folderDao.getFolderByWellKnownTypeSuspend(
-                                accountId,
-                                WellKnownFolderType.DRAFTS
-                            )
-                            val draftsFolderId = draftsFolder?.id
-                            if (draftsFolderId == null) {
-                                Timber.e("$TAG: Drafts folder not found for account $accountId while processing $actionType for ${serverMessage.id}. Cannot save draft locally.")
-                                return kotlin.Result.failure(IllegalStateException("Drafts folder not found for account $accountId"))
-                            }
-
+                            
                             appDatabase.withTransaction {
-                                messageDao.deleteMessageById(entityId)
-                                val newMessageEntity =
-                                    serverMessage.toEntity(accountId, draftsFolderId)
-                                messageDao.insertOrUpdateMessages(listOf(newMessageEntity))
-                                Timber.d("$TAG: Temp draft $entityId deleted. Server draft ${serverMessage.id} created and saved locally.")
+                                val localMessageEntity = messageDao.getMessageByIdSuspend(action.entityId)
+                                if (localMessageEntity == null) {
+                                    Timber.e("$TAG: CRITICAL - Local message entity ${action.entityId} not found for $actionType. Cannot update with server info.")
+                                    throw IllegalStateException("Local message entity ${action.entityId} not found for $actionType")
+                                }
+
+                                // Update existing local entity with server info
+                                localMessageEntity.messageId = serverMessage.remoteId // This is the SERVER ID of the message
+                                localMessageEntity.folderId = serverMessage.folderId
+                                localMessageEntity.subject = serverMessage.subject
+                                localMessageEntity.body = serverMessage.body
+                                localMessageEntity.snippet = serverMessage.bodyPreview
+                                localMessageEntity.recipientAddresses = serverMessage.recipientAddresses
+                                localMessageEntity.recipientNames = serverMessage.recipientNames
+                                localMessageEntity.hasAttachments = serverMessage.attachments.isNotEmpty() // Update based on serverMessage
+                                localMessageEntity.isRead = serverMessage.isRead
+                                localMessageEntity.isStarred = serverMessage.isStarred
+                                localMessageEntity.timestamp = serverMessage.timestamp
+                                localMessageEntity.sentTimestamp = serverMessage.sentDateTime?.let {
+                                    try { java.time.OffsetDateTime.parse(it).toInstant().toEpochMilli() } catch (e: Exception) { null }
+                                }
+                                localMessageEntity.isDraft = true
+                                localMessageEntity.isOutbox = false
+                                localMessageEntity.syncStatus = SyncStatus.SYNCED
+                                localMessageEntity.lastSyncError = null
+                                localMessageEntity.lastSuccessfulSyncTimestamp = serverMessage.lastSuccessfulSyncTimestamp ?: System.currentTimeMillis()
+                                localMessageEntity.isLocalOnly = false
+
+                                messageDao.insertOrUpdateMessages(listOf(localMessageEntity))
+                                Timber.d("$TAG: Local draft ${action.entityId} updated with server info: new remoteId ${serverMessage.remoteId}")
+
+                                // Reconcile attachments
+                                attachmentDao.deleteAttachmentsForMessage(action.entityId) // Clear old local attachments for this draft
+                                
+                                val originalDraftAttachmentsById = draft.attachments.associateBy { it.id } // Client-generated ID to original MessageDraft.Attachment
+
+                                serverMessage.attachments.forEach { serverDomainAttachment ->
+                                    // serverDomainAttachment.id IS the client-generated ID (thanks to GraphApiHelper mapping)
+                                    // serverDomainAttachment.remoteId IS the server's actual attachment ID.
+                                    // serverDomainAttachment.fileName IS the original user-visible filename.
+                                    // serverDomainAttachment.contentId IS the Graph API's contentId (actual CID for inline images).
+
+                                    val originalLocalAttachment = originalDraftAttachmentsById[serverDomainAttachment.id]
+                                    val originalLocalUri = originalLocalAttachment?.localUri
+
+                                    if (originalLocalAttachment == null) {
+                                         Timber.w("$TAG: CreateDraft - Could not find original local attachment details for client-ID '${serverDomainAttachment.id}' (Server RemoteID '${serverDomainAttachment.remoteId}', Name '${serverDomainAttachment.fileName}'). This might indicate a mismatch or an attachment added/modified directly on server not reflected in original draft. Skipping this attachment for local DB update.")
+                                         return@forEach // continue to next serverAttachment
+                                    }
+                                    
+                                    val newAttachmentEntity = AttachmentEntity(
+                                        attachmentId = serverDomainAttachment.id, // Use client-generated ID as local PK
+                                        messageId = action.entityId, // Link to the local message entity ID (which is also a client-gen ID until first sync)
+                                        accountId = action.accountId, // Populate accountId
+                                        fileName = serverDomainAttachment.fileName, // Original filename
+                                        mimeType = serverDomainAttachment.contentType,
+                                        size = serverDomainAttachment.size,
+                                        isInline = serverDomainAttachment.isInline,
+                                        contentId = serverDomainAttachment.contentId, // Actual Graph contentId (CID)
+                                        localFilePath = originalLocalUri, // Preserved local path from original draft attachment
+                                        isDownloaded = !originalLocalUri.isNullOrBlank(),
+                                        downloadTimestamp = if (!originalLocalUri.isNullOrBlank()) System.currentTimeMillis() else null,
+                                        syncStatus = SyncStatus.SYNCED, // Synced with server
+                                        lastSyncError = null,
+                                        remoteAttachmentId = serverDomainAttachment.remoteId // Store server's actual attachment ID
+                                    )
+                                    attachmentDao.insertAttachments(listOf(newAttachmentEntity))
+                                }
+                                Timber.d("$TAG: Reconciled ${serverMessage.attachments.size} attachments for draft ${action.entityId} after server creation.")
                             }
                             kotlin.Result.success(Unit)
                         } else {
-                            Timber.e(createResult.exceptionOrNull(), "$TAG: $actionType API call failed for entity $entityId.")
+                            Timber.e(createResult.exceptionOrNull(), "$TAG: $actionType API call failed for entity ${action.entityId}.")
                             kotlin.Result.failure(createResult.exceptionOrNull() ?: IllegalStateException("Draft creation API failed"))
                         }
                     } catch (e: Exception) {
-                        Timber.e(e, "$TAG: $actionType action failed to decode/process draftJson for entity $entityId.")
+                        Timber.e(e, "$TAG: $actionType action failed to decode/process draftJson for entity ${action.entityId}.")
                         kotlin.Result.failure(e)
                     }
                 }
@@ -252,37 +311,101 @@ class ActionUploadWorker @AssistedInject constructor(
             ACTION_UPDATE_DRAFT -> {
                 val draftJson = payload[KEY_DRAFT_DETAILS]
                 if (draftJson == null) {
-                    Timber.w("$TAG: $actionType action missing '$KEY_DRAFT_DETAILS' payload for entity $entityId.")
+                    Timber.w("$TAG: $actionType action missing '$KEY_DRAFT_DETAILS' payload for entity ${action.entityId}.")
                     kotlin.Result.failure(IllegalArgumentException("Missing '$KEY_DRAFT_DETAILS' for $actionType"))
                 } else {
                     try {
                         val draft = Json.decodeFromString<MessageDraft>(draftJson)
-                        val updateResult = mailService.updateDraftMessage(entityId, draft)
+                        val localDraftEntityForRemoteId = messageDao.getMessageByIdSuspend(action.entityId)
+                        if (localDraftEntityForRemoteId?.messageId == null) {
+                            Timber.e("$TAG: $actionType: Cannot update draft. Local entity ${action.entityId} has no remote ID (messageId).")
+                            return kotlin.Result.failure(IllegalStateException("Draft ${action.entityId} has no remote ID for server update."))
+                        }
+                        val remoteDraftId = localDraftEntityForRemoteId.messageId!!
+
+                        val updateResult = mailService.updateDraftMessage(remoteDraftId, draft)
                         if (updateResult.isSuccess) {
                             val serverMessage = updateResult.getOrThrow()
-                            val draftsFolder = folderDao.getFolderByWellKnownTypeSuspend(
-                                accountId,
-                                WellKnownFolderType.DRAFTS
-                            )
-                            val draftsFolderId = draftsFolder?.id
-                             if (draftsFolderId == null) {
-                                Timber.e("$TAG: Drafts folder not found for account $accountId while processing $actionType for ${serverMessage.id}. Cannot update draft locally.")
-                                return kotlin.Result.failure(IllegalStateException("Drafts folder not found for account $accountId"))
-                            }
 
                             appDatabase.withTransaction {
-                                val updatedMessageEntity =
-                                    serverMessage.toEntity(accountId, draftsFolderId)
-                                messageDao.insertOrUpdateMessages(listOf(updatedMessageEntity))
-                                Timber.d("$TAG: Draft $entityId updated locally with server response.")
+                                val localMessageEntity = messageDao.getMessageByIdSuspend(action.entityId)
+                                if (localMessageEntity == null) {
+                                     Timber.e("$TAG: CRITICAL - Local message entity ${action.entityId} not found for $actionType post-update. This shouldn't happen.")
+                                    throw IllegalStateException("Local message entity ${action.entityId} not found for $actionType post-update")
+                                }
+                                
+                                // Update existing local entity with server info
+                                localMessageEntity.messageId = serverMessage.remoteId // Server ID of the message
+                                localMessageEntity.folderId = serverMessage.folderId
+                                localMessageEntity.subject = serverMessage.subject
+                                localMessageEntity.body = serverMessage.body
+                                localMessageEntity.snippet = serverMessage.bodyPreview
+                                localMessageEntity.recipientAddresses = serverMessage.recipientAddresses
+                                localMessageEntity.recipientNames = serverMessage.recipientNames
+                                localMessageEntity.hasAttachments = serverMessage.attachments.isNotEmpty()
+                                localMessageEntity.isRead = serverMessage.isRead
+                                localMessageEntity.isStarred = serverMessage.isStarred
+                                localMessageEntity.timestamp = serverMessage.timestamp
+                                localMessageEntity.sentTimestamp = serverMessage.sentDateTime?.let {
+                                    try { java.time.OffsetDateTime.parse(it).toInstant().toEpochMilli() } catch (e: Exception) { null }
+                                }
+
+                                localMessageEntity.isDraft = true
+                                localMessageEntity.isOutbox = false
+                                localMessageEntity.syncStatus = SyncStatus.SYNCED
+                                localMessageEntity.lastSyncError = null
+                                localMessageEntity.lastSuccessfulSyncTimestamp = serverMessage.lastSuccessfulSyncTimestamp ?: System.currentTimeMillis()
+                                localMessageEntity.isLocalOnly = false
+                                
+                                messageDao.insertOrUpdateMessages(listOf(localMessageEntity))
+                                Timber.d("$TAG: Local draft ${action.entityId} (remoteId ${remoteDraftId}) updated with server info.")
+
+                                // Reconcile attachments
+                                attachmentDao.deleteAttachmentsForMessage(action.entityId) // Clear old local attachments
+
+                                val originalDraftAttachmentsById = draft.attachments.associateBy { it.id } // Client-generated ID to original MessageDraft.Attachment
+
+                                serverMessage.attachments.forEach { serverDomainAttachment ->
+                                    // serverDomainAttachment.id IS the client-generated ID
+                                    // serverDomainAttachment.remoteId IS the server's actual attachment ID
+                                    // serverDomainAttachment.fileName IS the original user-visible filename
+                                    // serverDomainAttachment.contentId IS the Graph API's contentId (actual CID for inline images)
+
+                                    val originalLocalAttachment = originalDraftAttachmentsById[serverDomainAttachment.id]
+                                    val originalLocalUri = originalLocalAttachment?.localUri
+
+                                     if (originalLocalAttachment == null) {
+                                         Timber.w("$TAG: UpdateDraft - Could not find original local attachment details for client-ID '${serverDomainAttachment.id}' (Server RemoteID '${serverDomainAttachment.remoteId}', Name '${serverDomainAttachment.fileName}'). Skipping this attachment for local DB update.")
+                                         return@forEach // continue to next serverAttachment
+                                    }
+
+                                    val newAttachmentEntity = AttachmentEntity(
+                                        attachmentId = serverDomainAttachment.id, // Use client-generated ID as local PK
+                                        messageId = action.entityId,
+                                        accountId = action.accountId, // Populate accountId
+                                        fileName = serverDomainAttachment.fileName,
+                                        mimeType = serverDomainAttachment.contentType,
+                                        size = serverDomainAttachment.size,
+                                        isInline = serverDomainAttachment.isInline,
+                                        contentId = serverDomainAttachment.contentId, // Actual Graph contentId (CID)
+                                        localFilePath = originalLocalUri, // Preserved local path
+                                        isDownloaded = !originalLocalUri.isNullOrBlank(),
+                                        downloadTimestamp = if (!originalLocalUri.isNullOrBlank()) System.currentTimeMillis() else null,
+                                        syncStatus = SyncStatus.SYNCED,
+                                        lastSyncError = null,
+                                        remoteAttachmentId = serverDomainAttachment.remoteId // Store server's actual attachment ID
+                                    )
+                                    attachmentDao.insertAttachments(listOf(newAttachmentEntity))
+                                }
+                                Timber.d("$TAG: Reconciled ${serverMessage.attachments.size} attachments for draft ${action.entityId} after server update.")
                             }
                             kotlin.Result.success(Unit)
                         } else {
-                            Timber.e(updateResult.exceptionOrNull(), "$TAG: $actionType API call failed for entity $entityId.")
+                            Timber.e(updateResult.exceptionOrNull(), "$TAG: $actionType API call failed for entity ${action.entityId} (Remote: ${localDraftEntityForRemoteId.messageId}).")
                             kotlin.Result.failure(updateResult.exceptionOrNull() ?: IllegalStateException("Draft update API failed"))
                         }
                     } catch (e: Exception) {
-                        Timber.e(e, "$TAG: $actionType action failed to decode/process draftJson for entity $entityId.")
+                        Timber.e(e, "$TAG: $actionType action failed to decode/process draftJson for entity ${action.entityId}.")
                         kotlin.Result.failure(e)
                     }
                 }

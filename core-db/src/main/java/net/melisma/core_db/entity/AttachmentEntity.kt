@@ -25,6 +25,7 @@ data class AttachmentEntity(
     @PrimaryKey
     val attachmentId: String,
     val messageId: String,
+    val accountId: String,
     val fileName: String,
     val size: Long,
     val mimeType: String,
@@ -33,6 +34,7 @@ data class AttachmentEntity(
     val isDownloaded: Boolean = false,
     val localFilePath: String? = null,
     val downloadTimestamp: Long? = null,
+    val remoteAttachmentId: String? = null,
 
     // Sync Metadata
     val syncStatus: SyncStatus = SyncStatus.IDLE,

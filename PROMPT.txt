@@ -1,4 +1,4 @@
-Read @OFFLINE2.md and @BACKLOG.md and@ARCHITECTURE.md. What would be the next best working increment we should implement? Do we need to fix some tech debt or move forward with new functionality?
+Read @OFFLINE.md and @BACKLOG.md and@ARCHITECTURE.md. What would be the next best working increment we should implement? Do we need to fix some tech debt or move forward with new functionality?
 
 1. Define a well-sized increment of work to do next. Should you tackle tech debt or implement new functionality to move towards the vision? Explain clearly the body of work you seek to accomplish and the outcomes.
 2. Don't trust the markdown documents. Read the code as it is today on disk to understand its state and reason about it.
@@ -7,7 +7,7 @@ Read @OFFLINE2.md and @BACKLOG.md and@ARCHITECTURE.md. What would be the next be
 5. Read the rest of the files on disk required to harden the soft spots. Ensure you know each and every API that will be affected by your changes and have read the actual files on disk and know them before moving to the next step.
 6. Implement the required changes.
 7. Build and fix any build errors.
-8. Update OFFLINE2.md, ARCHITECTURE.md and BACKLOG.md. Ensure all current details are retained unless obsolete.
+8. Update OFFLINE.md, ARCHITECTURE.md and BACKLOG.md. Ensure all current details are retained unless obsolete.
 9. Check to make sure you didn't introduce any placeholders in the documents such as parts that say "this section is just like before".
 10. Use your tools to do a git commit of everything changed. Ensure the comment is a one-liner.
 

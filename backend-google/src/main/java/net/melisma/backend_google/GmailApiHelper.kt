@@ -643,7 +643,7 @@ class GmailApiHelper @Inject constructor(
                     foundContentType ?: "text/plain"
             }
 
-            val currentAttachments = extractAttachmentsFromMessage(gmailMessage.id!!, gmailMessage)
+            val currentAttachments = extractAttachmentsFromMessage(gmailMessage.id!!, accountId, gmailMessage)
 
             Message.fromApi(
                 id = gmailMessage.id
@@ -1228,6 +1228,7 @@ class GmailApiHelper @Inject constructor(
         withContext(ioDispatcher) {
         Timber.d("getMessageAttachments: messageId='$messageId'")
             try {
+            val accountId = getCurrentAccountId() // Get accountId
             val response = httpClient.get("$BASE_URL/messages/$messageId") {
                 accept(ContentType.Application.Json)
                 parameter("format", "full")
@@ -1235,7 +1236,7 @@ class GmailApiHelper @Inject constructor(
 
             if (response.status.isSuccess()) {
                 val message = response.body<GmailMessage>()
-                val attachments = extractAttachmentsFromMessage(message.id!!, message)
+                val attachments = extractAttachmentsFromMessage(message.id!!, accountId, message) // Pass accountId
                 Result.success(attachments)
             } else {
                 val errorBody = response.bodyAsText().take(500)
@@ -1494,6 +1495,7 @@ class GmailApiHelper @Inject constructor(
 
     private fun extractAttachmentsFromMessage(
         parentMessageId: String,
+        accountId: String, // Added accountId parameter
         message: GmailMessage
     ): List<net.melisma.core_data.model.Attachment> {
         val attachments = mutableListOf<net.melisma.core_data.model.Attachment>()
@@ -1502,8 +1504,9 @@ class GmailApiHelper @Inject constructor(
             part.body?.attachmentId?.let { attachmentId ->
                 attachments.add(
                     net.melisma.core_data.model.Attachment(
-                        id = attachmentId,
+                        id = attachmentId, // Use server attachmentId as primary ID
                         messageId = parentMessageId,
+                        accountId = accountId, // Populate accountId
                         fileName = part.filename ?: "attachment-${attachmentId}",
                         contentType = part.mimeType ?: "application/octet-stream",
                         size = part.body.size?.toLong() ?: 0L,
@@ -1522,6 +1525,7 @@ class GmailApiHelper @Inject constructor(
                             )
                         }?.value?.removeSurrounding("<", ">"),
                         localUri = null,
+                        remoteId = attachmentId, // Populate remoteId with server attachmentId
                         downloadStatus = if (part.body.data != null && part.body.data.isNotEmpty()) "DOWNLOADED" else "NOT_DOWNLOADED",
                         lastSyncError = null
                     )
@@ -1693,7 +1697,7 @@ class GmailApiHelper @Inject constructor(
         val receivedDate = java.time.Instant.ofEpochMilli(timestamp).toString()
         val sentDate = java.time.Instant.ofEpochMilli(timestamp).toString()
 
-        val currentAttachments = extractAttachmentsFromMessage(gmailMessage.id!!, gmailMessage)
+        val currentAttachments = extractAttachmentsFromMessage(gmailMessage.id!!, accountId, gmailMessage) // Pass accountId
 
         return Message.fromApi(
             id = gmailMessage.id ?: throw IllegalStateException("Gmail message ID is null"),
@@ -2112,7 +2116,7 @@ class GmailApiHelper @Inject constructor(
 
         // Use the existing helper to extract attachments.
         // This helper internally inspects gmailMessage.payload and its parts.
-        val attachments = extractAttachmentsFromMessage(gmailMessage.id, gmailMessage)
+        val attachments = extractAttachmentsFromMessage(gmailMessage.id, apiAccountId, gmailMessage) // Pass apiAccountId
 
         return Message.fromApi(
             id = gmailMessage.id, // Gmail's message ID

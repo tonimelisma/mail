@@ -183,17 +183,21 @@ abstract class BackendMicrosoftModule {
         @Provides
         @Singleton
         fun provideGraphApiHelper(
+            @ApplicationContext context: Context,
             @MicrosoftGraphHttpClient httpClient: HttpClient,
             microsoftErrorMapper: MicrosoftErrorMapper,
             @net.melisma.core_data.di.Dispatcher(net.melisma.core_data.di.MailDispatchers.IO) ioDispatcher: CoroutineDispatcher,
-            microsoftAuthUserCredentials: MicrosoftAuthUserCredentials
+            microsoftAuthUserCredentials: MicrosoftAuthUserCredentials,
+            json: Json
         ): GraphApiHelper {
-            Timber.d("Providing GraphApiHelper with MS Graph HTTPClient, dispatcher, and credentials")
+            Timber.d("Providing GraphApiHelper with MS Graph HTTPClient, dispatcher, credentials, and Json parser")
             return GraphApiHelper(
+                context,
                 httpClient,
                 microsoftErrorMapper,
                 ioDispatcher,
-                microsoftAuthUserCredentials
+                microsoftAuthUserCredentials,
+                json
             )
         }
 

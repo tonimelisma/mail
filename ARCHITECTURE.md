@@ -29,7 +29,7 @@ a focus on modern Android development practices and a robust offline-first archi
 
 * **UI:** Jetpack Compose
 * **Architecture:** Offline-First MVVM with a Domain Layer (Use Cases)
-* **Local Storage:** Room (with FTS for local search, and `lastAccessedTimestamp`, `MessageBodyEntity.sizeInBytes`, `AttachmentEntity.size` for intelligent caching and accurate size tracking)
+* **Local Storage:** Room (with FTS for local search, and `lastAccessedTimestamp`, `MessageBodyEntity.sizeInBytes`, `AttachmentEntity.size`, `AttachmentEntity.accountId`, `AttachmentEntity.remoteAttachmentId` for intelligent caching, accurate size tracking, and server ID mapping)
 * **Background Processing:** WorkManager
 * **Asynchronous Programming:** Kotlin Coroutines & Flow
 * **Dependency Injection:** Hilt (utilizing factory patterns for dynamic provider selection, e.g., `MailApiServiceFactory`)
@@ -55,7 +55,7 @@ Melisma Mail employs a layered architecture designed for an offline-first experi
   fetching, caching (initial sync, delta sync, respecting user download preferences for bodies/attachments), action queuing, and local search. Orchestrated by a
   `SyncEngine`. Includes `UserPreferencesRepository` for managing user settings like cache limits and download preferences, workers like `MessageBodyDownloadWorker` (calculates body size, respects preferences), `AttachmentDownloadWorker` (respects preferences), `CacheCleanupWorker` (uses preferences and accurate sizing), and `SingleMessageSyncWorker` (for individual message refreshes). Contains Hilt modules for providing dependencies, including factories like `MailApiServiceFactory`.
 * **Database Layer (:core-db module):** Defines the Room database schema, entities (with sync
-  metadata like SyncStatus, lastSuccessfulSyncTimestamp, lastAccessedTimestamp, `MessageBodyEntity.sizeInBytes`, and FTS
+  metadata like SyncStatus, lastSuccessfulSyncTimestamp, lastAccessedTimestamp, `MessageBodyEntity.sizeInBytes`, `AttachmentEntity.size`, `AttachmentEntity.accountId`, `AttachmentEntity.remoteAttachmentId`, and FTS
   capabilities), and Data Access Objects (DAOs). `MessageBodyDao` includes methods for fine-grained sync status updates (e.g., `updateSyncStatusAndError`). Current DB version is 15.
 * **Backend/Provider Layer (:backend-google, :backend-microsoft modules):** Handles all
   provider-specific API communication, including support for delta queries and fetching full individual messages via methods like `getMessage(messageRemoteId)`.
@@ -152,6 +152,8 @@ The application uses a multi-faceted strategy for data synchronization, managed 
 * **Accurate Size Tracking:** The system now accurately tracks the size of cached data:
     * `AttachmentEntity.size` (Long): Stores the size of downloaded attachments, populated from API metadata or file system.
     * `MessageBodyEntity.sizeInBytes` (Long): Stores the size of the downloaded message body content (UTF-8 bytes), calculated by `MessageBodyDownloadWorker`.
+    * `AttachmentEntity.accountId` (String): Associates the attachment with a specific account.
+    * `AttachmentEntity.remoteAttachmentId` (String?): Stores the server-provided ID for the attachment.
 * **Eviction Policy (`CacheCleanupWorker`):**
     * **Trigger:** Runs periodically (scheduled by `SyncEngine`) and when the calculated total cache size (sum of `AttachmentEntity.size` for all downloaded attachments and `MessageBodyEntity.sizeInBytes` for all downloaded bodies) exceeds the user-configured limit.
     * **Exclusions:**
@@ -211,13 +213,13 @@ The application uses a multi-faceted strategy for data synchronization, managed 
   `lastAccessedTimestamp`, `MessageBodyEntity.sizeInBytes`, etc.), DAOs, FTS tables for messages. Database version is 15.
 * **Key Components & Classes:** `AppDatabase.kt`, Entity classes (e.g., `FolderEntity` now uses a
   local UUID `id` as its primary key and includes a `wellKnownType: WellKnownFolderType` enum to
-  identify its functional type, replacing the previous string-based `type` and mixed PK strategy; `MessageBodyEntity` now includes `sizeInBytes`; `MessageEntity` now includes `isOutbox: Boolean`), DAO interfaces (`MessageBodyDao` includes `getAllMessageBodies()` and specific error update methods like `updateSyncStatusAndError`).
+  identify its functional type, replacing the previous string-based `type` and mixed PK strategy; `MessageBodyEntity` now includes `sizeInBytes`; `AttachmentEntity` now includes `accountId` and `remoteAttachmentId`; `MessageEntity` now includes `isOutbox: Boolean`), DAO interfaces (`MessageBodyDao` includes `getAllMessageBodies()` and specific error update methods like `updateSyncStatusAndError`).
 
 ### **3.5. :backend-microsoft Module**
 
 * **Purpose & Scope:** Microsoft/Outlook specific logic, MSAL, Microsoft Graph API (including delta
   queries).
-* **Key Components & Classes:** MicrosoftAuthManager.kt, GraphApiHelper.kt (now with full Ktor-based implementations for `getMessageContent`, `markMessageRead`, `starMessage`, `deleteMessage`, `moveMessage`, and corresponding thread-level actions).
+* **Key Components & Classes:** MicrosoftAuthManager.kt, GraphApiHelper.kt (now with full Ktor-based implementations for `getMessageContent`, `markMessageRead`, `starMessage`, `deleteMessage`, `moveMessage`, `createDraftMessage`, `updateDraftMessage`, `sendMessage` including attachment handling, and corresponding thread-level actions).
 
 ### **3.6. :backend-google Module**
 

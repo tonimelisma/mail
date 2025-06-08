@@ -7,12 +7,14 @@ fun AttachmentEntity.toDomainModel(): Attachment {
     return Attachment(
         id = this.attachmentId, // remote ID of the attachment
         messageId = this.messageId, // local DB ID of the parent message
+        accountId = this.accountId, // Added field
         fileName = this.fileName,
         contentType = this.mimeType,
         size = this.size,
         isInline = this.isInline,
         contentId = this.contentId,
         localUri = this.localFilePath,
+        remoteId = this.remoteAttachmentId, // Added field
         downloadStatus = when {
             this.isDownloaded -> "DOWNLOADED" // Or use a more specific SyncStatus if applicable
             this.syncStatus == net.melisma.core_data.model.SyncStatus.ERROR -> "ERROR"
@@ -23,7 +25,7 @@ fun AttachmentEntity.toDomainModel(): Attachment {
     )
 }
 
-fun Attachment.toEntity(messageDbId: String): AttachmentEntity {
+fun Attachment.toEntity(messageDbId: String, accountId: String): AttachmentEntity {
     // Note: The domain 'Attachment.id' is the remote attachment ID.
     // 'AttachmentEntity.attachmentId' is the primary key and should be this remote ID.
     // 'Attachment.messageId' from domain is the remote message ID.
@@ -32,11 +34,13 @@ fun Attachment.toEntity(messageDbId: String): AttachmentEntity {
     return AttachmentEntity(
         attachmentId = this.id,
         messageId = messageDbId, // This needs to be the local DB ID of the message
+        accountId = accountId, // Added field
         fileName = this.fileName,
         mimeType = this.contentType,
         size = this.size,
         isInline = this.isInline,
         contentId = this.contentId,
+        remoteAttachmentId = this.remoteId, // Added field
         isDownloaded = this.localUri != null,
         localFilePath = this.localUri,
         downloadTimestamp = if (this.localUri != null) System.currentTimeMillis() else null,

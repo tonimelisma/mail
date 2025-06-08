@@ -169,6 +169,7 @@ class SingleMessageSyncWorker @AssistedInject constructor(
                         AttachmentEntity(
                             attachmentId = domainAttachment.id,
                             messageId = messageLocalId,
+                            accountId = accountId,
                             fileName = domainAttachment.fileName,
                             size = domainAttachment.size,
                             mimeType = domainAttachment.contentType,
@@ -177,6 +178,7 @@ class SingleMessageSyncWorker @AssistedInject constructor(
                             isDownloaded = false,
                             localFilePath = null,
                             downloadTimestamp = null,
+                            remoteAttachmentId = domainAttachment.remoteId,
                             syncStatus = SyncStatus.PENDING_DOWNLOAD,
                             lastSyncAttemptTimestamp = null,
                             lastSuccessfulSyncTimestamp = null,
