@@ -477,4 +477,37 @@ Finalize the Worker-consolidation effort by eradicating WorkManager from the ent
 * WorkManager entirely removed from production code; sync stack is now coroutine-driven.  
 * Paves the way for Phase-4 D where proper upload & cache-eviction algorithms will be integrated into `SyncController`.
 
+---
+
+## **Date: 2025-06-24**
+
+### **Developer:** ChatGPT-o3 (Automated)
+
+### **Increment Implemented – "Phase-4 D: Pending Action Upload Pipeline"**
+
+**Goal**  
+Implement the real upload path for user-generated actions (mark read, star, delete, move, send, draft create/update) so that the queue of `PendingActionEntity` rows is processed end-to-end via the `SyncController` without WorkManager.
+
+**Work Completed**  
+1. **PendingActionDao**  
+   • Added `getNextActionForAccount()` helper to fetch the next pending/retry action for a specific account in FIFO order.
+2. **SyncController**  
+   • Replaced stub `handleUploadAction()` with full implementation:  
+     • Retrieves the next pending action for the account.  
+     • Executes the appropriate `MailApiService` call (mark read/unread, star, delete, move, thread variants, draft CRUD, send).  
+     • On success: removes the row and updates local DB state (e.g., deletes message on remote delete, maps new remoteId on send).  
+     • On failure: bumps `attemptCount`, sets status to `RETRY` (or `FAILED` if max attempts reached) and stores `lastError`; re-queues another `UploadAction` if more work remains.
+   • Added JSON (de)serialisation of `MessageDraft` payloads using kotlinx-serialization.  
+   • Added per-action error handling + re-auth hooks.
+3. **Unit Build**  
+   • Ran `./gradlew build` – project compiles & tests green.
+
+**Tech-Debt / Follow-ups**  
+* Conflict handling for MOVE when local DB state drifts still TBD.  
+* Cache-eviction algorithm (`SyncJob.EvictFromCache`) remains stubbed – schedule for Phase-4 E.  
+* Consider batching multiple uploads in a single API call where providers allow.
+
+### **Outcome**
+Users' offline actions now sync automatically once network is available; `PendingAction` queue drains continuously, bringing Req 0.5 "Core Sync Logic" much closer to complete.
+
 --- 

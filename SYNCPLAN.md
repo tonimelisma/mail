@@ -78,6 +78,10 @@ The new architecture will be centered around a SyncController singleton. Key cha
    * **Status**: Completed on 2025-06-20 – SyncJob.EvictFromCache now delegates to CacheCleanupWorker via SyncWorkManager; SyncController enforces one active network op per account (see SYNCLOG 2025-06-20).
 5. **Message/Attachment Download Internalised & Workers Deleted:**
    * **Action**: See SYNCLOG 2025-06-22.
+6. **Phase-4 B** (Worker consolidation) **completed** – internalised folder/message/attachment handlers, WorkManager stripped (SYNCLOG 2025-06-23).
+7. **Phase-4 C** (Per-account mutex & polling) **completed** – concurrency guard, active/passive polling in-place (see SYNCLOG 2025-06-19 & 23).
+8. **Phase-4 D** (PendingAction upload pipeline) **completed** – SyncController now processes PendingAction queue (SYNCLOG 2025-06-24).
+9. **Phase-4 E** (Cache eviction algorithm) **next up** – implement `runCacheEviction()` and surface local storage usage to UI.
 
 ## **5\. Core Implementation Guarantees**
 

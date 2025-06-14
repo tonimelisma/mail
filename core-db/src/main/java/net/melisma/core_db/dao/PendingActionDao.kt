@@ -38,4 +38,12 @@ interface PendingActionDao {
 
     @Query("SELECT DISTINCT entityId FROM pending_actions WHERE status IN (:statuses)")
     suspend fun getActiveActionEntityIds(statuses: List<PendingActionStatus>): List<String>
+
+    // Fetch the next pending or retry action for a specific account (oldest first)
+    @Query("SELECT * FROM pending_actions WHERE accountId = :accountId AND (status = :pendingStatus OR status = :retryStatus) AND attemptCount < maxAttempts ORDER BY createdAt ASC LIMIT 1")
+    suspend fun getNextActionForAccount(
+        accountId: String,
+        pendingStatus: PendingActionStatus = PendingActionStatus.PENDING,
+        retryStatus: PendingActionStatus = PendingActionStatus.RETRY
+    ): PendingActionEntity?
 } 

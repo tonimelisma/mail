@@ -9,7 +9,6 @@ import net.melisma.core_data.di.ApplicationScope
 import net.melisma.core_data.model.SyncJob
 import net.melisma.core_data.model.SyncControllerStatus
 import net.melisma.core_data.preferences.UserPreferencesRepository
-import net.melisma.data.sync.work.SyncWorkManager
 import timber.log.Timber
 import java.util.concurrent.PriorityBlockingQueue
 import javax.inject.Inject
@@ -27,6 +26,11 @@ import net.melisma.core_db.entity.MessageFolderJunction
 import net.melisma.core_db.entity.FolderSyncStateEntity
 import dagger.hilt.android.qualifiers.ApplicationContext
 import android.content.Context
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.decodeFromString
+import net.melisma.core_data.model.MessageDraft
+import net.melisma.core_db.model.PendingActionStatus
+import net.melisma.data.sync.workers.ActionUploadWorker
 
 @Singleton
 class SyncController @Inject constructor(
@@ -34,7 +38,6 @@ class SyncController @Inject constructor(
     @ApplicationScope private val externalScope: CoroutineScope,
     private val queue: PriorityBlockingQueue<SyncJob>,
     private val networkMonitor: NetworkMonitor,
-    private val syncWorkManager: SyncWorkManager,
     private val userPreferencesRepository: UserPreferencesRepository,
     private val mailApiServiceSelector: net.melisma.core_data.datasource.MailApiServiceSelector,
     private val appDatabase: net.melisma.core_db.AppDatabase,
@@ -46,6 +49,8 @@ class SyncController @Inject constructor(
     val status = _status.asStateFlow()
 
     private var pollingJob: kotlinx.coroutines.Job? = null
+
+    private var passivePollingJob: kotlinx.coroutines.Job? = null
 
     private val ACTIVE_POLL_INTERVAL_MS = 5_000L
 
@@ -104,12 +109,7 @@ class SyncController @Inject constructor(
                             folderId = job.folderId
                         )
                     )
-                    is SyncJob.UploadAction -> syncWorkManager.enqueueActionUpload(
-                        accountId = job.accountId,
-                        actionType = job.actionType,
-                        entityId = job.entityId,
-                        payload = job.payload
-                    )
+                    is SyncJob.UploadAction -> handleUploadAction(job)
                     is SyncJob.DownloadAttachment -> handleDownloadAttachment(job)
                     is SyncJob.FetchFullMessageBody -> handleDownloadMessageBody(
                         SyncJob.DownloadMessageBody(job.messageId, job.accountId)
@@ -117,10 +117,7 @@ class SyncController @Inject constructor(
                     is SyncJob.FetchMessageHeaders -> handleFetchMessageHeaders(job)
                     is SyncJob.FetchNextMessageListPage -> handleFetchNextPage(job)
                     is SyncJob.SearchOnline -> Timber.w("No-op handler for SearchOnline")
-                    is SyncJob.EvictFromCache -> {
-                        Timber.d("Handling EvictFromCache job for account ${job.accountId}")
-                        syncWorkManager.enqueueCacheCleanup()
-                    }
+                    is SyncJob.EvictFromCache -> runCacheEviction(job.accountId)
                 }
                 _status.value = _status.value.copy(error = null)
             } catch (e: Exception) {
@@ -481,5 +478,173 @@ class SyncController @Inject constructor(
             attachmentDao.updateDownloadSuccess(job.attachmentId, file.absolutePath, System.currentTimeMillis())
             Timber.d("Downloaded attachment ${job.attachmentId} to ${file.absolutePath}")
         }
+    }
+
+    private suspend fun handleUploadAction(job: SyncJob.UploadAction) {
+        withContext(ioDispatcher) {
+            val pendingActionDao = appDatabase.pendingActionDao()
+            val messageDao = appDatabase.messageDao()
+            val attachmentDao = appDatabase.attachmentDao()
+            val action = pendingActionDao.getNextActionForAccount(job.accountId)
+            if (action == null) {
+                Timber.d("No pending actions for account ${job.accountId}")
+                return@withContext
+            }
+
+            val service = mailApiServiceSelector.getServiceByAccountId(job.accountId) ?: run {
+                Timber.w("MailApiService not found for account ${job.accountId}")
+                return@withContext
+            }
+
+            // Helper to update retry / failed state
+            suspend fun markFailure(reason: String?) {
+                val updated = action.copy(
+                    status = if (action.attemptCount + 1 >= action.maxAttempts) PendingActionStatus.FAILED else PendingActionStatus.RETRY,
+                    lastAttemptAt = System.currentTimeMillis(),
+                    lastError = reason,
+                    attemptCount = action.attemptCount + 1
+                )
+                pendingActionDao.updateAction(updated)
+            }
+
+            try {
+                val resultSuccessful: Boolean = when (action.actionType) {
+                    ActionUploadWorker.ACTION_MARK_AS_READ -> {
+                        service.markMessageRead(action.entityId, true).isSuccess
+                    }
+
+                    ActionUploadWorker.ACTION_MARK_AS_UNREAD -> {
+                        service.markMessageRead(action.entityId, false).isSuccess
+                    }
+
+                    ActionUploadWorker.ACTION_STAR_MESSAGE -> {
+                        val isStarred = action.payload[ActionUploadWorker.KEY_IS_STARRED]?.toBoolean() ?: true
+                        service.starMessage(action.entityId, isStarred).isSuccess
+                    }
+
+                    ActionUploadWorker.ACTION_DELETE_MESSAGE -> {
+                        service.deleteMessage(action.entityId).isSuccess.also { ok ->
+                            if (ok) messageDao.deleteMessageById(action.entityId)
+                        }
+                    }
+
+                    ActionUploadWorker.ACTION_MOVE_MESSAGE -> {
+                        val oldFolder = action.payload[ActionUploadWorker.KEY_OLD_FOLDER_ID]
+                        val newFolder = action.payload[ActionUploadWorker.KEY_NEW_FOLDER_ID]
+                        if (oldFolder == null || newFolder == null) false else service.moveMessage(action.entityId, oldFolder, newFolder).isSuccess
+                    }
+
+                    ActionUploadWorker.ACTION_MARK_THREAD_AS_READ -> {
+                        service.markThreadRead(action.entityId, true).isSuccess
+                    }
+                    ActionUploadWorker.ACTION_MARK_THREAD_AS_UNREAD -> {
+                        service.markThreadRead(action.entityId, false).isSuccess
+                    }
+                    ActionUploadWorker.ACTION_DELETE_THREAD -> {
+                        service.deleteThread(action.entityId).isSuccess
+                    }
+                    ActionUploadWorker.ACTION_MOVE_THREAD -> {
+                        val oldFolder = action.payload[ActionUploadWorker.KEY_OLD_FOLDER_ID]
+                        val newFolder = action.payload[ActionUploadWorker.KEY_NEW_FOLDER_ID]
+                        if (oldFolder == null || newFolder == null) false else service.moveThread(action.entityId, oldFolder, newFolder).isSuccess
+                    }
+
+                    ActionUploadWorker.ACTION_SEND_MESSAGE -> {
+                        val draftJson = action.payload[ActionUploadWorker.KEY_DRAFT_DETAILS]
+                        val draft = draftJson?.let { Json.decodeFromString<MessageDraft>(it) }
+                        if (draft == null) {
+                            false
+                        } else {
+                            val res = service.sendMessage(draft)
+                            if (res.isSuccess) {
+                                // On success remove local outbox flag, update messageId remoteId if provided
+                                val remoteId = res.getOrNull()
+                                if (remoteId != null) {
+                                    val localMsg = messageDao.getMessageByIdSuspend(action.entityId)
+                                    if (localMsg != null) {
+                                        localMsg.messageId = remoteId
+                                        localMsg.syncStatus = EntitySyncStatus.SYNCED
+                                        messageDao.insertOrUpdateMessages(listOf(localMsg))
+                                    }
+                                }
+                            }
+                            res.isSuccess
+                        }
+                    }
+
+                    ActionUploadWorker.ACTION_CREATE_DRAFT -> {
+                        val draftJson = action.payload[ActionUploadWorker.KEY_DRAFT_DETAILS]
+                        val draft = draftJson?.let { Json.decodeFromString<MessageDraft>(it) }
+                        if (draft == null) false else service.createDraftMessage(draft).isSuccess
+                    }
+
+                    ActionUploadWorker.ACTION_UPDATE_DRAFT -> {
+                        val draftJson = action.payload[ActionUploadWorker.KEY_DRAFT_DETAILS]
+                        val draft = draftJson?.let { Json.decodeFromString<MessageDraft>(it) }
+                        if (draft == null) false else service.updateDraftMessage(action.entityId, draft).isSuccess
+                    }
+
+                    else -> {
+                        Timber.w("Unknown action type ${action.actionType}. Deleting action.")
+                        true // Treat as success to avoid infinite loop
+                    }
+                }
+
+                if (resultSuccessful) {
+                    pendingActionDao.deleteActionById(action.id)
+                    Timber.i("Successfully processed pending action ${action.id} (${action.actionType})")
+                } else {
+                    Timber.w("Processing of pending action ${action.id} failed – will retry later")
+                    markFailure("API error or invalid parameters")
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "Error uploading action ${action.id} (${action.actionType})")
+                markFailure(e.message)
+            }
+
+            // If more actions remain, enqueue another UploadAction job for this account
+            val another = pendingActionDao.getNextActionForAccount(job.accountId)
+            if (another != null) {
+                submit(SyncJob.UploadAction(job.accountId, another.actionType, another.entityId, another.payload))
+            }
+        }
+    }
+
+    private suspend fun runCacheEviction(accountId: String) {
+        withContext(ioDispatcher) {
+            Timber.d("[Stub] Cache eviction requested for account $accountId — full algorithm TBD.")
+            // We simply log for now.
+        }
+    }
+
+    // Passive background polling coroutine
+    fun startPassivePolling() {
+        if (passivePollingJob?.isActive == true) return
+        passivePollingJob = externalScope.launch {
+            while (isActive) {
+                delay(java.util.concurrent.TimeUnit.MINUTES.toMillis(15))
+                // For each account's Inbox submit FetchMessageHeaders
+                val accountDao = appDatabase.accountDao()
+                val folderDao = appDatabase.folderDao()
+                val accounts = accountDao.getAllAccounts().first()
+                accounts.forEach { acc ->
+                    val inboxFolder = folderDao.getFolderByWellKnownTypeSuspend(acc.id, net.melisma.core_data.model.WellKnownFolderType.INBOX)
+                    inboxFolder?.let { folder ->
+                        submit(
+                            SyncJob.FetchMessageHeaders(
+                                folderId = folder.id,
+                                pageToken = null,
+                                accountId = acc.id
+                            )
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun stopPassivePolling() {
+        passivePollingJob?.cancel()
+        passivePollingJob = null
     }
 } 
