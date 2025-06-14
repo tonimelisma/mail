@@ -83,6 +83,7 @@ The new architecture will be centered around a SyncController singleton. Key cha
 7. **Phase-4 C** (Per-account mutex & polling) **completed** – concurrency guard, active/passive polling in-place (see SYNCLOG 2025-06-19 & 23).
 8. **Phase-4 D** (PendingAction upload pipeline) **completed** – SyncController now processes PendingAction queue (SYNCLOG 2025-06-24).
 9. **Phase-4 E** (Cache eviction algorithm) **completed** – full `runCacheEviction()` implementation integrated into SyncController and passive polling queues EvictFromCache jobs (SYNCLOG 2025-06-25).
+10. **Phase-4 F** (Sync State Observation) **completed** – `SyncController.status` exposed to UI, status bar implemented (SYNCLOG 2025-06-27).
 
 ## **5\. Core Implementation Guarantees**
 

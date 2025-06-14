@@ -77,6 +77,7 @@ All data synchronization is managed by the centralized **SyncController**. This 
 * **Throttling:** The SyncController will manage per-account exponential backoff for API throttling, pausing jobs for a specific account without blocking the entire queue.  
 * **Retries:** For transient network/server issues, actions are automatically retried. For persistently failed actions (e.g., sending an email), they will be clearly marked in the UI (e.g., in the Outbox) with a manual retry option.
 * **Conflict Resolution:** The current conflict resolution strategy is "last write wins" and is considered sufficient for this stage of development.
+* **Status Bar Implementation (2025-06-27):** The UI now observes `SyncController.status` and displays a global status bar showing syncing progress, offline state, and errors.
 
 ### **2.6. Local Search**
 

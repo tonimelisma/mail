@@ -10,8 +10,8 @@
   * **Status: Completed (2025-06-17)**  
 * **Requirement 0.3 (Remove RemoteMediator):** As a developer, I want to remove the MessageRemoteMediator and rely on the SyncController's background sync to populate the database for paging.  
   * **Status: Completed (2025-06-18)**  
-* **Requirement 0.4 (Implement Sync State Observation):** As a developer, I want the SyncController to expose a StateFlow\<SyncStatus\> that can be observed by the UI layer to provide real-time, global feedback on sync progress, network status, and error states.  
-  * **Status: To Do**  
+* **Requirement 0.4 (Implement Sync State Observation):** As a developer, I want the SyncController to expose a StateFlow<SyncStatus> that can be observed by the UI layer to provide real-time, global feedback on sync progress, network status, and error states.  
+  * **Status: Completed (2025-06-27)**  
 * **Requirement 0.5 (Implement Core Sync Logic):** As a developer, I want to ensure that the SyncController's implementation strictly follows the defined 4-level priority algorithm, uses database transactions for data integrity, and persists its background sync state in a FolderSyncStateEntity.  
   * **Status: Completed (2025-06-25)**
 * **Requirement 0.6 (Integrate Initial Sync Duration):** As a developer, I want to integrate the existing user preference for "initial sync duration" into the SyncController's initial sync mode.
@@ -75,8 +75,8 @@
 * **Requirement 5.1 (Authentication):** As a user, I want to securely sign in and out of my email accounts.  
   * **Status: Implemented**  
 * **Requirement 5.X (Transparent Sync Status):** Users should have clear visibility into sync status and errors.  
-  * **Status: Blocked by Req 0.4**  
-  * **UI/UX Details:** A global status bar, contextual feedback for pull-to-refresh, and a settings diagnostic panel are planned.  
+  * **Status: Implemented**  
+  * **UI/UX Details:** A global status bar now displays syncing, offline, and error states (req 0.4).  
 * **Requirement 5.Y (Configurable Sync & Cache):** As a user, I want to control cache settings (size limits, initial sync duration, attachment download preferences).  
   * **Status: Implemented**  
 * **Requirement 5.6 (Data Caching & Eviction):** The app must cache data locally with a multi-tiered eviction strategy.  

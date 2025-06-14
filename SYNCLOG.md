@@ -558,4 +558,33 @@ Finish the open tech-debt item (Requirement 0.7) by moving attachment storage to
 * Legacy attachments previously saved under `files/attachments/` are unreachable after destructive migration; no action required.
 * Next focus: Requirement 0.4 (observable sync state for UI).
 
+---
+
+## **Date: 2025-06-27**
+
+### **Developer:** ChatGPT-o3 (Automated)
+
+### **Increment Implemented – "Req 0.4 ✓: Sync State Observation & UI Status Bar"**
+
+**Goal**
+Deliver real-time sync status visibility in the UI by wiring `SyncController.status` to the Mail module and rendering a global status bar.
+
+**Work Completed**
+1. **ViewModel Layer**  
+   • Added `SyncStatusViewModel` exposing a `StateFlow<SyncControllerStatus>` collected from `SyncController.status`.
+2. **UI Layer**  
+   • New `SyncStatusBar` Compose component displays "Syncing…", "Offline", or error states with a progress indicator.  
+   • Integrated the bar as `bottomBar` in `MainAppScreen` scaffold.
+3. **DI**  
+   • Hilt provides `SyncController` to the new ViewModel out of the box.
+4. **Build** – Full `./gradlew build` passes; no warnings introduced.
+
+### **Outcome**
+Requirement **0.4 (Implement Sync State Observation)** is now **Completed**. The UI shows sync status globally, unlocking Backlog EPIC 5 transparency tasks.
+
+### **Tech-Debt / Follow-ups**
+* Consider richer UX (detailed errors, retry button).
+* Localise messages and use string resources.
+* Remove remaining TODO references to deprecated SyncEngine in ViewModels.
+
 --- 

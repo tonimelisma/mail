@@ -43,6 +43,9 @@ import net.melisma.mail.R
 import net.melisma.mail.ViewMode
 import net.melisma.mail.navigation.AppRoutes
 import timber.log.Timber
+import androidx.hilt.navigation.compose.hiltViewModel
+import net.melisma.mail.ui.sync.SyncStatusBar
+import net.melisma.mail.ui.sync.SyncStatusViewModel
 
 // Helper functions that were originally in MainActivity or might be needed
 // (Consider moving to a Util file if they become more general)
@@ -123,7 +126,12 @@ fun MainAppScreen(
                     }
                 )
             },
-            floatingActionButton = { /* Placeholder for FAB */ }
+            floatingActionButton = { /* Placeholder for FAB */ },
+            bottomBar = {
+                val syncStatusViewModel: SyncStatusViewModel = hiltViewModel()
+                val syncStatus by syncStatusViewModel.status.collectAsStateWithLifecycle()
+                SyncStatusBar(status = syncStatus)
+            }
         ) { innerPadding ->
             Box(modifier = Modifier.padding(innerPadding)) {
                 val currentAuthState = state.overallApplicationAuthState
