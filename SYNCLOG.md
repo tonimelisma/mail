@@ -446,4 +446,35 @@ Finish Worker-consolidation track by moving `MessageBodyDownloadWorker` and `Att
 * Implement real-time status Flow from `SyncController` so ViewModels can observe progress instead of stubs.  
 * Begin Phase-5: foreground Service for large attachment downloads.
 
+---
+
+## **Date: 2025-06-23**
+
+### **Developer:** ChatGPT-o3 (Automated)
+
+### **Increment Implemented – "Phase-4 C ✓: Full WorkManager Removal"
+
+**Goal**
+Finalize the Worker-consolidation effort by eradicating WorkManager from the entire codebase. All background tasks are now handled inside `SyncController` using plain coroutines.
+
+### **Work Completed**
+1. **`SyncController`**
+   • Added in-process passive-polling coroutine (`start/stopPassivePolling`).  
+   • Stubbed `handleUploadAction()` and `runCacheEviction()` (full logic will be ported in Phase-4 D).  
+   • Removed dependency on `SyncWorkManager`.
+2. **Lifecycle**  
+   • `SyncLifecycleObserver` now toggles passive/active polling via `SyncController` instead of WorkManager.
+3. **Application**  
+   • `MailApplication` no longer injects `HiltWorkerFactory`; WorkManager configuration code deleted; manifest startup provider removed.
+4. **Deleted Classes**  
+   • `SyncWorkManager.kt`, `ActionUploadWorker.kt`, `CacheCleanupWorker.kt`, `PassivePollingWorker.kt`, `SingleMessageSyncWorker.kt`.  
+   • Introduced lightweight `ActionUploadWorker` object as constants holder to avoid wide refactor.
+5. **DI & Gradle**  
+   • Deleted `WorkManagerModule`; pruned `androidx.work` and `androidx.hilt.work` dependencies from `data` & `mail` modules.
+6. **Build** – Full `./gradlew build` SUCCESS; only manifest merge warnings remain (unrelated).
+
+### **Outcome**
+* WorkManager entirely removed from production code; sync stack is now coroutine-driven.  
+* Paves the way for Phase-4 D where proper upload & cache-eviction algorithms will be integrated into `SyncController`.
+
 --- 
