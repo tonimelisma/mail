@@ -15,10 +15,14 @@ interface MessageDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertOrUpdateMessages(messages: List<MessageEntity>)
 
-    @Query("SELECT * FROM messages WHERE accountId = :accountId AND folderId = :folderId ORDER BY timestamp DESC")
+    // TODO Phase-1F: re-implement with JOIN on message_folder_junction
+    @Deprecated("FolderId removed", level = DeprecationLevel.ERROR)
+    @Query("SELECT * FROM messages LIMIT 0")
     fun getMessagesForFolder(accountId: String, folderId: String): Flow<List<MessageEntity>>
 
-    @Query("DELETE FROM messages WHERE folderId = :folderId")
+    // TODO adjust logic after schema cut-over
+    @Deprecated("FolderId removed", level = DeprecationLevel.ERROR)
+    @Query("DELETE FROM messages WHERE 1=0")
     suspend fun deleteMessagesByFolder(folderId: String)
 
     @Query("DELETE FROM messages WHERE accountId = :accountId")
@@ -30,10 +34,12 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE id = :id")
     suspend fun getMessageByIdSuspend(id: String): MessageEntity?
 
-    @Query("SELECT COUNT(*) FROM messages WHERE accountId = :accountId AND folderId = :folderId")
+    @Deprecated(level = DeprecationLevel.ERROR, message = "FolderId removed")
+    @Query("SELECT 0")
     suspend fun getMessagesCountForFolder(accountId: String, folderId: String): Int
 
-    @Query("SELECT * FROM messages WHERE accountId = :accountId AND folderId = :folderId ORDER BY timestamp DESC")
+    @Deprecated(level = DeprecationLevel.ERROR, message = "FolderId removed")
+    @Query("SELECT * FROM messages LIMIT 0")
     fun getMessagesPagingSource(accountId: String, folderId: String): PagingSource<Int, MessageEntity>
 
     @Query("UPDATE messages SET isRead = :isRead WHERE id = :messageId")
@@ -48,7 +54,8 @@ interface MessageDao {
     @Query("DELETE FROM messages WHERE messageId IN (:remoteMessageIds)")
     suspend fun deleteMessagesByRemoteIds(remoteMessageIds: List<String>): Int
 
-    @Query("UPDATE messages SET folderId = :newFolderId WHERE id = :messageId")
+    @Deprecated("FolderId removed", level = DeprecationLevel.ERROR)
+    @Query("UPDATE messages SET id = id")
     suspend fun updateFolderId(messageId: String, newFolderId: String)
 
     @Query("SELECT * FROM messages WHERE accountId = :accountId AND (subject LIKE :query OR snippet LIKE :query) AND (:folderId IS NULL OR folderId = :folderId) ORDER BY timestamp DESC")

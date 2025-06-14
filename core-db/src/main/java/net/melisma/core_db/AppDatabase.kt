@@ -36,7 +36,7 @@ import net.melisma.core_db.entity.FolderSyncStateEntity
         MessageFolderJunction::class,
         FolderSyncStateEntity::class
     ],
-    version = 16,
+    version = 17,
     exportSchema = false // Set to true for production apps for schema migration history
 )
 @TypeConverters(

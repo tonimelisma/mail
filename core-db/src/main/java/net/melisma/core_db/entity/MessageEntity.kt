@@ -15,16 +15,10 @@ import net.melisma.core_data.model.EntitySyncStatus
             childColumns = ["accountId"],
             onDelete = ForeignKey.CASCADE
         ),
-        ForeignKey(
-            entity = FolderEntity::class,
-            parentColumns = ["id"],
-            childColumns = ["folderId"],
-            onDelete = ForeignKey.CASCADE // Or SET_NULL if messages can exist without a folder after deletion
-        )
+        // Folder relationship now handled through MessageFolderJunction table
     ],
     indices = [
         Index(value = ["accountId"]),
-        Index(value = ["folderId"]),
         Index(value = ["threadId"]),
         Index(value = ["timestamp"])
     ]
@@ -33,7 +27,7 @@ data class MessageEntity(
     @PrimaryKey val id: String,
     var messageId: String?, // Remote ID, nullable for local-only messages
     val accountId: String,
-    var folderId: String,
+    // Folder linkage stored in MessageFolderJunction
     var threadId: String?,
     var subject: String?,
     var snippet: String?, // Corresponds to bodyPreview

@@ -19,6 +19,9 @@ import androidx.room.ForeignKey
             childColumns = ["folderId"],
             onDelete = ForeignKey.CASCADE
         )
+    ],
+    indices = [
+        androidx.room.Index(value = ["folderId"])
     ]
 )
 data class MessageFolderJunction(
