@@ -38,6 +38,7 @@ import net.melisma.core_db.AppDatabase
 import net.melisma.core_db.dao.AttachmentDao
 import net.melisma.core_db.dao.FolderDao
 import net.melisma.core_db.dao.MessageDao
+import net.melisma.core_db.dao.MessageFolderJunctionDao
 import net.melisma.core_db.dao.PendingActionDao
 import net.melisma.core_db.entity.PendingActionEntity
 import net.melisma.core_db.model.PendingActionStatus
@@ -60,6 +61,7 @@ class DefaultMessageRepository @Inject constructor(
     private val attachmentDao: AttachmentDao,
     private val folderDao: FolderDao,
     private val pendingActionDao: PendingActionDao,
+    private val messageFolderJunctionDao: MessageFolderJunctionDao,
     private val appDatabase: AppDatabase,
     private val syncController: SyncController,
     private val networkMonitor: NetworkMonitor
@@ -93,7 +95,7 @@ class DefaultMessageRepository @Inject constructor(
         }
 
         return messageDao.getMessagesForFolder(accountId, folderId)
-            .map { entities -> entities.map { it.toDomainModel() } }
+            .map { entities -> entities.map { it.toDomainModel(folderId) } }
     }
 
     @OptIn(ExperimentalPagingApi::class)
@@ -115,7 +117,7 @@ class DefaultMessageRepository @Inject constructor(
                 onSyncStateChanged = { syncState -> _messageSyncState.value = syncState }
             ),
             pagingSourceFactory = { messageDao.getMessagesPagingSource(accountId, folderId) }
-        ).flow.map { pagingData -> pagingData.map { it.toDomainModel() } }
+        ).flow.map { pagingData -> pagingData.map { it.toDomainModel(folderId) } }
     }
 
     override suspend fun setTargetFolder(account: Account?, folder: MailFolder?) {
@@ -151,7 +153,9 @@ class DefaultMessageRepository @Inject constructor(
         }
 
         return messageDao.getMessageById(messageId).map { entity ->
-            entity?.toDomainModel()
+            entity?.let { msg ->
+                msg.toDomainModel("")
+            }
         }
     }
 
@@ -224,10 +228,10 @@ class DefaultMessageRepository @Inject constructor(
 
     override suspend fun moveMessage(account: Account, messageId: String, newFolderId: String): Result<Unit> = withContext(ioDispatcher) {
         try {
-            val oldFolderId = messageDao.getMessageByIdSuspend(messageId)?.folderId
-                ?: return@withContext Result.failure(IllegalStateException("Cannot find message to move."))
+            val currentFolders = messageFolderJunctionDao.getFoldersForMessage(messageId)
+            val oldFolderId = currentFolders.firstOrNull() ?: ""
 
-            messageDao.updateFolderId(messageId, newFolderId)
+            messageFolderJunctionDao.replaceFoldersForMessage(messageId, listOf(newFolderId))
             val payload = mapOf(
                 ActionUploadWorker.KEY_NEW_FOLDER_ID to newFolderId,
                 ActionUploadWorker.KEY_OLD_FOLDER_ID to oldFolderId
@@ -258,7 +262,6 @@ class DefaultMessageRepository @Inject constructor(
             val tempId = draft.existingMessageId ?: "local-sent-${UUID.randomUUID()}"
             val messageEntity = draft.toEntity(
                 id = tempId,
-                folderId = sentFolder.id,
                 accountId = account.id,
                 isRead = true,
                 syncStatus = EntitySyncStatus.PENDING_UPLOAD
@@ -272,6 +275,7 @@ class DefaultMessageRepository @Inject constructor(
                 if (attachmentEntities.isNotEmpty()) {
                     attachmentDao.insertAttachments(attachmentEntities)
                 }
+                messageFolderJunctionDao.insertAll(listOf(net.melisma.core_db.entity.MessageFolderJunction(tempId, sentFolder.id)))
             }
             Timber.d("Saved message $tempId to local db for sending.")
 
@@ -302,7 +306,6 @@ class DefaultMessageRepository @Inject constructor(
 
             val messageEntity = draftDetails.toEntity(
                 id = tempId,
-                folderId = draftFolder.id,
                 accountId = accountId,
                 isRead = true,
                 syncStatus = EntitySyncStatus.PENDING_UPLOAD
@@ -312,6 +315,7 @@ class DefaultMessageRepository @Inject constructor(
             appDatabase.withTransaction {
                 messageDao.insertOrUpdateMessages(listOf(messageEntity))
                 attachmentDao.insertAttachments(localAttachments)
+                messageFolderJunctionDao.insertAll(listOf(net.melisma.core_db.entity.MessageFolderJunction(tempId, draftFolder.id)))
             }
             Timber.d("Saved new draft $tempId locally.")
 
@@ -341,7 +345,6 @@ class DefaultMessageRepository @Inject constructor(
 
             val messageEntity = draftDetails.toEntity(
                 id = messageId,
-                folderId = draftFolder.id,
                 accountId = accountId,
                 isRead = true,
                 syncStatus = EntitySyncStatus.PENDING_UPLOAD
@@ -354,6 +357,7 @@ class DefaultMessageRepository @Inject constructor(
                 if (newAttachments.isNotEmpty()) {
                     attachmentDao.insertAttachments(newAttachments)
                 }
+                messageFolderJunctionDao.replaceFoldersForMessage(messageId, listOf(draftFolder.id))
             }
             Timber.d("Updated draft $messageId locally.")
 

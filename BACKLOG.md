@@ -5,9 +5,9 @@
 **EPIC 0: ARCHITECTURAL REFACTOR \- SyncController Migration** (Highest Priority \- BLOCKER)
 
 * **Requirement 0.1 (Implement SyncController):** As a developer, I want to replace the SyncEngine and distributed WorkManager architecture with the centralized SyncController model.  
-  * **Status: In Progress (SyncEngine references removed; controller wired, DB migration pending)**  
+  * **Status: Completed (2025-06-17)**  
 * **Requirement 0.2 (Database Migration to Many-to-Many):** As a developer, I want to migrate the database schema to support a many-to-many relationship between messages and folders.  
-  * **Status: In Progress**  
+  * **Status: Completed (2025-06-17)**  
 * **Requirement 0.3 (Remove RemoteMediator):** As a developer, I want to remove the MessageRemoteMediator and rely on the SyncController's background sync to populate the database for paging.  
   * **Status: In Progress**  
 * **Requirement 0.4 (Implement Sync State Observation):** As a developer, I want the SyncController to expose a StateFlow\<SyncStatus\> that can be observed by the UI layer to provide real-time, global feedback on sync progress, network status, and error states.  

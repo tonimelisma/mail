@@ -24,4 +24,15 @@ interface MessageFolderJunctionDao {
 
     @Query("SELECT messageId FROM message_folder_junction WHERE folderId = :folderId")
     fun getMessageIdsForFolder(folderId: String): Flow<List<String>>
+
+    /**
+     * Convenience helper to replace all folder links for a given message inside a single transaction.
+     */
+    @androidx.room.Transaction
+    suspend fun replaceFoldersForMessage(messageId: String, newFolderIds: List<String>) {
+        deleteByMessage(messageId)
+        if (newFolderIds.isNotEmpty()) {
+            insertAll(newFolderIds.map { fid -> MessageFolderJunction(messageId, fid) })
+        }
+    }
 } 

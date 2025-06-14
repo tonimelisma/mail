@@ -16,6 +16,7 @@ import net.melisma.core_db.AppDatabase
 import net.melisma.core_db.dao.AccountDao
 import net.melisma.core_db.dao.FolderDao
 import net.melisma.core_db.dao.MessageDao
+import net.melisma.core_db.dao.MessageFolderJunctionDao
 import net.melisma.core_db.dao.RemoteKeyDao
 import net.melisma.core_db.entity.RemoteKeyEntity
 import net.melisma.data.mapper.toEntity
@@ -32,6 +33,7 @@ class FolderContentSyncWorker @AssistedInject constructor(
     private val accountDao: AccountDao,
     private val remoteKeyDao: RemoteKeyDao,
     private val networkMonitor: NetworkMonitor,
+    private val messageFolderJunctionDao: MessageFolderJunctionDao,
 ) : CoroutineWorker(appContext, workerParams) {
 
     private val TAG = "FolderContentSyncWorker"
@@ -80,10 +82,15 @@ class FolderContentSyncWorker @AssistedInject constructor(
                 database.withTransaction {
                     // Clear existing messages and remote key to ensure a fresh start
                     messageDao.deleteMessagesByFolder(folderId)
+                    messageFolderJunctionDao.deleteByFolder(folderId)
                     remoteKeyDao.deleteRemoteKeyForFolder(folderId)
 
-                    val messageEntities = serverMessages.map { it.toEntity(accountId, folderId) }
+                    val messageEntities = serverMessages.map { it.toEntity(accountId) }
                     messageDao.insertOrUpdateMessages(messageEntities)
+                    val junctions = messageEntities.map { me ->
+                        net.melisma.core_db.entity.MessageFolderJunction(me.id, folderId)
+                    }
+                    messageFolderJunctionDao.insertAll(junctions)
 
                     // Set the next page token for the mediator
                     val nextKey = pagedResponse.nextPageToken

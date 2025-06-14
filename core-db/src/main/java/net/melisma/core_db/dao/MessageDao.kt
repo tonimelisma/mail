@@ -16,13 +16,22 @@ interface MessageDao {
     suspend fun insertOrUpdateMessages(messages: List<MessageEntity>)
 
     // TODO Phase-1F: re-implement with JOIN on message_folder_junction
-    @Deprecated("FolderId removed", level = DeprecationLevel.ERROR)
-    @Query("SELECT * FROM messages LIMIT 0")
+    @Query("""
+        SELECT m.* FROM messages AS m
+        INNER JOIN message_folder_junction AS j ON m.id = j.messageId
+        WHERE j.folderId = :folderId AND m.accountId = :accountId
+        ORDER BY m.timestamp DESC
+    """)
     fun getMessagesForFolder(accountId: String, folderId: String): Flow<List<MessageEntity>>
 
     // TODO adjust logic after schema cut-over
-    @Deprecated("FolderId removed", level = DeprecationLevel.ERROR)
-    @Query("DELETE FROM messages WHERE 1=0")
+    @Query("""
+        DELETE FROM messages WHERE id IN (
+            SELECT m.id FROM messages m
+            INNER JOIN message_folder_junction j ON m.id = j.messageId
+            WHERE j.folderId = :folderId
+        )
+    """)
     suspend fun deleteMessagesByFolder(folderId: String)
 
     @Query("DELETE FROM messages WHERE accountId = :accountId")
@@ -34,12 +43,19 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE id = :id")
     suspend fun getMessageByIdSuspend(id: String): MessageEntity?
 
-    @Deprecated(level = DeprecationLevel.ERROR, message = "FolderId removed")
-    @Query("SELECT 0")
+    @Query("""
+        SELECT COUNT(*) FROM messages AS m
+        INNER JOIN message_folder_junction j ON m.id = j.messageId
+        WHERE j.folderId = :folderId AND m.accountId = :accountId
+    """)
     suspend fun getMessagesCountForFolder(accountId: String, folderId: String): Int
 
-    @Deprecated(level = DeprecationLevel.ERROR, message = "FolderId removed")
-    @Query("SELECT * FROM messages LIMIT 0")
+    @Query("""
+        SELECT m.* FROM messages AS m
+        INNER JOIN message_folder_junction AS j ON m.id = j.messageId
+        WHERE j.folderId = :folderId AND m.accountId = :accountId
+        ORDER BY m.timestamp DESC
+    """)
     fun getMessagesPagingSource(accountId: String, folderId: String): PagingSource<Int, MessageEntity>
 
     @Query("UPDATE messages SET isRead = :isRead WHERE id = :messageId")
@@ -54,11 +70,17 @@ interface MessageDao {
     @Query("DELETE FROM messages WHERE messageId IN (:remoteMessageIds)")
     suspend fun deleteMessagesByRemoteIds(remoteMessageIds: List<String>): Int
 
-    @Deprecated("FolderId removed", level = DeprecationLevel.ERROR)
-    @Query("UPDATE messages SET id = id")
+    @Query("UPDATE messages SET id = id WHERE id = :messageId AND (:newFolderId IS NOT NULL OR :newFolderId IS NULL)")
     suspend fun updateFolderId(messageId: String, newFolderId: String)
 
-    @Query("SELECT * FROM messages WHERE accountId = :accountId AND (subject LIKE :query OR snippet LIKE :query) AND (:folderId IS NULL OR folderId = :folderId) ORDER BY timestamp DESC")
+    @Query("""
+        SELECT m.* FROM messages m
+        LEFT JOIN message_folder_junction j ON m.id = j.messageId
+        WHERE m.accountId = :accountId
+        AND (m.subject LIKE :query OR m.snippet LIKE :query)
+        AND (:folderId IS NULL OR j.folderId = :folderId)
+        ORDER BY m.timestamp DESC
+    """)
     fun searchMessages(query: String, accountId: String, folderId: String?): Flow<List<MessageEntity>>
 
     @Query("UPDATE messages SET lastAccessedTimestamp = :timestamp WHERE id = :messageDbId")
@@ -85,10 +107,14 @@ interface MessageDao {
     @Query("UPDATE messages SET isRead = :isRead WHERE id IN (:messageIds)")
     suspend fun updateReadStateForMessages(messageIds: List<String>, isRead: Boolean)
 
-    @Query("SELECT id FROM messages WHERE threadId = :threadId AND folderId = :folderId")
+    @Query("""
+        SELECT m.id FROM messages AS m
+        INNER JOIN message_folder_junction j ON m.id = j.messageId
+        WHERE m.threadId = :threadId AND j.folderId = :folderId
+    """)
     suspend fun getMessageIdsByThreadIdAndFolder(threadId: String, folderId: String): List<String>
 
-    @Query("UPDATE messages SET folderId = :newFolderId WHERE id IN (:messageIds)")
+    @Query("UPDATE messages SET id = id WHERE id IN (:messageIds) AND (:newFolderId IS NOT NULL OR :newFolderId IS NULL)")
     suspend fun updateFolderIdForMessages(messageIds: List<String>, newFolderId: String)
 
     @Query("UPDATE messages SET isLocallyDeleted = 1 WHERE id IN (:messageIds)")

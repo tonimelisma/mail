@@ -7,7 +7,6 @@ import java.util.UUID
 
 fun MessageDraft.toEntity(
     id: String = UUID.randomUUID().toString(),
-    folderId: String,
     accountId: String,
     isRead: Boolean,
     syncStatus: EntitySyncStatus
@@ -17,7 +16,6 @@ fun MessageDraft.toEntity(
         id = id,
         messageId = null, // No remote ID yet for a draft
         accountId = accountId,
-        folderId = folderId,
         threadId = null,
         subject = subject,
         snippet = snippet,

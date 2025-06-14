@@ -21,6 +21,8 @@ import net.melisma.core_db.AppDatabase
 import net.melisma.core_db.dao.AttachmentDao
 import net.melisma.core_db.dao.MessageBodyDao
 import net.melisma.core_db.dao.MessageDao
+import net.melisma.core_db.dao.MessageFolderJunctionDao
+import net.melisma.core_db.dao.FolderDao
 import net.melisma.core_db.entity.AttachmentEntity
 import net.melisma.core_db.entity.MessageEntity
 import timber.log.Timber
@@ -34,10 +36,12 @@ class SingleMessageSyncWorker @AssistedInject constructor(
     @Assisted workerParams: WorkerParameters,
     private val mailApiServiceFactory: MailApiServiceFactory,
     private val messageDao: MessageDao,
+    private val folderDao: FolderDao,
     private val messageBodyDao: MessageBodyDao,
     private val attachmentDao: AttachmentDao,
     private val appDatabase: AppDatabase,
-    @Dispatcher(MailDispatchers.IO) private val ioDispatcher: CoroutineDispatcher
+    @Dispatcher(MailDispatchers.IO) private val ioDispatcher: CoroutineDispatcher,
+    private val messageFolderJunctionDao: MessageFolderJunctionDao
 ) : CoroutineWorker(appContext, workerParams) {
 
     companion object {
@@ -122,7 +126,6 @@ class SingleMessageSyncWorker @AssistedInject constructor(
                         id = messageLocalId,
                         messageId = fetchedMessage.remoteId ?: messageRemoteId,
                         accountId = accountId,
-                        folderId = fetchedMessage.folderId,
                         threadId = fetchedMessage.threadId,
                         subject = fetchedMessage.subject,
                         snippet = fetchedMessage.bodyPreview,
@@ -145,6 +148,14 @@ class SingleMessageSyncWorker @AssistedInject constructor(
                         lastSyncError = null
                     )
                     messageDao.insertOrUpdateMessages(listOf(messageEntity))
+
+                    // Map remote folder ID to local folder UUID if possible
+                    val localFolderId = fetchedMessage.folderId?.let { remoteFid ->
+                        folderDao.getFolderByAccountIdAndRemoteId(accountId, remoteFid)?.id
+                    }
+                    if (localFolderId != null) {
+                        messageFolderJunctionDao.replaceFoldersForMessage(messageLocalId, listOf(localFolderId))
+                    }
 
                     // 2. Update MessageBodyEntity
                     val bodyContent = fetchedMessage.body

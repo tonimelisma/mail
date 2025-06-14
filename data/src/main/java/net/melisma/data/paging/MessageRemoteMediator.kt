@@ -137,11 +137,14 @@ class MessageRemoteMediator(
 
                     val messageEntities = messagesFromApi.map {
                         it.toEntity(
-                            accountId = accountId,
-                            folderId = this.folderId
+                            accountId = accountId
                         )
                     }
+                    val junctions = messageEntities.map { me ->
+                        net.melisma.core_db.entity.MessageFolderJunction(me.id, this.folderId)
+                    }
                     messageDao.insertOrUpdateMessages(messageEntities)
+                    database.messageFolderJunctionDao().insertAll(junctions)
                     Timber.d("load() for $accountId/${this.folderId}: Inserted/Updated ${messageEntities.size} messages into DB.")
                 }
 

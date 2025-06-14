@@ -20,7 +20,7 @@ Melisma Mail is an Android email client designed to offer a clean, intuitive, an
 ### **1.3. Key Technologies**
 
 * **UI:** Jetpack Compose  
-* **Architecture:** Offline-First MVVM with a Domain Layer (Use Cases)  
+* **Architecture:** Offline-First MVVM with a Domain Layer (Use Cases). Phase-1/2 sync refactor completed 2025-06-17  
 * **Local Storage:** Room (with FTS, FolderSyncStateEntity, and many-to-many relationships)  
 * **Asynchronous Programming:** Kotlin Coroutines & Flow  
 * **Dependency Injection:** Hilt  

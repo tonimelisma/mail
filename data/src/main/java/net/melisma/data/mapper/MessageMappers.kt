@@ -9,13 +9,13 @@ import java.time.format.DateTimeParseException
 
 // net.melisma.core_data.model.Message is now the enriched domain model
 
-fun Message.toEntity(accountId: String, folderId: String): MessageEntity {
+fun Message.toEntity(accountId: String): MessageEntity {
     val receivedTs = try {
         OffsetDateTime.parse(this.receivedDateTime).toInstant().toEpochMilli()
     } catch (e: DateTimeParseException) {
         Timber.w(
             e,
-            "Failed to parse receivedDateTime: '${this.receivedDateTime}'. Defaulting to 0L for accountId: $accountId, folderId: $folderId, messageId: ${this.id}"
+            "Failed to parse receivedDateTime: '${this.receivedDateTime}'. Defaulting to 0L for accountId: $accountId, messageId: ${this.id}"
         )
         0L
     }
@@ -26,7 +26,7 @@ fun Message.toEntity(accountId: String, folderId: String): MessageEntity {
         } catch (e: DateTimeParseException) {
             Timber.w(
                 e,
-                "Failed to parse sentDateTime: '$it'. Defaulting to null for accountId: $accountId, folderId: $folderId, messageId: ${this.id}"
+                "Failed to parse sentDateTime: '$it'. Defaulting to null for accountId: $accountId, messageId: ${this.id}"
             )
             null
         }
@@ -36,7 +36,6 @@ fun Message.toEntity(accountId: String, folderId: String): MessageEntity {
         id = this.id,
         messageId = this.remoteId,
         accountId = accountId,
-        folderId = folderId,
         threadId = this.threadId,
         subject = this.subject,
         snippet = this.bodyPreview,
@@ -81,7 +80,7 @@ fun MessageEntity.toDomainModel(): Message {
         id = this.id,
         remoteId = this.messageId,
         accountId = this.accountId,
-        folderId = this.folderId,
+        folderId = "",
         threadId = this.threadId,
         receivedDateTime = receivedDateTimeStr,
         sentDateTime = sentDateTimeStr,
@@ -101,4 +100,12 @@ fun MessageEntity.toDomainModel(): Message {
         lastSuccessfulSyncTimestamp = this.lastSuccessfulSyncTimestamp,
         isOutbox = this.isOutbox
     )
+}
+
+// Legacy overload kept for transitional compilation; folderId now handled via junction
+fun Message.toEntity(accountId: String, folderId: String): MessageEntity = this.toEntity(accountId)
+
+// Context-aware overload that injects the provided folderId for UI convenience
+fun MessageEntity.toDomainModel(folderIdContext: String): Message {
+    return this.toDomainModel().copy(folderId = folderIdContext)
 } 

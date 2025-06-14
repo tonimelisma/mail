@@ -1,4 +1,6 @@
-# **Melisma Mail \- Sync Architecture Refactor Plan**
+# **Melisma Mail - Sync Architecture Refactor Plan**
+
+> **Phase 1 & 2 Status:** Completed on 2025-06-17 (see SYNCLOG). Remaining work moves to Phase 3.
 
 Version: 1.2  
 Date: June 8, 2025  

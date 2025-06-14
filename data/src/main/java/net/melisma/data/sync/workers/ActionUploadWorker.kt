@@ -205,7 +205,7 @@ class ActionUploadWorker @AssistedInject constructor(
                     val localMessage = messageDao.getMessageByIdSuspend(action.entityId)
                         ?: throw IllegalStateException("Local message ${action.entityId} not found for create-draft.")
 
-                    val updatedEntity = serverMessage.toEntity(action.accountId, localMessage.folderId).copy(
+                    val updatedEntity = serverMessage.toEntity(action.accountId).copy(
                         id = localMessage.id,
                         syncStatus = EntitySyncStatus.SYNCED,
                         lastSyncError = null,
@@ -245,7 +245,7 @@ class ActionUploadWorker @AssistedInject constructor(
             if (updateResult.isSuccess) {
                 val serverMessage = updateResult.getOrThrow()
                 appDatabase.withTransaction {
-                    val updatedEntity = serverMessage.toEntity(action.accountId, localMessage.folderId).copy(
+                    val updatedEntity = serverMessage.toEntity(action.accountId).copy(
                         id = localMessage.id,
                         syncStatus = EntitySyncStatus.SYNCED,
                         lastSyncError = null,
