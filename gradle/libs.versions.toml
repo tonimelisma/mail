@@ -1,7 +1,7 @@
 # File: gradle/libs.versions.toml
 
 [versions]
-agp = "8.9.3" # Assuming this is your AGP version, adjust if different
+agp = "8.10.1" # Assuming this is your AGP version, adjust if different
 kotlin = "2.1.10"
 kotlinxSerialization = "1.7.3"
 ktor = "2.3.12"
