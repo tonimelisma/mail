@@ -73,6 +73,9 @@ The new architecture will be centered around a SyncController singleton. Key cha
    * **Action**: Implement the Foreground Service to be managed by the SyncController during a new account's initial sync.
 3. **Final Cleanup:**  
    * **Action**: Search the codebase for any remaining references to SyncEngine, RemoteMediator, and old Worker classes, and remove them.
+4. **New Progress:**
+   * **Action**: Implement the Cache eviction job wiring and per-account mutex.
+   * **Status**: Completed on 2025-06-20 – SyncJob.EvictFromCache now delegates to CacheCleanupWorker via SyncWorkManager; SyncController enforces one active network op per account (see SYNCLOG 2025-06-20).
 
 ## **5\. Core Implementation Guarantees**
 
@@ -85,3 +88,4 @@ The new architecture will be centered around a SyncController singleton. Key cha
 >   • *Phase-1-E2* (Schema & Pref Wiring) **completed** – junction/state DAOs added, backup rules updated, SyncController observes initialSyncDuration.  
 >   • *Phase-1-F* (FolderId removal) **completed** – see SYNCLOG 2025-06-17.  
 >   • *Phase-3-A* (Remove RemoteMediator & DB-only paging) **completed** – MessageRemoteMediator removed from repository, self-perpetuating SyncController pagination implemented. Build green.
+>   • *Phase-A (Toolchain Upgrade)* **completed** – Kotlin 2.1.21, KSP 2.1.21-2.0.2, Compose BOM 2025.06.00 integrated (SYNCLOG 2025-06-20).

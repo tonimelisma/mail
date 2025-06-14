@@ -11,6 +11,7 @@ import net.melisma.data.sync.workers.AttachmentDownloadWorker
 import net.melisma.data.sync.workers.FolderContentSyncWorker
 import net.melisma.data.sync.workers.FolderSyncWorker
 import net.melisma.data.sync.workers.MessageBodyDownloadWorker
+import net.melisma.data.sync.workers.CacheCleanupWorker
 import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -92,6 +93,15 @@ class SyncWorkManager @Inject constructor(private val workManager: WorkManager) 
                 .putString(AttachmentDownloadWorker.KEY_MESSAGE_ID, messageId)
                 .putString(AttachmentDownloadWorker.KEY_ATTACHMENT_ID, attachmentId)
                 .build())
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .build()
+        workManager.enqueueUniqueWork(workName, ExistingWorkPolicy.KEEP, workRequest)
+    }
+
+    fun enqueueCacheCleanup() {
+        val workName = "CacheCleanup"
+        Timber.d("$TAG: Enqueueing cache cleanup work. WorkName: $workName")
+        val workRequest = OneTimeWorkRequestBuilder<CacheCleanupWorker>()
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .build()
         workManager.enqueueUniqueWork(workName, ExistingWorkPolicy.KEEP, workRequest)

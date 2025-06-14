@@ -20,6 +20,8 @@ import androidx.room.withTransaction
 import net.melisma.data.mapper.toEntity
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
+import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.delay
 
 @Singleton
 class SyncController @Inject constructor(
@@ -40,6 +42,8 @@ class SyncController @Inject constructor(
     private var pollingJob: kotlinx.coroutines.Job? = null
 
     private val ACTIVE_POLL_INTERVAL_MS = 5_000L
+
+    private val activeAccounts = ConcurrentHashMap.newKeySet<String>()
 
     init {
         externalScope.launch {
@@ -71,6 +75,15 @@ class SyncController @Inject constructor(
     private suspend fun run() {
         while (true) {
             val job = queue.take()
+
+            // Per-account concurrency guard: Skip if another job for the same account is already running.
+            if (activeAccounts.contains(job.accountId)) {
+                // Requeue and yield to avoid busy loop
+                queue.put(job)
+                kotlinx.coroutines.delay(100)
+                continue
+            }
+            activeAccounts.add(job.accountId)
             _status.value = _status.value.copy(isSyncing = true, currentJob = job.toString())
             Timber.i("Processing job: $job")
 
@@ -95,13 +108,17 @@ class SyncController @Inject constructor(
                     is SyncJob.FetchMessageHeaders -> handleFetchMessageHeaders(job)
                     is SyncJob.FetchNextMessageListPage -> handleFetchNextPage(job)
                     is SyncJob.SearchOnline -> Timber.w("No-op handler for SearchOnline")
-                    is SyncJob.EvictFromCache -> Timber.w("No-op handler for EvictFromCache")
+                    is SyncJob.EvictFromCache -> {
+                        Timber.d("Handling EvictFromCache job for account ${job.accountId}")
+                        syncWorkManager.enqueueCacheCleanup()
+                    }
                 }
                 _status.value = _status.value.copy(error = null)
             } catch (e: Exception) {
                 Timber.e(e, "Error processing job: $job")
                 _status.value = _status.value.copy(error = e.message)
             } finally {
+                activeAccounts.remove(job.accountId)
                 _status.value = _status.value.copy(isSyncing = false, currentJob = null)
             }
         }

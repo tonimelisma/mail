@@ -70,7 +70,7 @@ _(Update 2025-06-19: Active & Passive polling implemented in code – see SyncCo
 
 ## **6\. Data Model & Concurrency**
 
-* **Concurrency:** One active network operation per account at any given time.  
+* **Concurrency:** One active network operation per account at any given time. _(Update 2025-06-20: Enforced in code via `SyncController` `activeAccounts` mutex.)_  
 * **Gmail & Labels (Unified Model):** A many-to-many relationship using a MessageFolderJunction table.
 
 ## **7\. Detailed Sync Policies & Edge Case Handling**

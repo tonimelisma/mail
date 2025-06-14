@@ -2,47 +2,47 @@
 
 [versions]
 agp = "8.10.1" # Assuming this is your AGP version, adjust if different
-kotlin = "2.1.10"
-kotlinxSerialization = "1.7.3"
-ktor = "2.3.12"
+kotlin = "2.1.21"
+kotlinxSerialization = "1.8.1"
+ktor = "2.3.9"
 coreKtx = "1.16.0"
 junit = "4.13.2"
 junitVersion = "1.2.1"
 espressoCore = "3.6.1"
-lifecycle = "2.9.0"
+lifecycle = "2.9.1"
 activityCompose = "1.10.1"
-composeBom = "2025.05.01"
+composeBom = "2025.06.00"
 composeMaterial = "1.8.2"
 materialViews = "1.12.0" # Added for traditional views Material Components
 
-msal = "6.0.0"
+msal = "6.0.1"
 hilt = "2.56.2" # Check for latest Hilt version
-coroutines = "1.9.0" # Updated to a more recent version of coroutines, e.g., 1.8.1
+coroutines = "1.10.2" # Updated to a more recent version of coroutines, e.g., 1.8.1
 room = "2.7.1" # Added Room version
 
 mockk = "1.14.2" # Check for latest
-turbine = "1.2.0" # Check for latest
+turbine = "1.2.1" # Check for latest
 
 # Google Play Services
 activityKtx = "1.10.1" # Check for latest
 
 googleIdLibrary = "1.1.1"
 
-kotlinxCoroutinesPlayServices = "1.9.0" # Added for Task.await() - match your main coroutines version
+kotlinxCoroutinesPlayServices = "1.10.2" # Added for Task.await() - match your main coroutines version
 
 # AppAuth for Android
 appAuth = "0.11.1" # Latest stable version as of May 2025
-appcompatViews = "1.7.0" # Added for traditional views
+appcompatViews = "1.7.1" # Added for traditional views
 # Browser for CustomTabs support
 browserCustomTabs = "1.8.0" # Latest stable version as of May 2025
 
-ksp = "2.1.10-1.0.29" # Ensured KSP version for Kotlin 2.0.0
+ksp = "2.1.21-2.0.2"
 datastorePreferences = "1.1.7" # <-- ADDED DATASTORE VERSION
 timber = "5.0.1" # Added Timber version
 navigationCompose = "2.9.0" # Added Navigation Compose version
 hiltNavigationCompose = "1.2.0" # Added Hilt Navigation Compose version
 paging = "3.3.6"
-workmanager = "2.9.0" # Added WorkManager version
+workmanager = "2.10.1" # Added WorkManager version
 androidxHilt = "1.2.0"  # Common version for androidx.hilt extensions like hilt-work, hilt-navigation-compose
 
 [libraries]

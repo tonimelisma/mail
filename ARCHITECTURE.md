@@ -82,6 +82,10 @@ All data synchronization is managed by the centralized **SyncController**. This 
 * **Technology:** Room FTS5 on MessageEntity for relevant fields (subject, sender, body snippet).  
 * **User Experience:** Local search results are displayed immediately. If the device is online, the SyncController concurrently executes a high-priority (Level 1\) SyncJob for a server-side search. Online results are clearly distinguished from local results.
 
+### **2.7. Concurrency**
+
+* **Concurrency:** One active network operation per account at any given time, enforced via an in-memory mutex in `SyncController` _(implemented 2025-06-20)_.  
+
 ## **3\. Test Strategy**
 
 * **Goals:** Verify correctness, ensure proper interaction, and prevent regressions, with a strong focus on the SyncController logic, prioritization, caching, and error handling.  
