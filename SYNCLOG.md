@@ -615,4 +615,30 @@ Respect the user's Initial-Sync-Duration preference by limiting first-time folde
 * Changing the preference after some folders have already synced will not retro-actively purge or re-download data; future improvement could add a "Resync from scratch" option.  
 * A dedicated Foreground Service for large initial syncs remains pending (Phase-4, Step 2 in SYNCPLAN).
 
+---
+
+## **Date: 2025-07-01**
+
+### **Developer:** ChatGPT-o3 (Automated)
+
+### **Increment Implemented – "Search Online ✨: End-to-End Remote Mail Search"**
+
+**Goal**
+Bring the search experience to parity with cloud inboxes by delivering full online search. When a user searches, local results appear instantly and high-priority background work fetches matching results from the provider, persisting them to the cache.
+
+**Work Completed**
+1. **SyncJob** – `SearchOnline` now carries an optional `folderId` allowing scoped searches.
+2. **DefaultMessageRepository** – `searchMessages()` now queues a `SyncJob.SearchOnline` before returning local Flow.
+3. **SyncController**
+   • Added `handleSearchOnline()` implementation (network call → upsert messages → map to folders via junction rows).
+   • Dispatcher now routes `SearchOnline` to the new handler (replacing NO-OP Timber).
+4. **DefaultSearchMessagesUseCase** – Stub removed; delegates to repository.
+5. **Docs** – Updated `SYNCVISION`, `SYNCPLAN`, `BACKLOG`, and `ARCHITECTURE` to reflect remote-search availability; Requirement **6.2** moved to **Partially Implemented**.
+6. **Build** – Full `./gradlew build` passes (**SUCCESS**).
+
+**Tech-Debt / Follow-ups**
+* Folder mapping for messages in unseen remote labels creates no local junction; consider creating placeholder folders.
+* Provider paging beyond 50 results not yet supported.
+* UI search screen remains TODO – integrate this pipeline once implemented.
+
 --- 

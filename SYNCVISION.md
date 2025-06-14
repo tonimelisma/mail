@@ -49,6 +49,7 @@ This level has absolute priority and will preempt any lower-priority work.
 * **1b. Predictive Scrolling:** When a user scrolls to the end of a message list, a `FetchNextMessageListPage` job is created to seamlessly load the next page.
 * **1c. Manual Refresh:** When a user executes a pull-to-refresh gesture, a `ForceRefreshFolder` job is created. This job will reset the paging token for the folder to ensure a full refresh.
 * **1d. Search:** When a user executes a search, a `SearchOnline` job is created.
+  _(Update 2025-07-01: Remote search implemented in code – see `SyncController.handleSearchOnline` and `SearchMessagesUseCase` wiring.)_
 
 ### **Priority Level 2: Fulfilling User Intent**
 

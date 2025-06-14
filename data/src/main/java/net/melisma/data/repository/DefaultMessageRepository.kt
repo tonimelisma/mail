@@ -392,6 +392,15 @@ class DefaultMessageRepository @Inject constructor(
     }
 
     override fun searchMessages(accountId: String, query: String, folderId: String?): Flow<List<Message>> {
+        // Enqueue a high-priority online search job; queue deduplication prevents spamming.
+        syncController.submit(
+            SyncJob.SearchOnline(
+                query = query,
+                folderId = folderId,
+                accountId = accountId
+            )
+        )
+
         return messageDao.searchMessages("%$query%", accountId, folderId)
             .map { entities -> entities.map { it.toDomainModel() } }
     }

@@ -61,6 +61,7 @@ The new architecture will be centered around a SyncController singleton. Key cha
 2. **Simplify Paging in Repository:**  
    * **Action**: Modify the Pager factory to use a DB-only PagingSource.  
    * **Note on UX Risk & Mitigation**: The removal of on-demand paging presents a risk. This is mitigated by the **Level 1 "Predictive Scrolling" job**, which ensures the SyncController will prioritize fetching the next page for the user's active folder above all background work.  
+   * _(Update 2025-07-01: Online search pipeline implemented – `SearchOnline` no longer a stub.)_
 3. **Consolidate Worker Logic into SyncController:**
    * **Action**: Port the logic from all ...Worker.kt files into private methods within SyncController and then delete the worker files.
 

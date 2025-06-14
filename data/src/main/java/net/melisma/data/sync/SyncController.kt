@@ -116,7 +116,7 @@ class SyncController @Inject constructor(
                     )
                     is SyncJob.FetchMessageHeaders -> handleFetchMessageHeaders(job)
                     is SyncJob.FetchNextMessageListPage -> handleFetchNextPage(job)
-                    is SyncJob.SearchOnline -> Timber.w("No-op handler for SearchOnline")
+                    is SyncJob.SearchOnline -> handleSearchOnline(job)
                     is SyncJob.EvictFromCache -> runCacheEviction(job.accountId)
                 }
                 _status.value = _status.value.copy(error = null)
@@ -774,5 +774,58 @@ class SyncController @Inject constructor(
     fun stopPassivePolling() {
         passivePollingJob?.cancel()
         passivePollingJob = null
+    }
+
+    private suspend fun handleSearchOnline(job: SyncJob.SearchOnline) {
+        withContext(ioDispatcher) {
+            // Skip if offline
+            if (!networkMonitor.isOnline.first()) {
+                Timber.i("Offline – skipping online search for query '${job.query}'")
+                return@withContext
+            }
+
+            val service = mailApiServiceSelector.getServiceByAccountId(job.accountId) ?: run {
+                Timber.w("MailApiService not found for account ${job.accountId}")
+                return@withContext
+            }
+
+            val result = service.searchMessages(
+                query = job.query,
+                folderId = job.folderId,
+                maxResults = 50
+            )
+
+            if (result.isFailure) {
+                Timber.e(result.exceptionOrNull(), "Online search failed for '${job.query}'")
+                return@withContext
+            }
+
+            val messages = result.getOrThrow()
+
+            if (messages.isEmpty()) return@withContext
+
+            val messageDao = appDatabase.messageDao()
+            val folderDao = appDatabase.folderDao()
+            val junctionDao = appDatabase.messageFolderJunctionDao()
+
+            appDatabase.withTransaction {
+                // Upsert messages
+                val entities = messages.map { it.toEntity(job.accountId) }
+                messageDao.insertOrUpdateMessages(entities)
+
+                // Link messages to folders when we can resolve the local folder ID
+                entities.forEachIndexed { index, entity ->
+                    val domainMsg = messages[index]
+                    val remoteFolderId = job.folderId ?: domainMsg.folderId
+                    if (!remoteFolderId.isNullOrBlank()) {
+                        val localFolder = folderDao.getFolderByAccountIdAndRemoteId(job.accountId, remoteFolderId)
+                        if (localFolder != null) {
+                            junctionDao.insertAll(listOf(MessageFolderJunction(entity.id, localFolder.id)))
+                        }
+                    }
+                }
+            }
+            Timber.d("Online search stored ${messages.size} results for query '${job.query}' (account ${job.accountId})")
+        }
     }
 } 

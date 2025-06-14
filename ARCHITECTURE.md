@@ -83,7 +83,7 @@ All data synchronization is managed by the centralized **SyncController**. This 
 ### **2.6. Local Search**
 
 * **Technology:** Room FTS5 on MessageEntity for relevant fields (subject, sender, body snippet).  
-* **User Experience:** Local search results are displayed immediately. If the device is online, the SyncController concurrently executes a high-priority (Level 1\) SyncJob for a server-side search. Online results are clearly distinguished from local results.
+* **User Experience:** Local search results are displayed immediately. If the device is online, the SyncController concurrently executes a high-priority (Level 1) `SyncJob.SearchOnline` for a server-side search. _(Implemented 2025-07-01)_ Remote results are persisted in Room and flow into the same UI list.
 
 ### **2.7. Concurrency**
 

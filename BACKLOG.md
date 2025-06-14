@@ -92,8 +92,8 @@
 
 * **Requirement 6.1 (Move Message):** As a user, I want to move messages between folders.  
   * **Status: Implemented**  
-* **Requirement 6.2 (Advanced Search Filters):** As a user, I want to search emails using advanced filters (local FTS \+ online).  
-  * **Status: Planned** (Local FTS is implemented, online search depends on SyncController).  
+* **Requirement 6.2 (Advanced Search Filters):** As a user, I want to search emails using advanced filters (local FTS + online).  
+  * **Status: Partially Implemented (2025-07-01)** – Online search pipeline delivered via `SyncJob.SearchOnline`; UI filter options & complex query parser still pending.  
 * **Requirement 6.3 (Junk/Spam Management):** As a user, I want to mark emails as junk/spam.  
   * **Status: Pending**  
 * **Requirement 6.4 (Folder Management):** As a user, I want to create, rename, and delete custom mail folders.  

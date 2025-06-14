@@ -1,6 +1,6 @@
-Read @SYNCVISION.md, @SYNCPLAN.md, @SYNCLOG.md, @BACKLOG.md and@ARCHITECTURE.md. What would be the next best working increment we should implement? Do we need to fix some tech debt or move forward with new functionality?
+Read @SYNCVISION.md, @SYNCPLAN.md, @SYNCLOG.md, @BACKLOG.md and@ARCHITECTURE.md. What would be the next best working increment we should implement? Do we need to fix some tech debt or move forward with new functionality? Let's make it a significant amount of work. You can do large increments at once.
 
-1. Define a well-sized increment of work to do next. Should you tackle tech debt or implement new functionality to move towards the vision? Explain clearly the body of work you seek to accomplish and the outcomes.
+1. Define a REALLY LARGE increment of work to do next. Should you tackle tech debt or implement new functionality to move towards the vision, or maybe a mix of both? Explain clearly the body of work you seek to accomplish and the outcomes.
 2. Don't trust the markdown documents. Read the code as it is today on disk to understand its state and reason about it.
 3. Create a detailed plan, step by step on changes needed. Show it to me.
 4. Where are the soft spots in your analysis? Enumerate them to me.

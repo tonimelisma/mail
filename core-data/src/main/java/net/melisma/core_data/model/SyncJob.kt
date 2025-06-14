@@ -18,8 +18,11 @@ sealed class SyncJob(open val accountId: String, val priority: Int) :
     data class ForceRefreshFolder(val folderId: String, override val accountId: String) :
         SyncJob(accountId, 88)
 
-    data class SearchOnline(val query: String, override val accountId: String) :
-        SyncJob(accountId, 85)
+    data class SearchOnline(
+        val query: String,
+        val folderId: String? = null,
+        override val accountId: String
+    ) : SyncJob(accountId, 85)
 
     // Level 2: Fulfilling User Intent - Uploading user-generated changes.
     data class UploadAction(
