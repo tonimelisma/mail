@@ -470,7 +470,8 @@ class SyncController @Inject constructor(
             }
 
             val data = result.getOrThrow()
-            val dir = java.io.File(appContext.filesDir, "attachments/${job.messageId}")
+            // Store attachments inside the no_backup directory so they are excluded from cloud backups
+            val dir = java.io.File(appContext.noBackupFilesDir, "attachments/${job.messageId}")
             if (!dir.exists()) dir.mkdirs()
             val file = java.io.File(dir, attachment.fileName)
             file.outputStream().use { it.write(data) }

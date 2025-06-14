@@ -16,8 +16,8 @@
   * **Status: Completed (2025-06-25)**
 * **Requirement 0.6 (Integrate Initial Sync Duration):** As a developer, I want to integrate the existing user preference for "initial sync duration" into the SyncController's initial sync mode.
   * **Status: To Do**
-* **Requirement 0.7 (Isolate Attachments for Backup Exclusion):** As a developer, I want all downloaded attachments to be saved to a dedicated attachments/ directory which is excluded from cloud backups, as defined in the Phase 1 of the sync plan.
-  * **Status: In Progress**
+* **Requirement 0.7 (Isolate Attachments for Backup Exclusion):** As a developer, I want all downloaded attachments to be saved to a dedicated attachments/ directory inside the no_backup area which the platform never backs up.
+  * **Status: Completed (2025-06-26)**
 * **Requirement 0.8 (Polling Lifecycle – Foreground & Background):** Implement 5-second active polling and 15-minute passive WorkManager job to queue low-priority freshness jobs.  
   * **Status: Completed (2025-06-19)**
 

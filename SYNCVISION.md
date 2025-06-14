@@ -100,3 +100,5 @@ The backup\_rules.xml file will be configured to exclude the Room database and t
 * **Priority:** It evicts the least recently used data first, prioritizing the removal of attachments, then message bodies, and finally message headers.
 
 _(Update 2025-06-25: Cache eviction algorithm implemented in code – see SyncController.runCacheEviction.)_
+
+_(Update 2025-06-26: Attachment storage moved to `Context.noBackupFilesDir` and backup_rules.xml updated; Requirement 0.7 completed.)_

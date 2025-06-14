@@ -9,6 +9,6 @@
     <!-- Exclude all Room database files -->
     <exclude domain="database" path="." />
 
-    <!-- Exclude downloaded attachments directory (stored inside files/attachments) -->
-    <exclude domain="file" path="attachments/" />
+    <!-- Exclude downloaded attachments directory (stored inside no_backup/attachments) -->
+    <exclude domain="file" path="no_backup/attachments/" />
 </full-backup-content>

@@ -40,7 +40,8 @@ The new architecture will be centered around a SyncController singleton. Key cha
      2. Create the FolderSyncStateEntity table (columns: folderId, nextPageToken).  
      3. Update the MessageEntity table (remove folderId).  
 4. **Update Backup Configuration:**  
-   * **Action**: Modify backup\_rules.xml to exclude the database and the attachments/ directory.
+   * **Action**: Modify backup\_rules.xml to exclude the database and the attachments/ directory inside no_backup.
+   * **Status:** Completed on 2025-06-26 – backup_rules.xml now excludes <code>no_backup/attachments/</code> and SyncController writes downloaded attachments there.
 5. **Integrate User Preferences:**
    * **Action**: Inject `UserPreferencesRepository` into the `SyncController`.
    * **Action**: During initial sync, the controller will read the `initialSyncDurationDays` preference and pass a calculated date filter to the backend services to limit the scope of the sync.

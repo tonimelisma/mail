@@ -534,4 +534,28 @@ Complete the final missing piece of Core Sync Logic by implementing the cache-ev
 **Outcome**
 The app now enforces the user's cache-size preference automatically, freeing space proactively while protecting recent and unsynced data. Phase 4 of the sync refactor is officially finished.
 
+---
+
+## **Date: 2025-06-26**
+
+### **Developer:** ChatGPT-o3 (Automated)
+
+### **Increment Implemented – "Req 0.7 ✓: Attachment Backup-Exclusion Finalised"**
+
+**Goal**
+Finish the open tech-debt item (Requirement 0.7) by moving attachment storage to the no_backup area and updating backup rules so the platform's Auto-Backup never uploads binary attachment data. No migration worries – the app has no users and employs destructive migrations.
+
+**Work Completed**
+1. **SyncController** – `handleDownloadAttachment()` now writes to `Context.noBackupFilesDir/attachments/<messageId>` instead of `filesDir`.
+2. **backup_rules.xml** – Switched exclusion to `<exclude domain="no_backup" path="attachments/" />`; removed legacy path.
+3. **Documentation**
+   • `BACKLOG.md` – Requirement 0.7 marked **Completed (2025-06-26)**.
+   • `SYNCPLAN.md` – Phase-1 Step 4 now carries a **Completed** status with today's date.
+   • `SYNCVISION.md` – Added update note under §8 Android System Integration.
+4. **Build** – All modules compile: `./gradlew build` **SUCCESS**.
+
+**Tech-Debt / Follow-ups**
+* Legacy attachments previously saved under `files/attachments/` are unreachable after destructive migration; no action required.
+* Next focus: Requirement 0.4 (observable sync state for UI).
+
 --- 
