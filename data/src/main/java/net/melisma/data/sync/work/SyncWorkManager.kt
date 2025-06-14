@@ -8,7 +8,6 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import net.melisma.data.sync.workers.ActionUploadWorker
 import net.melisma.data.sync.workers.AttachmentDownloadWorker
-import net.melisma.data.sync.workers.FolderContentSyncWorker
 import net.melisma.data.sync.workers.FolderSyncWorker
 import net.melisma.data.sync.workers.MessageBodyDownloadWorker
 import net.melisma.data.sync.workers.CacheCleanupWorker
@@ -31,20 +30,6 @@ class SyncWorkManager @Inject constructor(private val workManager: WorkManager) 
         Timber.d("$TAG: Enqueueing folder sync for account $accountId. WorkName: $workName")
         val workRequest = OneTimeWorkRequestBuilder<FolderSyncWorker>()
             .setInputData(Data.Builder().putString(FolderSyncWorker.KEY_ACCOUNT_ID, accountId).build())
-            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-            .build()
-        workManager.enqueueUniqueWork(workName, ExistingWorkPolicy.KEEP, workRequest)
-    }
-
-    fun enqueueFolderContentSync(accountId: String, folderId: String, isManualRefresh: Boolean) {
-        val workName = "FolderContentSync-$folderId"
-        Timber.d("$TAG: Enqueueing folder content sync for folder $folderId. WorkName: $workName, isManual: $isManualRefresh")
-        val workRequest = OneTimeWorkRequestBuilder<FolderContentSyncWorker>()
-            .setInputData(Data.Builder()
-                .putString(FolderContentSyncWorker.KEY_ACCOUNT_ID, accountId)
-                .putString(FolderContentSyncWorker.KEY_FOLDER_ID, folderId)
-                .putBoolean(FolderContentSyncWorker.KEY_IS_MANUAL_REFRESH, isManualRefresh)
-                .build())
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .build()
         workManager.enqueueUniqueWork(workName, ExistingWorkPolicy.KEEP, workRequest)

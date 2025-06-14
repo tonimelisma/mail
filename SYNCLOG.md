@@ -366,4 +366,26 @@ Begin Worker consolidation by moving `FolderContentSyncWorker` logic directly in
 * Delete obsolete `FolderContentSyncWorker` and its enqueue helper once no call-sites remain.  
 * Repeat consolidation for `MessageBodyDownloadWorker`, `AttachmentDownloadWorker`, etc.
 
+---
+
+## **Date: 2025-06-21**
+
+### **Developer:** ChatGPT-o3 (Automated)
+
+### **Increment Implemented – "Phase-4 B³: Delete FolderContentSyncWorker"
+
+**Goal**
+Finish consolidation of folder content refresh by removing the now-unused `FolderContentSyncWorker` and its enqueue helper.
+
+### **Work Completed**
+1. **`SyncWorkManager`** – Removed `enqueueFolderContentSync()` and import of `FolderContentSyncWorker`.
+2. **Deleted Files**  
+   • `data/sync/workers/FolderContentSyncWorker.kt`  
+   • `data/sync/SyncEngine.kt` (legacy, unused).  
+3. **Build** – Full project build succeeds.
+
+### **Next Steps**
+* Internalize `FolderSyncWorker` logic and delete the worker.  
+* Begin consolidation of `MessageBodyDownloadWorker` & `AttachmentDownloadWorker`.
+
 --- 
