@@ -323,58 +323,47 @@ Deliver foreground 5-second polling and background 15-minute passive polling tha
 
 ---
 
-## **Date: 2025-06-20**
-
-### **Developer:** ChatGPT-o3 (Automated)
-
-### **Increment Implemented – "Phase-4 B¹: Cache Eviction Job & Concurrency Guard"**
-
-**Goal**
-Deliver the first slice of Phase-4 B by wiring the low-priority `EvictFromCache` SyncJob to the existing `CacheCleanupWorker` and adding the per-account concurrency mutex inside `SyncController` (as required by SYNCVISION §6). This reduces technical debt and unlocks future worker consolidation work.
-
-### **Work Completed**
-1. **SyncWorkManager**  
-   • Added `enqueueCacheCleanup()` helper that schedules a unique `CacheCleanupWorker` job with network-connected constraints.
-2. **SyncController**  
-   • Integrated an in-memory `activeAccounts` mutex (using `ConcurrentHashMap.newKeySet`) that guarantees only one active network operation per account.  
-   • Implemented handler for `SyncJob.EvictFromCache` → delegates to `syncWorkManager.enqueueCacheCleanup()`.  
-   • Added lightweight back-off (100 ms) when a job collides with an active account before re-queuing.
-3. **Imports & Utilities**  
-   • Added missing `import kotlinx.coroutines.delay` and `import java.util.concurrent.ConcurrentHashMap` to `SyncController.kt`.  
-   • Synced new worker import in `SyncWorkManager.kt`.
-4. **Documentation Updates**  
-   • This SYNCLOG entry; other high-level docs updated inline in their respective files.
-
-### **Outcome**
-* The project continues to build clean (`./gradlew build --no-daemon`).  
-* Low-priority cache eviction can now be triggered by submitting `SyncJob.EvictFromCache`, paving the way to delete the legacy `SyncEngine`-based scheduler.  
-* Per-account network concurrency is now enforced by the controller, matching SYNCVISION §6.
-
-### **Next Steps**
-1. **Phase-4 B²** – Route remaining legacy workers (`FolderContentSyncWorker`, `FolderSyncWorker`, `MessageBodyDownloadWorker`, etc.) to internal controller handlers and delete RemoteKey DAO/Entity.  
-2. **Phase-4 C** – Expose global `SyncControllerStatus` in UI; implement status bar component.  
-3. Schedule automatic `EvictFromCache` triggers when cache size exceeds user limit.
-
----
-
-## **Date: 2025-06-20 (Cont.)**
+## **Date: 2025-06-20 (Cont. 1)**
 
 ### **Developer:** ChatGPT-o3 (Automated)
 
 ### **Increment Implemented – "Phase-A-Toolchain: Kotlin 2.1.21 & Compose 1.8"
 
 **Goal**
-Upgrade core tool-chain components (Kotlin, KSP, Compose BOM) to the latest stable versions that exist in Maven Central while keeping a green build. This unblocks future library bumps (Coroutines, Room, WorkManager, etc.) and keeps us within JetBrains' LTS window.
+Upgrade core tool-chain components (Kotlin, KSP, Compose BOM) to the latest stable versions available in Google / MavenCentral. This unblocks future runtime library upgrades and keeps us on JetBrains' LTS track.
 
 ### **Work Completed**
 1. **`gradle/libs.versions.toml`**  
    • `kotlin` → **2.1.21**  
-   • `ksp`    → **2.1.21-2.0.2** (first stable build for Kotlin 2.1.21)  
-   • `composeBom` → **2025.06.00** (latest stable as per Google docs).  
-2. **Build** – Ran full `./gradlew build` successfully; lint warnings only.
+   • `ksp`    → **2.1.21-2.0.2**  
+   • `composeBom` → **2025.06.00** (latest stable).  
+2. **Build** – Full `./gradlew build` succeeds (warnings only).
 
 ### **Outcome**
-* Entire multi-module project compiles on Kotlin 2.1.21 + Compose 1.8.x.  
-* Provides foundation for Phase-B runtime lib upgrades.
+* Project compiles on latest stable Kotlin & Compose. Provides foundation for runtime lib bumps.
+
+---
+
+## **Date: 2025-06-20 (Cont. 2)**
+
+### **Developer:** ChatGPT-o3 (Automated)
+
+### **Increment Implemented – "Phase-4 B²: Internal Folder Refresh Handler"
+
+**Goal**
+Begin Worker consolidation by moving `FolderContentSyncWorker` logic directly into `SyncController` so that Level-1 `ForceRefreshFolder` and Level-2 `RefreshFolderContents` jobs execute without WorkManager.
+
+### **Work Completed**
+1. **SyncController**  
+   • Added `handleForceRefreshFolder()` with full DB transaction, junction updates, and page-token recursion.  
+   • Re-routed job dispatcher to use the new handler instead of WorkManager.  
+   • Added imports for `EntitySyncStatus`, `MessageFolderJunction`, and `FolderSyncStateEntity`.
+2. **FolderSyncStateEntity field mismatch**  
+   • Fixed parameter name `lastSyncedTimestamp` in both existing `processFetchHeaders()` and new handler.
+3. **Build** – `./gradlew build` passes after fixes.
+
+### **Next Steps**
+* Delete obsolete `FolderContentSyncWorker` and its enqueue helper once no call-sites remain.  
+* Repeat consolidation for `MessageBodyDownloadWorker`, `AttachmentDownloadWorker`, etc.
 
 --- 

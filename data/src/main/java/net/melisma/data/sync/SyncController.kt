@@ -22,6 +22,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.delay
+import net.melisma.core_data.model.EntitySyncStatus
+import net.melisma.core_db.entity.MessageFolderJunction
+import net.melisma.core_db.entity.FolderSyncStateEntity
 
 @Singleton
 class SyncController @Inject constructor(
@@ -90,9 +93,14 @@ class SyncController @Inject constructor(
             try {
                 when (job) {
                     is SyncJob.SyncFolderList -> syncWorkManager.enqueueFolderSync(job.accountId)
-                    is SyncJob.ForceRefreshFolder -> syncWorkManager.enqueueFolderContentSync(job.accountId, job.folderId, true)
+                    is SyncJob.ForceRefreshFolder -> handleForceRefreshFolder(job)
                     is SyncJob.DownloadMessageBody -> syncWorkManager.enqueueMessageBodyDownload(job.accountId, job.messageId)
-                    is SyncJob.RefreshFolderContents -> syncWorkManager.enqueueFolderContentSync(job.accountId, job.folderId, true)
+                    is SyncJob.RefreshFolderContents -> handleForceRefreshFolder(
+                        SyncJob.ForceRefreshFolder(
+                            accountId = job.accountId,
+                            folderId = job.folderId
+                        )
+                    )
                     is SyncJob.UploadAction -> syncWorkManager.enqueueActionUpload(
                         accountId = job.accountId,
                         actionType = job.actionType,
@@ -187,16 +195,84 @@ class SyncController @Inject constructor(
 
             // Persist state
             appDatabase.folderSyncStateDao().upsert(
-                net.melisma.core_db.entity.FolderSyncStateEntity(
-                    folderId,
-                    paged.nextPageToken,
-                    System.currentTimeMillis()
+                FolderSyncStateEntity(
+                    folderId = folderId,
+                    nextPageToken = paged.nextPageToken,
+                    lastSyncedTimestamp = System.currentTimeMillis()
                 )
             )
         }
 
         if (paged.nextPageToken != null) {
             submit(SyncJob.FetchMessageHeaders(folderId, paged.nextPageToken, accountId))
+        }
+    }
+
+    private suspend fun handleForceRefreshFolder(job: SyncJob.ForceRefreshFolder) {
+        kotlinx.coroutines.withContext(ioDispatcher) {
+            // Abort early if offline
+            if (!networkMonitor.isOnline.first()) {
+                Timber.i("Offline – skipping ForceRefreshFolder for ${job.folderId}")
+                return@withContext
+            }
+
+            val folderDao = appDatabase.folderDao()
+            val messageDao = appDatabase.messageDao()
+            val junctionDao = appDatabase.messageFolderJunctionDao()
+
+            val localFolder = folderDao.getFolderByIdSuspend(job.folderId) ?: run {
+                Timber.w("Folder ${job.folderId} not found; dropping ForceRefreshFolder job")
+                return@withContext
+            }
+
+            val apiFolderId = localFolder.remoteId ?: job.folderId
+
+            folderDao.updateSyncStatus(job.folderId, EntitySyncStatus.PENDING_DOWNLOAD)
+
+            val service = mailApiServiceSelector.getServiceByAccountId(job.accountId) ?: run {
+                Timber.w("MailApiService not found for account ${job.accountId}")
+                return@withContext
+            }
+
+            val response = service.getMessagesForFolder(
+                folderId = apiFolderId,
+                maxResults = 50,
+                pageToken = null
+            )
+
+            if (response.isFailure) {
+                val ex = response.exceptionOrNull()
+                Timber.e(ex, "ForceRefreshFolder failed for ${job.folderId}")
+                folderDao.updateSyncStatusAndError(job.folderId, EntitySyncStatus.ERROR, ex?.message)
+                return@withContext
+            }
+
+            val paged = response.getOrThrow()
+            val msgEntities = paged.messages.map { it.toEntity(job.accountId) }
+
+            appDatabase.withTransaction {
+                messageDao.deleteMessagesByFolder(job.folderId)
+                junctionDao.deleteByFolder(job.folderId)
+
+                messageDao.insertOrUpdateMessages(msgEntities)
+                val junctions = msgEntities.map { me -> MessageFolderJunction(me.id, job.folderId) }
+                junctionDao.insertAll(junctions)
+
+                folderDao.updateLastSuccessfulSync(job.folderId, System.currentTimeMillis())
+
+                appDatabase.folderSyncStateDao().upsert(
+                    FolderSyncStateEntity(
+                        folderId = job.folderId,
+                        nextPageToken = paged.nextPageToken,
+                        lastSyncedTimestamp = System.currentTimeMillis()
+                    )
+                )
+            }
+
+            // Queue next page if exists
+            if (paged.nextPageToken != null) {
+                submit(SyncJob.FetchMessageHeaders(job.folderId, paged.nextPageToken, job.accountId))
+            }
         }
     }
 
