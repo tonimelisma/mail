@@ -103,7 +103,7 @@
     <string name="toast_signed_in_as">Signed in as %1$s</string>
     <string name="label_mail_folders">Mail Folders</string>
     <string name="label_no_folders_for_account">No folders found for this account.</string>
-    <string name="label_loading_folders">Loading folders...</string>
+    <string name="label_loading_folders">Loading folders…</string>
     <string name="label_error_loading_folders">Error loading folders.</string>
     <string name="btn_retry_folders">Retry</string>
 
@@ -111,7 +111,7 @@
 
     <!-- Added missing strings -->
     <string name="unknown_error">An unknown error occurred.</string>
-    <string name="loading_more_messages">Loading more messages...</string>
+    <string name="loading_more_messages">Loading more messages…</string>
     <string name="error_loading_more_failed">Failed to load more: %1$s</string>
 
     <string name="error_moving_message">Error moving message</string>
@@ -133,7 +133,10 @@
     <string name="settings_cache_size_dialog_title">Select Cache Size</string>
     <string name="cache_size_gb">%1$d GB</string>
     <string name="cache_size_mb">%1$d MB</string>
-    <string name="cache_size_bytes">%1$d Bytes</string>
+    <plurals name="cache_size_bytes">
+        <item quantity="one">%1$d Byte</item>
+        <item quantity="other">%1$d Bytes</item>
+    </plurals>
 
     <string name="settings_cache_size_limit_dialog_title">Set Cache Size Limit</string>
     <string name="settings_cache_size_limit_dialog_desc">Select the maximum local storage for email bodies and attachments. Older items may be removed if this limit is exceeded.</string>

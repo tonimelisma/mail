@@ -19,6 +19,7 @@ msal = "6.0.1"
 hilt = "2.56.2" # Check for latest Hilt version
 coroutines = "1.10.2" # Updated to a more recent version of coroutines, e.g., 1.8.1
 room = "2.7.1" # Added Room version
+robolectric = "4.10.3"
 
 mockk = "1.14.2" # Check for latest
 turbine = "1.2.1" # Check for latest
@@ -107,6 +108,8 @@ javax-inject = { group = "javax.inject", name = "javax.inject", version = "1" }
 mockk-core = { group = "io.mockk", name = "mockk", version.ref = "mockk" }
 mockk-android = { group = "io.mockk", name = "mockk-android", version.ref = "mockk" }
 mockk-agent = { group = "io.mockk", name = "mockk-agent-jvm", version.ref = "mockk" }
+
+robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
 
 turbine = { group = "app.cash.turbine", name = "turbine", version.ref = "turbine" }
 

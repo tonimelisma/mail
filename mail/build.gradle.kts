@@ -125,7 +125,7 @@ dependencies {
     testImplementation(project(":backend-google"))
 
     testImplementation(libs.microsoft.msal)
-    testImplementation("org.robolectric:robolectric:4.10.3")
+    testImplementation(libs.robolectric)
     testImplementation(libs.kotlinx.coroutines.core)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.turbine)

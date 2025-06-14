@@ -2,8 +2,12 @@ package net.melisma.mail.ui.messagedetail
 
 import android.content.ActivityNotFoundException
 import android.content.Intent
-import android.net.Uri
 import android.webkit.WebView
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,8 +26,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
+import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -51,21 +55,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.net.toUri
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import net.melisma.core_data.model.Attachment
-import net.melisma.core_data.model.Message
 import net.melisma.mail.R
 import timber.log.Timber
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.togetherWith
 
 @OptIn(ExperimentalMaterial3Api::class, androidx.compose.animation.ExperimentalAnimationApi::class)
 @Composable
@@ -132,7 +131,9 @@ fun MessageDetailScreen(
                     Text(
                         text = overallMessageState.errorMessage,
                         color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.align(Alignment.Center).padding(16.dp)
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .padding(16.dp)
                     )
                 }
 
@@ -288,7 +289,7 @@ fun AttachmentCard(
             .height(120.dp)
             .clickable(enabled = displayState == ContentDisplayState.DOWNLOADED || displayState == ContentDisplayState.ERROR) {
                 if (displayState == ContentDisplayState.DOWNLOADED && !attachment.localUri.isNullOrEmpty()) {
-                    val uri = Uri.parse(attachment.localUri)
+                    val uri = attachment.localUri!!.toUri()
                     val intent = Intent(Intent.ACTION_VIEW).apply {
                         setDataAndType(uri, attachment.contentType ?: "*/*")
                         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)

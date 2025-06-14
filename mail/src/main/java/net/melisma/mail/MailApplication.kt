@@ -1,11 +1,10 @@
 package net.melisma.mail
 
 import android.app.Application
-import android.util.Log
+import androidx.lifecycle.ProcessLifecycleOwner
 import dagger.hilt.android.HiltAndroidApp
 import timber.log.Timber
 import javax.inject.Inject
-import androidx.lifecycle.ProcessLifecycleOwner
 
 /**
  * Custom Application class required by Hilt and for app-wide initializations like Timber.
@@ -20,7 +19,7 @@ class MailApplication : Application() {
     lateinit var syncLifecycleObserver: net.melisma.data.sync.SyncLifecycleObserver
 
     override fun onCreate() {
-        Log.d("MailApplication", "MailApplication: onCreate CALLED - Direct Log")
+        Timber.d("MailApplication: onCreate called")
         super.onCreate()
         Timber.d("MailApplication: onCreate called - Timber Log")
         Timber.i("MailApplication fully initialized.")

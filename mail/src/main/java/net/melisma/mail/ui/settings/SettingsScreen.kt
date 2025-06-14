@@ -47,6 +47,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -54,11 +55,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
 import net.melisma.core_data.model.Account
 import net.melisma.core_data.preferences.CacheSizePreference
-import net.melisma.core_data.preferences.MailViewModePreference
-import net.melisma.core_data.preferences.InitialSyncDurationPreference
 import net.melisma.core_data.preferences.DownloadPreference
-import net.melisma.mail.MainViewModel
+import net.melisma.core_data.preferences.InitialSyncDurationPreference
+import net.melisma.core_data.preferences.MailViewModePreference
 import net.melisma.mail.MainScreenState
+import net.melisma.mail.MainViewModel
 import net.melisma.mail.R
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -468,7 +469,7 @@ fun formatCacheSize(bytes: Long): String {
             stringResource(R.string.cache_size_mb, mb) // Placeholder: "%1$d MB"
         }
         else -> {
-            stringResource(R.string.cache_size_bytes, bytes) // Placeholder: "%1$d Bytes"
+            pluralStringResource(R.plurals.cache_size_bytes, bytes.toInt(), bytes)
         }
     }
 }

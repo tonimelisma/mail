@@ -17,7 +17,6 @@ import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import net.melisma.core_data.connectivity.NetworkMonitor
 import net.melisma.core_data.datasource.MailApiServiceSelector
@@ -130,7 +129,7 @@ class DefaultMessageRepository @Inject constructor(
     }
 
 
-    override suspend fun getMessageDetails(accountId: String, messageId: String): Flow<Message?> {
+    override suspend fun getMessageDetails(messageId: String, accountId: String): Flow<Message?> {
         externalScope.launch(ioDispatcher) {
             val message = messageDao.getMessageByIdSuspend(messageId)
             if (message != null) {
