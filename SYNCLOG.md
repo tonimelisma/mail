@@ -174,4 +174,29 @@ Continue Phase 1 refactor: finish wiring the PendingAction-first workflow, migra
 1. **Phase-1-E:** Database "nuke & pave" migration tables (MessageFolderJunction, FolderSyncStateEntity, MessageEntity schema change).
 2. Remove legacy Worker duplication once SyncController internal logic covers them.
 
+---
+
+## **Date: 2025-06-15 (Cont.)**
+
+### **Developer:** ChatGPT-o3 (Automated)
+
+### **Increment Implemented – "Phase-1-E: Initial DB Nuke-and-Pave"**
+
+**Goal:** Lay database groundwork for many-to-many model by introducing junction/state tables and bumping schema version.
+
+### **Work Completed**
+1. **Entities Added**
+   • `MessageFolderJunction` – bridges messages ↔ folders.  
+   • `FolderSyncStateEntity` – stores nextPageToken & lastSyncedTimestamp per folder.
+2. **AppDatabase**  
+   • Registered new entities, schema version bumped 15 → 16.
+3. **Migration Strategy**  
+   • `DatabaseModule` now calls `.fallbackToDestructiveMigration()` so upgrade to v16 wipes previous schema ("nuke & pave").
+4. **Build**  
+   • Project compiles successfully (`./gradlew assembleDebug`).
+
+### **Notes / Next Steps**
+* DAOs & repositories still rely on `MessageEntity.folderId`. Next increment will remove that column and refactor queries to use the junction table.  
+* Need DAO for new entities and updates to FolderContentSyncWorker to populate junction rows.
+
 --- 

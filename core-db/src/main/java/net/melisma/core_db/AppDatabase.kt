@@ -21,6 +21,8 @@ import net.melisma.core_db.entity.MessageBodyEntity
 import net.melisma.core_db.entity.MessageEntity
 import net.melisma.core_db.entity.PendingActionEntity
 import net.melisma.core_db.entity.RemoteKeyEntity
+import net.melisma.core_db.entity.MessageFolderJunction
+import net.melisma.core_db.entity.FolderSyncStateEntity
 
 @Database(
     entities = [
@@ -30,9 +32,11 @@ import net.melisma.core_db.entity.RemoteKeyEntity
         MessageBodyEntity::class,
         AttachmentEntity::class,
         RemoteKeyEntity::class,
-        PendingActionEntity::class
+        PendingActionEntity::class,
+        MessageFolderJunction::class,
+        FolderSyncStateEntity::class
     ],
-    version = 15,
+    version = 16,
     exportSchema = false // Set to true for production apps for schema migration history
 )
 @TypeConverters(

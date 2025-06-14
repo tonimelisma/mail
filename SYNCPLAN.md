@@ -78,4 +78,5 @@ The new architecture will be centered around a SyncController singleton. Key cha
 > • **New Progress – 2025-06-14**  
 >   • *Phase-1-C* (Data Module green build) **completed** – workers + repository compile, full project builds.  
 >   • *Phase-1-D* (Retire SyncEngine) **completed** – all repositories & ViewModels now use SyncController.  
+>   • *Phase-1-E* (Begin DB schema migration) **in progress** – MessageFolderJunction & FolderSyncStateEntity tables created, AppDatabase bumped to v16 with destructive migration. Remaining: remove MessageEntity.folderId, add DAOs & migrate queries.  
 >   • Next blocking task: **Database migration (1-3)**.

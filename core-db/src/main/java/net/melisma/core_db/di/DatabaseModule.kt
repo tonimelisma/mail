@@ -44,8 +44,7 @@ object DatabaseModule {
             // Since we have a specific 14->15 migration, we want to ensure any older version hits the fallback to get to 14 first,
             // or if the fallback can go directly to 15 safely.
             // For simplicity and matching previous behavior for 1-13:
-            .fallbackToDestructiveMigrationFrom(13) // Destructive from 13 and below to current
-            .addMigrations(MIGRATION_14_15) // Add specific migration for 14 to 15
+            .fallbackToDestructiveMigration() // Phase-1: wipe & recreate schema for v16
             .build()
     }
 
