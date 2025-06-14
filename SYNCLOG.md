@@ -257,4 +257,31 @@ The migration to the many-to-many schema and the full replacement of SyncEngine 
 * UI still shows a single `folderId` for messages; needs multi-label UI update (tracked in BACKLOG).
 * Unit tests referencing `folderId` DAO helpers must be migrated.
 
+---
+
+## **Date: 2025-06-18**
+
+### **Developer:** ChatGPT-o3 (Automated)
+
+### **Increment Implemented – "Phase-3 Kick-off: Paging & Worker Replacement (Part 1)"**
+
+**Goal:** Begin Phase 3 by eliminating `MessageRemoteMediator` paging dependency and wiring the self-perpetuating low-priority sync inside `SyncController`.
+
+### **Work Completed**
+1. **SyncController Core**
+   • Added direct DI of `AppDatabase`, `MailApiServiceSelector`, IO dispatcher.  
+   • Implemented `handleFetchMessageHeaders`, `handleFetchNextMessageListPage`, and reusable `processFetchHeaders()` with transaction & self-requeue logic.  
+   • Level-1 `FetchFullMessageBody` now routes to existing body-download worker.
+2. **Repository Paging Simplification**  
+   • Removed `MessageRemoteMediator` import and configuration from `DefaultMessageRepository`; Pager is now DB-only.
+3. **DI & Imports**  
+   • Updated `SyncModule` & constructor params automatically satisfied by existing Hilt bindings.
+4. **Build**  
+   • Full `./gradlew build --no-daemon` executes **SUCCESSFULLY**.
+
+### **Tech-Debt / Next Steps**
+* Delete unused `MessageRemoteMediator`, `RemoteKey*` classes, and `FolderContentSyncWorker` in a follow-up pass.  
+* Add foreground 5-second polling timer and per-account concurrency guard.  
+* Update UI ViewModels to request next pages via `SyncJob.FetchNextMessageListPage`.
+
 --- 

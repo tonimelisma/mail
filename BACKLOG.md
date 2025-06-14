@@ -9,7 +9,7 @@
 * **Requirement 0.2 (Database Migration to Many-to-Many):** As a developer, I want to migrate the database schema to support a many-to-many relationship between messages and folders.  
   * **Status: Completed (2025-06-17)**  
 * **Requirement 0.3 (Remove RemoteMediator):** As a developer, I want to remove the MessageRemoteMediator and rely on the SyncController's background sync to populate the database for paging.  
-  * **Status: In Progress**  
+  * **Status: Completed (2025-06-18)**  
 * **Requirement 0.4 (Implement Sync State Observation):** As a developer, I want the SyncController to expose a StateFlow\<SyncStatus\> that can be observed by the UI layer to provide real-time, global feedback on sync progress, network status, and error states.  
   * **Status: To Do**  
 * **Requirement 0.5 (Implement Core Sync Logic):** As a developer, I want to ensure that the SyncController's implementation strictly follows the defined 4-level priority algorithm, uses database transactions for data integrity, and persists its background sync state in a FolderSyncStateEntity.  

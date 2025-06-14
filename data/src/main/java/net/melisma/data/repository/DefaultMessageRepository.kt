@@ -44,7 +44,6 @@ import net.melisma.core_db.entity.PendingActionEntity
 import net.melisma.core_db.model.PendingActionStatus
 import net.melisma.data.mapper.toDomainModel
 import net.melisma.data.mapper.toEntity
-import net.melisma.data.paging.MessageRemoteMediator
 import net.melisma.data.sync.SyncController
 import net.melisma.data.sync.workers.ActionUploadWorker
 import timber.log.Timber
@@ -107,15 +106,6 @@ class DefaultMessageRepository @Inject constructor(
         Timber.d("getMessagesPager for accountId=$accountId, folderId=$folderId.")
         return Pager(
             config = pagingConfig,
-            remoteMediator = MessageRemoteMediator(
-                accountId = accountId,
-                folderId = folderId,
-                database = appDatabase,
-                mailApiServiceSelector = mailApiServiceSelector,
-                networkMonitor = networkMonitor,
-                ioDispatcher = ioDispatcher,
-                onSyncStateChanged = { syncState -> _messageSyncState.value = syncState }
-            ),
             pagingSourceFactory = { messageDao.getMessagesPagingSource(accountId, folderId) }
         ).flow.map { pagingData -> pagingData.map { it.toDomainModel(folderId) } }
     }

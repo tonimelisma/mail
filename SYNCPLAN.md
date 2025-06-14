@@ -81,4 +81,5 @@ The new architecture will be centered around a SyncController singleton. Key cha
 >   • *Phase-1-C* (Data Module green build) **completed** – workers + repository compile, full project builds.  
 >   • *Phase-1-D* (Retire SyncEngine) **completed** – all repositories & ViewModels now use SyncController.  
 >   • *Phase-1-E2* (Schema & Pref Wiring) **completed** – junction/state DAOs added, backup rules updated, SyncController observes initialSyncDuration.  
->   • Next blocking task: **Phase-1-F – Remove MessageEntity.folderId & migrate queries**.
+>   • *Phase-1-F* (FolderId removal) **completed** – see SYNCLOG 2025-06-17.  
+>   • *Phase-3-A* (Remove RemoteMediator & DB-only paging) **completed** – MessageRemoteMediator removed from repository, self-perpetuating SyncController pagination implemented. Build green.

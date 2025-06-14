@@ -14,6 +14,10 @@ import timber.log.Timber
 import java.util.concurrent.PriorityBlockingQueue
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.firstOrNull
+import androidx.room.withTransaction
+import net.melisma.data.mapper.toEntity
 
 @Singleton
 class SyncController @Inject constructor(
@@ -21,7 +25,11 @@ class SyncController @Inject constructor(
     private val queue: PriorityBlockingQueue<SyncJob>,
     private val networkMonitor: NetworkMonitor,
     private val syncWorkManager: SyncWorkManager,
-    private val userPreferencesRepository: UserPreferencesRepository
+    private val userPreferencesRepository: UserPreferencesRepository,
+    private val mailApiServiceSelector: net.melisma.core_data.datasource.MailApiServiceSelector,
+    private val appDatabase: net.melisma.core_db.AppDatabase,
+    @net.melisma.core_data.di.Dispatcher(net.melisma.core_data.di.MailDispatchers.IO)
+    private val ioDispatcher: kotlinx.coroutines.CoroutineDispatcher
 ) {
 
     private val _status = MutableStateFlow(SyncControllerStatus())
@@ -77,9 +85,9 @@ class SyncController @Inject constructor(
                         messageId = job.messageId,
                         attachmentId = job.attachmentId
                     )
-                    is SyncJob.FetchFullMessageBody -> Timber.w("No-op handler for FetchFullMessageBody")
-                    is SyncJob.FetchMessageHeaders -> Timber.w("No-op handler for FetchMessageHeaders")
-                    is SyncJob.FetchNextMessageListPage -> Timber.w("No-op handler for FetchNextMessageListPage")
+                    is SyncJob.FetchFullMessageBody -> syncWorkManager.enqueueMessageBodyDownload(job.accountId, job.messageId)
+                    is SyncJob.FetchMessageHeaders -> handleFetchMessageHeaders(job)
+                    is SyncJob.FetchNextMessageListPage -> handleFetchNextPage(job)
                     is SyncJob.SearchOnline -> Timber.w("No-op handler for SearchOnline")
                     is SyncJob.EvictFromCache -> Timber.w("No-op handler for EvictFromCache")
                 }
@@ -99,4 +107,73 @@ class SyncController @Inject constructor(
      */
     @Volatile
     var initialSyncDurationDays: Long = 90L
+
+    private suspend fun handleFetchMessageHeaders(job: SyncJob.FetchMessageHeaders) {
+        kotlinx.coroutines.withContext(ioDispatcher) {
+            processFetchHeaders(job.folderId, job.pageToken, job.accountId)
+        }
+    }
+
+    private suspend fun handleFetchNextPage(job: SyncJob.FetchNextMessageListPage) {
+        kotlinx.coroutines.withContext(ioDispatcher) {
+            val stateDao = appDatabase.folderSyncStateDao()
+            val nextToken = stateDao.observeState(job.folderId).firstOrNull()?.nextPageToken
+            if (nextToken != null) {
+                processFetchHeaders(job.folderId, nextToken, job.accountId)
+            } else {
+                Timber.d("No nextPageToken for folder ${job.folderId}. Nothing to fetch.")
+            }
+        }
+    }
+
+    private suspend fun processFetchHeaders(folderId: String, pageToken: String?, accountId: String) {
+        val service = mailApiServiceSelector.getServiceByAccountId(accountId) ?: run {
+            Timber.w("MailApiService not found for account $accountId")
+            return
+        }
+
+        // Resolve remote folder id
+        val folderDao = appDatabase.folderDao()
+        val localFolder = folderDao.getFolderByIdSuspend(folderId) ?: run {
+            Timber.w("Local folder $folderId not found")
+            return
+        }
+        val apiFolderId = localFolder.remoteId ?: folderId
+
+        val response = service.getMessagesForFolder(
+            folderId = apiFolderId,
+            maxResults = 50,
+            pageToken = pageToken
+        )
+
+        if (response.isFailure) {
+            Timber.e(response.exceptionOrNull(), "Failed to fetch headers for $folderId")
+            return
+        }
+
+        val paged = response.getOrThrow()
+        val messageEntities = paged.messages.map { it.toEntity(accountId) }
+
+        appDatabase.withTransaction {
+            appDatabase.messageDao().insertOrUpdateMessages(messageEntities)
+            val junctionDao = appDatabase.messageFolderJunctionDao()
+            val junctions = messageEntities.map { me ->
+                net.melisma.core_db.entity.MessageFolderJunction(me.id, folderId)
+            }
+            junctionDao.insertAll(junctions)
+
+            // Persist state
+            appDatabase.folderSyncStateDao().upsert(
+                net.melisma.core_db.entity.FolderSyncStateEntity(
+                    folderId,
+                    paged.nextPageToken,
+                    System.currentTimeMillis()
+                )
+            )
+        }
+
+        if (paged.nextPageToken != null) {
+            submit(SyncJob.FetchMessageHeaders(folderId, paged.nextPageToken, accountId))
+        }
+    }
 } 
