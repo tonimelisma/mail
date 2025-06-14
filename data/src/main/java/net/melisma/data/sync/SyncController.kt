@@ -92,7 +92,7 @@ class SyncController @Inject constructor(
 
             try {
                 when (job) {
-                    is SyncJob.SyncFolderList -> syncWorkManager.enqueueFolderSync(job.accountId)
+                    is SyncJob.SyncFolderList -> handleSyncFolderList(job)
                     is SyncJob.ForceRefreshFolder -> handleForceRefreshFolder(job)
                     is SyncJob.DownloadMessageBody -> syncWorkManager.enqueueMessageBodyDownload(job.accountId, job.messageId)
                     is SyncJob.RefreshFolderContents -> handleForceRefreshFolder(
@@ -327,5 +327,63 @@ class SyncController @Inject constructor(
             pollingJob?.cancel()
         }
         pollingJob = null
+    }
+
+    private suspend fun handleSyncFolderList(job: SyncJob.SyncFolderList) {
+        kotlinx.coroutines.withContext(ioDispatcher) {
+            if (!networkMonitor.isOnline.first()) {
+                Timber.i("Offline – skipping folder list sync for ${job.accountId}")
+                return@withContext
+            }
+
+            val accountDao = appDatabase.accountDao()
+            val folderDao = appDatabase.folderDao()
+
+            val service = mailApiServiceSelector.getServiceByAccountId(job.accountId) ?: run {
+                Timber.w("MailApiService not found for account ${job.accountId}")
+                return@withContext
+            }
+
+            val syncResult = service.syncFolders(job.accountId, null)
+
+            if (syncResult.isFailure) {
+                val ex = syncResult.exceptionOrNull()
+                Timber.e(ex, "Folder list sync failed for ${job.accountId}")
+                accountDao.updateFolderListSyncError(job.accountId, ex?.message ?: "Unknown error")
+                if (ex is net.melisma.core_data.errors.ApiServiceException && ex.errorDetails.isNeedsReAuth) {
+                    accountDao.setNeedsReauthentication(job.accountId, true)
+                }
+                return@withContext
+            }
+
+            val delta = syncResult.getOrThrow()
+            val serverFolders = delta.newOrUpdatedItems
+
+            appDatabase.withTransaction {
+                val localFolders = folderDao.getFoldersForAccount(job.accountId).first()
+                val localFolderMap = localFolders.associateBy { it.remoteId }
+                val serverFolderMap = serverFolders.associateBy { it.id }
+
+                // Delete local folders no longer on server
+                val toDelete = localFolders.filter { it.remoteId !in serverFolderMap.keys }
+                if (toDelete.isNotEmpty()) {
+                    folderDao.deleteFolders(toDelete)
+                }
+
+                // Upsert server folders
+                val toUpsert = serverFolders.map { serverFolder ->
+                    val existing = localFolderMap[serverFolder.id]
+                    val localId = existing?.id ?: java.util.UUID.randomUUID().toString()
+                    serverFolder.toEntity(job.accountId, localId)
+                }
+                if (toUpsert.isNotEmpty()) {
+                    folderDao.insertOrUpdateFolders(toUpsert)
+                }
+            }
+
+            accountDao.updateFolderListSyncSuccess(job.accountId, System.currentTimeMillis())
+            accountDao.updateFolderListSyncToken(job.accountId, delta.nextSyncToken)
+            Timber.d("Folder list sync completed for ${job.accountId}")
+        }
     }
 } 

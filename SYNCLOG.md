@@ -388,4 +388,30 @@ Finish consolidation of folder content refresh by removing the now-unused `Folde
 * Internalize `FolderSyncWorker` logic and delete the worker.  
 * Begin consolidation of `MessageBodyDownloadWorker` & `AttachmentDownloadWorker`.
 
+---
+
+## **Date: 2025-06-21 (Cont.)**
+
+### **Developer:** ChatGPT-o3 (Automated)
+
+### **Increment Implemented – "Phase-4 B⁴: Internal Folder List Sync & Worker Removal"
+
+**Goal**
+Migrate `FolderSyncWorker` logic into `SyncController`, delete the worker, and fully own folder-list refresh inside the controller.
+
+### **Work Completed**
+1. **SyncController**  
+   • Added `handleSyncFolderList()` with delta-sync implementation mirroring the legacy worker (deletes stale folders, upserts new/updated, stores sync token).  
+   • Dispatcher now routes `SyncJob.SyncFolderList` to the new handler.  
+2. **SyncWorkManager**  
+   • Removed `enqueueFolderSync()` and the `FolderSyncWorker` import.  
+3. **Deleted Files**  
+   • `FolderListSyncWorker.kt` (contained `FolderSyncWorker` class).  
+4. **Build** – Full project build is green.
+
+### **Next Steps**
+* Consolidate `MessageBodyDownloadWorker` and `AttachmentDownloadWorker` into controller.  
+* Remove their enqueue helpers and delete worker classes.  
+* Once all workers gone, strip WorkManager dependency from data layer.
+
 --- 

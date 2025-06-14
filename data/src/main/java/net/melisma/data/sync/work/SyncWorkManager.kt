@@ -8,7 +8,6 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import net.melisma.data.sync.workers.ActionUploadWorker
 import net.melisma.data.sync.workers.AttachmentDownloadWorker
-import net.melisma.data.sync.workers.FolderSyncWorker
 import net.melisma.data.sync.workers.MessageBodyDownloadWorker
 import net.melisma.data.sync.workers.CacheCleanupWorker
 import timber.log.Timber
@@ -23,16 +22,6 @@ class SyncWorkManager @Inject constructor(private val workManager: WorkManager) 
 
     companion object {
         const val PASSIVE_POLLING_WORK_NAME = "PassivePolling"
-    }
-
-    fun enqueueFolderSync(accountId: String) {
-        val workName = "FolderSync-$accountId"
-        Timber.d("$TAG: Enqueueing folder sync for account $accountId. WorkName: $workName")
-        val workRequest = OneTimeWorkRequestBuilder<FolderSyncWorker>()
-            .setInputData(Data.Builder().putString(FolderSyncWorker.KEY_ACCOUNT_ID, accountId).build())
-            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-            .build()
-        workManager.enqueueUniqueWork(workName, ExistingWorkPolicy.KEEP, workRequest)
     }
 
     fun enqueueActionUpload(accountId: String, actionType: String, entityId: String, payload: Map<String, String?>) {
