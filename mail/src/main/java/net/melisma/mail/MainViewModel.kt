@@ -104,12 +104,7 @@ class MainViewModel @Inject constructor(
     private val messageRepository: MessageRepository,
     private val threadRepository: ThreadRepository,
     private val userPreferencesRepository: UserPreferencesRepository
-    // TODO: P1_SYNC - Inject SyncEngine once it's properly provided by Hilt
-    // private val syncEngine: net.melisma.data.sync.SyncEngine // Assuming SyncEngine path
 ) : ViewModel() {
-    // TODO: P1_SYNC - UI State Management: Refine UI states based on sync progress/errors from SyncEngine later.
-    // e.g., add specific isLoadingFolders, isLoadingMessages, folderSyncError, messageSyncError fields.
-
     private val _uiState = MutableStateFlow(MainScreenState())
     val uiState: StateFlow<MainScreenState> = _uiState.asStateFlow()
 
@@ -184,18 +179,7 @@ class MainViewModel @Inject constructor(
 
                 folderRepository.manageObservedAccounts(newAccountList) // This repository method should internally use SyncEngine to sync folder lists if they are missing/stale for any account in newAccountList.
 
-                // TODO: P1_SYNC - Rudimentary check: if newAccountList is empty, trigger a sync for accounts.
-                // This might be better handled by a dedicated "initial sync" logic or staleness check.
-                if (newAccountList.isEmpty()) {
-                    Timber.d("Account list is empty. Conceptually triggering account metadata sync if not already in progress.")
-                    // defaultAccountRepository.requestFullAccountSync() // Hypothetical method that uses SyncEngine
-                    // Conceptual direct call: syncEngine.syncAllAccountsMetadata() // This method would be on SyncEngine
-                }
-                // TODO: P1_SYNC - Implement more robust staleness check before triggering sync for existing accounts' folders.
-                // For example, iterate newAccountList and for each account, if its folder list is missing from
-                // uiState.foldersByAccountId or is in an error state, call:
-                // syncEngine.syncFolders(account.id)
-                // This can be done here or within folderRepository.manageObservedAccounts.
+                // If the account list is empty we may want to trigger a metadata refresh in a future background job.
 
                 val newAccountIds = newAccountList.map { it.id }.toSet()
                 val removedAccountIds = previousAccountIds - newAccountIds
@@ -573,9 +557,7 @@ class MainViewModel @Inject constructor(
 
     fun refreshAllFolders(activity: Activity?) {
         Timber.d("Requesting refresh for ALL folders.")
-        // TODO: P1_SYNC - Iterate through accounts and trigger sync via SyncEngine for each account's folders.
-        // If folderRepository.refreshAllFolders is NOT updated to use SyncEngine, this VM logic should change.
-        // For now, assume folderRepository.refreshAllFolders will be (or is) updated.
+        // Trigger folder refresh for every configured account.
         viewModelScope.launch {
             _uiState.value.accounts.forEach { acc ->
                 Timber.d("Conceptual: syncEngine.syncFolders(${acc.id}) for account ${acc.emailAddress} as part of refreshAllFolders.")
@@ -674,8 +656,7 @@ class MainViewModel @Inject constructor(
     fun refreshFoldersForAccount(accountId: String, activity: Activity? = null) {
         Timber.d("Explicitly refreshing folders for account: $accountId")
         _uiState.update { it.copy(isLoadingAccountAction = true) } // This state might need to be more granular for folder loading
-        // TODO: P1_SYNC - This should trigger folder sync for the given accountId via SyncEngine.
-        // The folderRepository.refreshFoldersForAccount method itself will be updated to use SyncEngine.
+        // The folderRepository.refreshFoldersForAccount method itself will be updated to use SyncController.
         viewModelScope.launch {
             try {
                 // Conceptual: syncEngine.syncFolders(accountId)

@@ -224,14 +224,14 @@ class DefaultAccountRepository @Inject constructor(
 
     override fun getAccounts(): Flow<List<Account>> {
         Timber.tag(TAG).d("getAccounts() called, fetching from AccountDao.")
-        // TODO: P1_SYNC - Request sync from SyncEngine if accounts list is stale or empty and should not be.
+        // If the account list is empty, a background refresh could be triggered in the future.
         return accountDao.getAllAccounts().map { entities ->
             entities.map { it.toDomainAccount() }
         }.distinctUntilChanged()
     }
 
     override fun getAccountById(accountId: String): Flow<Account?> {
-        // TODO: P1_SYNC - Request sync from SyncEngine if account data is missing or stale.
+        // Consider refreshing from network when account data is missing.
         return accountDao.getAccountById(accountId).map { entity ->
             entity?.toDomainAccount()
         }
