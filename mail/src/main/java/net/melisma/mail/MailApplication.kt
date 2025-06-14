@@ -7,6 +7,7 @@ import androidx.work.Configuration
 import dagger.hilt.android.HiltAndroidApp
 import timber.log.Timber
 import javax.inject.Inject
+import androidx.lifecycle.ProcessLifecycleOwner
 
 /**
  * Custom Application class required by Hilt and for app-wide initializations like Timber.
@@ -19,6 +20,9 @@ class MailApplication : Application(), Configuration.Provider {
 
     @Inject
     lateinit var workerFactory: HiltWorkerFactory
+
+    @Inject
+    lateinit var syncLifecycleObserver: net.melisma.data.sync.SyncLifecycleObserver
 
     override fun onCreate() {
         Log.d("MailApplication", "MailApplication: onCreate CALLED - Direct Log")
@@ -34,6 +38,9 @@ class MailApplication : Application(), Configuration.Provider {
             Timber.d("Timber logging NOT planted (release build or custom logic).")
         }
         Timber.i("MailApplication fully initialized.")
+
+        // Register SyncController lifecycle observer to toggle foreground/background polling
+        ProcessLifecycleOwner.get().lifecycle.addObserver(syncLifecycleObserver)
     }
     // Hilt initialization is handled automatically by the annotation.
 

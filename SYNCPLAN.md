@@ -65,8 +65,10 @@ The new architecture will be centered around a SyncController singleton. Key cha
 ### **Phase 4: Lifecycle and Finalization**
 
 1. **Implement Polling Lifecycle:**  
-   * **Action**: Implement the 5-second foreground polling timer that queues low-priority freshness jobs. This should be tied to the application's process lifecycle.
-   * **Action**: Implement the periodic (~15 minute) `WorkManager` job for background polling.
+   * **Action:** Implement the 5-second foreground polling timer that queues low-priority freshness jobs. This should be tied to the application's process lifecycle.  
+   * **Status:** Completed on 2025-06-19 – implemented via SyncLifecycleObserver, Active ticker, PassivePollingWorker.  
+   * **Action:** Implement the periodic (~15 minute) `WorkManager` job for background polling.  
+   * **Status:** Completed on 2025-06-19 – see `PassivePollingWorker` & `SyncWorkManager.schedulePassivePolling()`.
 2. **Implement Foreground Service:**  
    * **Action**: Implement the Foreground Service to be managed by the SyncController during a new account's initial sync.
 3. **Final Cleanup:**  

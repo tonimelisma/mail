@@ -18,6 +18,8 @@
   * **Status: To Do**
 * **Requirement 0.7 (Isolate Attachments for Backup Exclusion):** As a developer, I want all downloaded attachments to be saved to a dedicated attachments/ directory which is excluded from cloud backups, as defined in the Phase 1 of the sync plan.
   * **Status: In Progress**
+* **Requirement 0.8 (Polling Lifecycle – Foreground & Background):** Implement 5-second active polling and 15-minute passive WorkManager job to queue low-priority freshness jobs.  
+  * **Status: Completed (2025-06-19)**
 
 **EPIC 1: Core Mail Viewing** (Highest Priority)
 

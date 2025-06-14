@@ -18,6 +18,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.firstOrNull
 import androidx.room.withTransaction
 import net.melisma.data.mapper.toEntity
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.isActive
 
 @Singleton
 class SyncController @Inject constructor(
@@ -34,6 +36,10 @@ class SyncController @Inject constructor(
 
     private val _status = MutableStateFlow(SyncControllerStatus())
     val status = _status.asStateFlow()
+
+    private var pollingJob: kotlinx.coroutines.Job? = null
+
+    private val ACTIVE_POLL_INTERVAL_MS = 5_000L
 
     init {
         externalScope.launch {
@@ -175,5 +181,58 @@ class SyncController @Inject constructor(
         if (paged.nextPageToken != null) {
             submit(SyncJob.FetchMessageHeaders(folderId, paged.nextPageToken, accountId))
         }
+    }
+
+    /**
+     * Starts aggressive 5-second foreground polling that queues low-priority freshness jobs
+     * for critical folders (currently Inbox for every account).
+     * If already active, subsequent calls are ignored.
+     */
+    fun startActivePolling() {
+        if (pollingJob?.isActive == true) {
+            return
+        }
+        Timber.d("SyncController: Starting active polling interval of $ACTIVE_POLL_INTERVAL_MS ms")
+        pollingJob = externalScope.launch(ioDispatcher) {
+            while (isActive) {
+                try {
+                    // Skip if device is offline
+                    if (!networkMonitor.isOnline.first()) {
+                        kotlinx.coroutines.delay(ACTIVE_POLL_INTERVAL_MS)
+                        continue
+                    }
+
+                    val accounts = appDatabase.accountDao().getAllAccounts().firstOrNull() ?: emptyList()
+                    accounts.forEach { accountEntity ->
+                        val inboxFolder = appDatabase.folderDao()
+                            .getFolderByWellKnownTypeSuspend(
+                                accountEntity.id,
+                                net.melisma.core_data.model.WellKnownFolderType.INBOX
+                            )
+                        if (inboxFolder != null) {
+                            submit(
+                                net.melisma.core_data.model.SyncJob.FetchMessageHeaders(
+                                    folderId = inboxFolder.id,
+                                    pageToken = null,
+                                    accountId = accountEntity.id
+                                )
+                            )
+                        }
+                    }
+                } catch (e: Exception) {
+                    Timber.e(e, "Error during active polling tick")
+                }
+                kotlinx.coroutines.delay(ACTIVE_POLL_INTERVAL_MS)
+            }
+        }
+    }
+
+    /** Stops the foreground polling ticker, if running. */
+    fun stopActivePolling() {
+        if (pollingJob?.isActive == true) {
+            Timber.d("SyncController: Stopping active polling")
+            pollingJob?.cancel()
+        }
+        pollingJob = null
     }
 } 

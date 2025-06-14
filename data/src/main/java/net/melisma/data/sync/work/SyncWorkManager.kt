@@ -14,11 +14,16 @@ import net.melisma.data.sync.workers.MessageBodyDownloadWorker
 import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
+import java.util.concurrent.TimeUnit
 
 @Singleton
 class SyncWorkManager @Inject constructor(private val workManager: WorkManager) {
 
     private val TAG = "SyncWorkManager"
+
+    companion object {
+        const val PASSIVE_POLLING_WORK_NAME = "PassivePolling"
+    }
 
     fun enqueueFolderSync(accountId: String) {
         val workName = "FolderSync-$accountId"
@@ -90,5 +95,23 @@ class SyncWorkManager @Inject constructor(private val workManager: WorkManager) 
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .build()
         workManager.enqueueUniqueWork(workName, ExistingWorkPolicy.KEEP, workRequest)
+    }
+
+    fun schedulePassivePolling() {
+        val constraints = Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
+        val workRequest = androidx.work.PeriodicWorkRequestBuilder<net.melisma.data.sync.workers.PassivePollingWorker>(15, TimeUnit.MINUTES)
+            .setConstraints(constraints)
+            .build()
+        Timber.d("$TAG: Scheduling passive polling periodic work")
+        workManager.enqueueUniquePeriodicWork(
+            PASSIVE_POLLING_WORK_NAME,
+            androidx.work.ExistingPeriodicWorkPolicy.KEEP,
+            workRequest
+        )
+    }
+
+    fun cancelPassivePolling() {
+        Timber.d("$TAG: Cancelling passive polling work")
+        workManager.cancelUniqueWork(PASSIVE_POLLING_WORK_NAME)
     }
 } 

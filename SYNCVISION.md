@@ -62,7 +62,7 @@ This is the default, continuous work of keeping the entire local cache up-to-dat
 
 ## **5\. Engine States & Polling Lifecycle**
 
-The SyncController's core processing loop is always running. The application's state (foreground or background) determines the polling strategy used to queue new sync jobs.
+_(Update 2025-06-19: Active & Passive polling implemented in code – see SyncController.startActivePolling and PassivePollingWorker.)_
 
 * **Active Polling (App in Foreground):** An aggressive polling timer runs every 5 seconds. This loop queues low-priority `FetchMessageHeaders` jobs for critical folders (e.g., Inbox). The controller's internal logic will deduplicate jobs, preventing redundant work if a job for that folder is already pending or in progress.
 * **Passive Polling (App in Background):** The 5-second timer is stopped. A periodic WorkManager job is scheduled to run approximately every 15 minutes. This worker's sole responsibility is to queue a low-priority `FetchMessageHeaders` job, ensuring reasonable data freshness while conserving battery.

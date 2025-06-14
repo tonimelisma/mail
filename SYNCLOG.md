@@ -284,4 +284,41 @@ The migration to the many-to-many schema and the full replacement of SyncEngine 
 * Add foreground 5-second polling timer and per-account concurrency guard.  
 * Update UI ViewModels to request next pages via `SyncJob.FetchNextMessageListPage`.
 
+---
+
+## **Date: 2025-06-19**
+
+### **Developer:** ChatGPT-o3 (Automated)
+
+### **Increment Implemented – "Phase-4 A: Polling Lifecycle & Freshness Jobs"**
+
+**Goal**  
+Deliver foreground 5-second polling and background 15-minute passive polling that self-queues low-priority `FetchMessageHeaders` jobs. This satisfies SYNCVISION §5 Active/Passive polling lifecycle.
+
+**Work Completed**  
+1. **SyncController**  
+   • Added `startActivePolling()` / `stopActivePolling()` with 5 s ticker.  
+   • Ticker queries all accounts' Inbox folders and submits `SyncJob.FetchMessageHeaders`.  
+2. **SyncLifecycleObserver**  
+   • New `DefaultLifecycleObserver` toggles polling modes on `ProcessLifecycleOwner` `onStart`/`onStop`.  
+3. **PassivePollingWorker**  
+   • New `HiltWorker` scheduled every 15 min when app in background; queues same freshness jobs if network is online.  
+4. **SyncWorkManager**  
+   • Added helpers `schedulePassivePolling()` and `cancelPassivePolling()`; constant `PASSIVE_POLLING_WORK_NAME`.
+5. **MailApplication**  
+   • Injects & registers `SyncLifecycleObserver` with `ProcessLifecycleOwner` in `onCreate`.
+6. **DI / Build**  
+   • Added `lifecycle-process` dependency to version catalog and app module.  
+   • All new classes wired with Hilt; build runs clean (`./gradlew build`).
+
+**Tech-Debt / Follow-ups**  
+* Per-account concurrency guard still pending (SYNCVISION §6).  
+* Polling interval currently hard-coded; make user-configurable in Settings.  
+* Consider exponential back-off if server throttles during background polling.
+
+### **Next Steps**  
+1. Phase-4 B – Remove obsolete Worker classes (`FolderContentSyncWorker`, `RemoteKey*`, etc.).  
+2. Phase-4 C – Implement per-account mutex to guarantee one active network op per account.  
+3. UI: Wire `SyncController.status` to global status bar (Backlog Req 0.4 UI).
+
 --- 
