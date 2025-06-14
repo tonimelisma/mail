@@ -414,4 +414,36 @@ Migrate `FolderSyncWorker` logic into `SyncController`, delete the worker, and f
 * Remove their enqueue helpers and delete worker classes.  
 * Once all workers gone, strip WorkManager dependency from data layer.
 
+---
+
+## **Date: 2025-06-22**
+
+### **Developer:** ChatGPT-o3 (Automated)
+
+### **Increment Implemented – "Phase-4 B⁵: Internal Message & Attachment Download + Worker Purge"
+
+**Goal**
+Finish Worker-consolidation track by moving `MessageBodyDownloadWorker` and `AttachmentDownloadWorker` logic directly into `SyncController`, deleting the workers, and updating UI ViewModels to submit `SyncJob` tasks instead of WorkManager jobs.
+
+### **Work Completed**
+1. **SyncController**
+   • Injected `@ApplicationContext` for file-IO.  
+   • Added `handleDownloadMessageBody()` and `handleDownloadAttachment()` mirroring the worker logic (status updates, API calls, re-auth handling, file writes).  
+   • Dispatcher routes `DownloadMessageBody`, `FetchFullMessageBody`, and `DownloadAttachment` to the new handlers.  
+   • Per-account mutex and IO dispatcher reuse maintained.
+2. **SyncWorkManager**  
+   • Removed `enqueueMessageBodyDownload()` and `enqueueAttachmentDownload()` helpers + worker imports.
+3. **Removed Worker Classes**  
+   • `MessageBodyDownloadWorker.kt` and `AttachmentDownloadWorker.kt` deleted.
+4. **UI (mail module)**  
+   • `MessageDetailViewModel` and `ThreadDetailViewModel` now call `syncController.submit(SyncJob.… )` instead of scheduling WorkManager.  
+   • WorkManager parameter and imports stripped; no-op stubs left for future progress callbacks.  
+   • Build warnings only for unused `androidx.work` imports (safe to cull later).
+5. **Build** – Full `./gradlew build` SUCCESS.
+
+### **Next Steps**  
+* Phase-4 C – Strip `androidx.work` dependency from data + mail modules entirely.  
+* Implement real-time status Flow from `SyncController` so ViewModels can observe progress instead of stubs.  
+* Begin Phase-5: foreground Service for large attachment downloads.
+
 --- 

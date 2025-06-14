@@ -33,8 +33,6 @@ import net.melisma.core_data.preferences.DownloadPreference
 import net.melisma.core_data.preferences.UserPreferencesRepository
 import net.melisma.data.sync.SyncController
 import net.melisma.core_data.model.SyncJob
-import net.melisma.data.sync.workers.AttachmentDownloadWorker
-import net.melisma.data.sync.workers.MessageBodyDownloadWorker
 import net.melisma.domain.data.GetMessageDetailsUseCase
 import net.melisma.mail.navigation.AppRoutes
 import timber.log.Timber
@@ -81,7 +79,6 @@ class MessageDetailViewModel @Inject constructor(
     private val getMessageDetailsUseCase: GetMessageDetailsUseCase,
     private val userPreferencesRepository: UserPreferencesRepository,
     private val networkMonitor: NetworkMonitor,
-    private val workManager: WorkManager,
     private val syncController: SyncController,
     private val savedStateHandle: SavedStateHandle
 ) : ViewModel() {
@@ -240,7 +237,7 @@ class MessageDetailViewModel @Inject constructor(
                         newAttachmentStates[att.id] = ContentDisplayState.DOWNLOADING
                         val existingState = _uiState.value.attachmentDisplayStates[att.id]
                         if (existingState != ContentDisplayState.DOWNLOADING) {
-                             enqueueAttachmentDownloadInternal(message.id, accountId!!, att)
+                            enqueueAttachmentDownloadInternal(message.id, accountId!!, att)
                         } else {
                             Timber.d("ViewModelDBG: Attachment ${att.id} download already marked as DOWNLOADING. Skipping re-enqueue.")
                         }
@@ -269,22 +266,8 @@ class MessageDetailViewModel @Inject constructor(
             return
         }
         _uiState.update { it.copy(bodyDisplayState = ContentDisplayState.DOWNLOADING, transientError = null) }
-        Timber.d("ViewModelDBG: Enqueuing MessageBodyDownloadWorker for $msgId.")
-        val workRequest = OneTimeWorkRequestBuilder<MessageBodyDownloadWorker>()
-            .setInputData(
-                workDataOf(
-                    MessageBodyDownloadWorker.KEY_ACCOUNT_ID to accId,
-                    MessageBodyDownloadWorker.KEY_MESSAGE_ID to msgId
-                )
-            )
-            .build()
-        val workName = "message-body-download-$msgId"
-        workManager.enqueueUniqueWork(
-            workName,
-            ExistingWorkPolicy.KEEP, // KEEPs if already running, good.
-            workRequest
-        )
-        observeWorkStatus(workRequest.id, msgId, null)
+        Timber.d("ViewModelDBG: Submitting DownloadMessageBody job for $msgId.")
+        syncController.submit(SyncJob.DownloadMessageBody(messageId = msgId, accountId = accId))
     }
 
     private fun enqueueAttachmentDownloadInternal(msgId: String, accId: String, attachment: Attachment) {
@@ -298,81 +281,19 @@ class MessageDetailViewModel @Inject constructor(
             currentState.copy(attachmentDisplayStates = newStates, transientError = null)
         }
 
-        Timber.d("ViewModelDBG: Enqueuing AttachmentDownloadWorker for attachment ${attachment.id} in message $msgId.")
-        val workRequest = OneTimeWorkRequestBuilder<AttachmentDownloadWorker>()
-            .setInputData(
-                workDataOf(
-                    AttachmentDownloadWorker.KEY_ACCOUNT_ID to accId,
-                    AttachmentDownloadWorker.KEY_MESSAGE_ID to msgId,
-                    AttachmentDownloadWorker.KEY_ATTACHMENT_ID to attachment.id,
-                    AttachmentDownloadWorker.KEY_ATTACHMENT_NAME to attachment.fileName // Ensure these keys are correct
-                )
+        Timber.d("ViewModelDBG: Submitting DownloadAttachment job for attachment ${attachment.id} in message $msgId.")
+        syncController.submit(
+            SyncJob.DownloadAttachment(
+                accountId = accId,
+                messageId = msgId,
+                attachmentId = attachment.id
             )
-            .build()
-        val workName = "attachment-download-${attachment.id}"
-        workManager.enqueueUniqueWork(
-            workName,
-            ExistingWorkPolicy.KEEP,
-            workRequest
         )
-        observeWorkStatus(workRequest.id, msgId, attachment.id)
     }
 
-    private fun observeWorkStatus(workId: UUID, messageIdParam: String, attachmentId: String?) {
-        viewModelScope.launch {
-            workManager.getWorkInfoByIdFlow(workId).collect { workInfo ->
-                if (workInfo != null) {
-                    Timber.d("ViewModelDBG: WorkInfo for ${if (attachmentId == null) "body" else "attachment $attachmentId"} of $messageIdParam: ${workInfo.state}")
-                    val currentViewModelAccountId = this@MessageDetailViewModel.accountId
-                    val currentViewModelMessageId = this@MessageDetailViewModel.messageId
-
-                    when (workInfo.state) {
-                        WorkInfo.State.SUCCEEDED -> {
-                            if (currentViewModelAccountId != null && currentViewModelMessageId == messageIdParam) {
-                                // Reload message details to get the freshly downloaded body/attachment info from DB
-                                // This will re-trigger evaluateAndTriggerDownloads and auto-refresh logic if needed.
-                                loadMessageDetails(currentViewModelAccountId, messageIdParam)
-                                Timber.d("ViewModelDBG: Work for $messageIdParam (att: $attachmentId) succeeded. Reloading message details.")
-                            } else {
-                                Timber.d("ViewModelDBG: Work for $messageIdParam (att: $attachmentId) succeeded, but view is for $currentViewModelMessageId. No immediate UI reload.")
-                            }
-                        }
-                        WorkInfo.State.FAILED -> {
-                            val errorMsg = workInfo.outputData.getString(if (attachmentId == null) MessageBodyDownloadWorker.KEY_RESULT_ERROR else AttachmentDownloadWorker.KEY_RESULT_ERROR) ?: "Download failed"
-                            Timber.w("ViewModelDBG: Work FAILED for $messageIdParam (att: $attachmentId) - $errorMsg")
-                            if (currentViewModelMessageId == messageIdParam) { // Only update UI if it's for the current message
-                                if (attachmentId == null) {
-                                    _uiState.update { it.copy(bodyDisplayState = ContentDisplayState.ERROR, transientError = errorMsg) }
-                                } else {
-                                    _uiState.update { currentState ->
-                                        val newStates = currentState.attachmentDisplayStates.toMutableMap()
-                                        newStates[attachmentId] = ContentDisplayState.ERROR
-                                        currentState.copy(attachmentDisplayStates = newStates, transientError = errorMsg)
-                                    }
-                                }
-                            }
-                        }
-                        WorkInfo.State.CANCELLED -> {
-                            val errorMsg = "Download cancelled"
-                            Timber.w("ViewModelDBG: Work CANCELLED for $messageIdParam (att: $attachmentId)")
-                            if (currentViewModelMessageId == messageIdParam) { // Only update UI if it's for the current message
-                                if (attachmentId == null) {
-                                    _uiState.update { it.copy(bodyDisplayState = ContentDisplayState.ERROR, transientError = errorMsg) }
-                                } else {
-                                     _uiState.update { currentState ->
-                                        val newStates = currentState.attachmentDisplayStates.toMutableMap()
-                                        newStates[attachmentId] = ContentDisplayState.ERROR
-                                        currentState.copy(attachmentDisplayStates = newStates, transientError = errorMsg)
-                                    }
-                                }
-                            }
-                        }
-                        else -> { /* RUNNING, ENQUEUED, BLOCKED - state already set to LOADING by enqueue method */ }
-                    }
-                }
-            }
-        }
-    }
+    // observeWorkStatus is now a no-op because SyncController updates flows will refresh UI automatically.
+    @Suppress("UNUSED_PARAMETER")
+    private fun observeWorkStatus(dummyId: java.util.UUID, messageId: String, attachmentId: String?) { /* No-op */ }
 
     fun retryMessageBodyDownload() {
         val currentAccountId = accountId

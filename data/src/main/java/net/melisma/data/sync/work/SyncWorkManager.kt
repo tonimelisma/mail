@@ -7,8 +7,6 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import net.melisma.data.sync.workers.ActionUploadWorker
-import net.melisma.data.sync.workers.AttachmentDownloadWorker
-import net.melisma.data.sync.workers.MessageBodyDownloadWorker
 import net.melisma.data.sync.workers.CacheCleanupWorker
 import timber.log.Timber
 import javax.inject.Inject
@@ -43,33 +41,6 @@ class SyncWorkManager @Inject constructor(private val workManager: WorkManager) 
             .build()
         
         workManager.enqueueUniqueWork(workName, ExistingWorkPolicy.APPEND_OR_REPLACE, workRequest)
-    }
-
-    fun enqueueMessageBodyDownload(accountId: String, messageId: String) {
-        val workName = "MessageBodyDownload-$messageId"
-        Timber.d("$TAG: Enqueueing message body download for message $messageId. WorkName: $workName")
-        val workRequest = OneTimeWorkRequestBuilder<MessageBodyDownloadWorker>()
-            .setInputData(Data.Builder()
-                .putString(MessageBodyDownloadWorker.KEY_ACCOUNT_ID, accountId)
-                .putString(MessageBodyDownloadWorker.KEY_MESSAGE_ID, messageId)
-                .build())
-            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-            .build()
-        workManager.enqueueUniqueWork(workName, ExistingWorkPolicy.KEEP, workRequest)
-    }
-
-    fun enqueueAttachmentDownload(accountId: String, messageId: String, attachmentId: String) {
-        val workName = "AttachmentDownload-$attachmentId"
-        Timber.d("$TAG: Enqueueing attachment download for attachment $attachmentId. WorkName: $workName")
-        val workRequest = OneTimeWorkRequestBuilder<AttachmentDownloadWorker>()
-            .setInputData(Data.Builder()
-                .putString(AttachmentDownloadWorker.KEY_ACCOUNT_ID, accountId)
-                .putString(AttachmentDownloadWorker.KEY_MESSAGE_ID, messageId)
-                .putString(AttachmentDownloadWorker.KEY_ATTACHMENT_ID, attachmentId)
-                .build())
-            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
-            .build()
-        workManager.enqueueUniqueWork(workName, ExistingWorkPolicy.KEEP, workRequest)
     }
 
     fun enqueueCacheCleanup() {

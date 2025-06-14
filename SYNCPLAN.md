@@ -76,6 +76,8 @@ The new architecture will be centered around a SyncController singleton. Key cha
 4. **New Progress:**
    * **Action**: Implement the Cache eviction job wiring and per-account mutex.
    * **Status**: Completed on 2025-06-20 – SyncJob.EvictFromCache now delegates to CacheCleanupWorker via SyncWorkManager; SyncController enforces one active network op per account (see SYNCLOG 2025-06-20).
+5. **Message/Attachment Download Internalised & Workers Deleted:**
+   * **Action**: See SYNCLOG 2025-06-22.
 
 ## **5\. Core Implementation Guarantees**
 

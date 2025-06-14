@@ -36,7 +36,6 @@ import net.melisma.mail.navigation.AppRoutes
 import timber.log.Timber
 import java.util.UUID
 import javax.inject.Inject
-import net.melisma.data.sync.workers.MessageBodyDownloadWorker
 
 data class ThreadDetailScreenState(
     val threadLoadingState: ThreadDetailUIState = ThreadDetailUIState.Loading,
@@ -52,7 +51,6 @@ class ThreadDetailViewModel @Inject constructor(
     private val getThreadDetailsUseCase: GetThreadDetailsUseCase,
     private val userPreferencesRepository: UserPreferencesRepository,
     private val networkMonitor: NetworkMonitor,
-    private val workManager: WorkManager,
     private val threadRepository: ThreadRepository,
     private val syncController: SyncController,
     private val savedStateHandle: SavedStateHandle
@@ -264,42 +262,12 @@ class ThreadDetailViewModel @Inject constructor(
     }
 
     private fun enqueueMessageBodyDownload(messageId: String, accId: String) {
-        Timber.d("Enqueuing MessageBodyDownloadWorker for $messageId in account $accId (ThreadDetail)")
-        val workRequest = OneTimeWorkRequestBuilder<MessageBodyDownloadWorker>()
-            .setInputData(
-                workDataOf(
-                    MessageBodyDownloadWorker.KEY_ACCOUNT_ID to accId,
-                    MessageBodyDownloadWorker.KEY_MESSAGE_ID to messageId
-                )
-            )
-            .build()
-        val workName = "thread-message-body-download-$messageId"
-        workManager.enqueueUniqueWork(workName, ExistingWorkPolicy.REPLACE, workRequest)
-        observeWorkStatus(workRequest.id, messageId)
+        Timber.d("Submitting DownloadMessageBody job for $messageId (ThreadDetail)")
+        syncController.submit(SyncJob.DownloadMessageBody(messageId, accId))
     }
 
-    private fun observeWorkStatus(workId: UUID, messageId: String) {
-        viewModelScope.launch {
-            workManager.getWorkInfoByIdFlow(workId).collectLatest { workInfo ->
-                if (workInfo != null) {
-                    Timber.d("WorkInfo for message body $messageId (ThreadDetail): ${workInfo.state}")
-                    when (workInfo.state) {
-                        WorkInfo.State.SUCCEEDED -> {
-                            Timber.d("TDB_VM: Body download for $messageId SUCCEEDED. Data will refresh via observer.")
-                        }
-                        WorkInfo.State.FAILED -> {
-                            val errorData = workInfo.outputData.getString(MessageBodyDownloadWorker.KEY_RESULT_ERROR) ?: "Download failed"
-                            updateMessageBodyState(messageId, BodyLoadingState.Error(errorData))
-                        }
-                        WorkInfo.State.CANCELLED -> {
-                            updateMessageBodyState(messageId, BodyLoadingState.Error("Download cancelled"))
-                        }
-                        else -> { /* RUNNING, ENQUEUED, BLOCKED - bodyState is already Loading */ }
-                    }
-                }
-            }
-        }
-    }
+    @Suppress("UNUSED_PARAMETER")
+    private fun observeWorkStatus(dummyId: java.util.UUID, messageId: String) { /* no-op */ }
 
     private fun updateMessageBodyState(messageId: String, newBodyState: BodyLoadingState) {
         _uiState.update { currentState ->

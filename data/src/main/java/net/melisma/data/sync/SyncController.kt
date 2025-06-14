@@ -25,9 +25,12 @@ import kotlinx.coroutines.delay
 import net.melisma.core_data.model.EntitySyncStatus
 import net.melisma.core_db.entity.MessageFolderJunction
 import net.melisma.core_db.entity.FolderSyncStateEntity
+import dagger.hilt.android.qualifiers.ApplicationContext
+import android.content.Context
 
 @Singleton
 class SyncController @Inject constructor(
+    @ApplicationContext private val appContext: Context,
     @ApplicationScope private val externalScope: CoroutineScope,
     private val queue: PriorityBlockingQueue<SyncJob>,
     private val networkMonitor: NetworkMonitor,
@@ -94,7 +97,7 @@ class SyncController @Inject constructor(
                 when (job) {
                     is SyncJob.SyncFolderList -> handleSyncFolderList(job)
                     is SyncJob.ForceRefreshFolder -> handleForceRefreshFolder(job)
-                    is SyncJob.DownloadMessageBody -> syncWorkManager.enqueueMessageBodyDownload(job.accountId, job.messageId)
+                    is SyncJob.DownloadMessageBody -> handleDownloadMessageBody(job)
                     is SyncJob.RefreshFolderContents -> handleForceRefreshFolder(
                         SyncJob.ForceRefreshFolder(
                             accountId = job.accountId,
@@ -107,12 +110,10 @@ class SyncController @Inject constructor(
                         entityId = job.entityId,
                         payload = job.payload
                     )
-                    is SyncJob.DownloadAttachment -> syncWorkManager.enqueueAttachmentDownload(
-                        accountId = job.accountId,
-                        messageId = job.messageId,
-                        attachmentId = job.attachmentId
+                    is SyncJob.DownloadAttachment -> handleDownloadAttachment(job)
+                    is SyncJob.FetchFullMessageBody -> handleDownloadMessageBody(
+                        SyncJob.DownloadMessageBody(job.messageId, job.accountId)
                     )
-                    is SyncJob.FetchFullMessageBody -> syncWorkManager.enqueueMessageBodyDownload(job.accountId, job.messageId)
                     is SyncJob.FetchMessageHeaders -> handleFetchMessageHeaders(job)
                     is SyncJob.FetchNextMessageListPage -> handleFetchNextPage(job)
                     is SyncJob.SearchOnline -> Timber.w("No-op handler for SearchOnline")
@@ -384,6 +385,101 @@ class SyncController @Inject constructor(
             accountDao.updateFolderListSyncSuccess(job.accountId, System.currentTimeMillis())
             accountDao.updateFolderListSyncToken(job.accountId, delta.nextSyncToken)
             Timber.d("Folder list sync completed for ${job.accountId}")
+        }
+    }
+
+    private suspend fun handleDownloadMessageBody(job: SyncJob.DownloadMessageBody) {
+        kotlinx.coroutines.withContext(ioDispatcher) {
+            if (!networkMonitor.isOnline.first()) {
+                Timber.i("Offline – skip body download for ${job.messageId}")
+                return@withContext
+            }
+
+            val messageDao = appDatabase.messageDao()
+            val bodyDao = appDatabase.messageBodyDao()
+            val accountDao = appDatabase.accountDao()
+
+            messageDao.setSyncStatus(job.messageId, EntitySyncStatus.PENDING_DOWNLOAD)
+
+            val service = mailApiServiceSelector.getServiceByAccountId(job.accountId) ?: run {
+                Timber.w("MailApiService not found for account ${job.accountId}")
+                return@withContext
+            }
+
+            val result = service.getMessageContent(job.messageId)
+
+            if (result.isFailure) {
+                val ex = result.exceptionOrNull()
+                messageDao.setSyncError(job.messageId, ex?.message ?: "Unknown error")
+                if (ex is net.melisma.core_data.errors.ApiServiceException && ex.errorDetails.isNeedsReAuth) {
+                    accountDao.setNeedsReauthentication(job.accountId, true)
+                }
+                return@withContext
+            }
+
+            val msg = result.getOrThrow()
+            val bodyContent = msg.body
+            val contentType = msg.bodyContentType ?: "TEXT"
+            val sizeBytes = bodyContent?.toByteArray(Charsets.UTF_8)?.size?.toLong() ?: 0L
+
+            bodyDao.insertOrUpdateMessageBody(
+                net.melisma.core_db.entity.MessageBodyEntity(
+                    messageId = job.messageId,
+                    content = bodyContent,
+                    contentType = contentType,
+                    sizeInBytes = sizeBytes,
+                    lastFetchedTimestamp = System.currentTimeMillis()
+                )
+            )
+            if (bodyContent != null) {
+                messageDao.updateMessageBody(job.messageId, bodyContent)
+            }
+            messageDao.setSyncStatus(job.messageId, EntitySyncStatus.SYNCED)
+            Timber.d("Downloaded body for ${job.messageId}")
+        }
+    }
+
+    private suspend fun handleDownloadAttachment(job: SyncJob.DownloadAttachment) {
+        kotlinx.coroutines.withContext(ioDispatcher) {
+            if (!networkMonitor.isOnline.first()) {
+                Timber.i("Offline – skip attachment download ${job.attachmentId}")
+                return@withContext
+            }
+
+            val attachmentDao = appDatabase.attachmentDao()
+            val accountDao = appDatabase.accountDao()
+
+            attachmentDao.updateSyncStatus(job.attachmentId, EntitySyncStatus.PENDING_DOWNLOAD, null)
+
+            val attachment = attachmentDao.getAttachmentByIdSuspend(job.attachmentId) ?: run {
+                Timber.w("Attachment ${job.attachmentId} not found in DB")
+                return@withContext
+            }
+
+            val service = mailApiServiceSelector.getServiceByAccountId(job.accountId) ?: run {
+                Timber.w("MailApiService not found for account ${job.accountId}")
+                return@withContext
+            }
+
+            val result = service.downloadAttachment(job.messageId, job.attachmentId)
+
+            if (result.isFailure) {
+                val ex = result.exceptionOrNull()
+                attachmentDao.updateSyncStatus(job.attachmentId, EntitySyncStatus.ERROR, ex?.message)
+                if (ex is net.melisma.core_data.errors.ApiServiceException && ex.errorDetails.isNeedsReAuth) {
+                    accountDao.setNeedsReauthentication(job.accountId, true)
+                }
+                return@withContext
+            }
+
+            val data = result.getOrThrow()
+            val dir = java.io.File(appContext.filesDir, "attachments/${job.messageId}")
+            if (!dir.exists()) dir.mkdirs()
+            val file = java.io.File(dir, attachment.fileName)
+            file.outputStream().use { it.write(data) }
+
+            attachmentDao.updateDownloadSuccess(job.attachmentId, file.absolutePath, System.currentTimeMillis())
+            Timber.d("Downloaded attachment ${job.attachmentId} to ${file.absolutePath}")
         }
     }
 } 
