@@ -15,7 +15,7 @@
 * **Requirement 0.5 (Implement Core Sync Logic):** As a developer, I want to ensure that the SyncController's implementation strictly follows the defined 4-level priority algorithm, uses database transactions for data integrity, and persists its background sync state in a FolderSyncStateEntity.  
   * **Status: Completed (2025-06-25)**
 * **Requirement 0.6 (Integrate Initial Sync Duration):** As a developer, I want to integrate the existing user preference for "initial sync duration" into the SyncController's initial sync mode.
-  * **Status: To Do**
+  * **Status: Completed (2025-06-30)**
 * **Requirement 0.7 (Isolate Attachments for Backup Exclusion):** As a developer, I want all downloaded attachments to be saved to a dedicated attachments/ directory inside the no_backup area which the platform never backs up.
   * **Status: Completed (2025-06-26)**
 * **Requirement 0.8 (Polling Lifecycle – Foreground & Background):** Implement 5-second active polling and 15-minute passive WorkManager job to queue low-priority freshness jobs.  

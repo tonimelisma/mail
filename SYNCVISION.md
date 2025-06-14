@@ -68,6 +68,8 @@ _(Update 2025-06-19: Active & Passive polling implemented in code – see SyncCo
 * **Passive Polling (App in Background):** The 5-second timer is stopped. A periodic WorkManager job is scheduled to run approximately every 15 minutes. This worker's sole responsibility is to queue a low-priority `FetchMessageHeaders` job, ensuring reasonable data freshness while conserving battery.
 * **Initial Sync Mode (New Account):** A long-running sync managed by a Foreground Service. It will honor the user's "initial sync duration" preference by fetching mail only within that time window.
 
+_(Update 2025-06-30: Preference now enforced in code – SyncController passes earliestTimestampEpochMillis on first page request of folder sync.)_
+
 ## **6\. Data Model & Concurrency**
 
 * **Concurrency:** One active network operation per account at any given time. _(Update 2025-06-20: Enforced in code via `SyncController` `activeAccounts` mutex.)_  

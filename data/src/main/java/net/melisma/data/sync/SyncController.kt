@@ -161,6 +161,15 @@ class SyncController @Inject constructor(
             return
         }
 
+        // Determine if this is the very first sync for the folder (no state row yet & first page)
+        val stateDao = appDatabase.folderSyncStateDao()
+        val hasSyncedBefore = stateDao.observeState(folderId).firstOrNull() != null
+        val earliestTimestamp: Long? = if (!hasSyncedBefore && pageToken == null) {
+            computeEarliestTimestamp()
+        } else {
+            null
+        }
+
         // Resolve remote folder id
         val folderDao = appDatabase.folderDao()
         val localFolder = folderDao.getFolderByIdSuspend(folderId) ?: run {
@@ -172,7 +181,8 @@ class SyncController @Inject constructor(
         val response = service.getMessagesForFolder(
             folderId = apiFolderId,
             maxResults = 50,
-            pageToken = pageToken
+            pageToken = pageToken,
+            earliestTimestampEpochMillis = earliestTimestamp
         )
 
         if (response.isFailure) {
@@ -204,6 +214,17 @@ class SyncController @Inject constructor(
         if (paged.nextPageToken != null) {
             submit(SyncJob.FetchMessageHeaders(folderId, paged.nextPageToken, accountId))
         }
+    }
+
+    /**
+     * Calculates the epoch millis cutoff for the initial sync duration preference.
+     * Returns null when the preference represents "All time" or an invalid value.
+     */
+    private fun computeEarliestTimestamp(): Long? {
+        val days = initialSyncDurationDays
+        if (days == Long.MAX_VALUE || days <= 0L) return null
+        val millisPerDay = 24L * 60L * 60L * 1000L
+        return System.currentTimeMillis() - (days * millisPerDay)
     }
 
     private suspend fun handleForceRefreshFolder(job: SyncJob.ForceRefreshFolder) {

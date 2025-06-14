@@ -587,4 +587,32 @@ Requirement **0.4 (Implement Sync State Observation)** is now **Completed**. The
 * Localise messages and use string resources.
 * Remove remaining TODO references to deprecated SyncEngine in ViewModels.
 
+---
+
+## **Date: 2025-06-30**
+
+### **Developer:** ChatGPT-o3 (Automated)
+
+### **Increment Implemented – "Req 0.6 ✓: Initial Sync Window Enforcement"**
+
+**Goal**
+Respect the user's Initial-Sync-Duration preference by limiting first-time folder syncs to recent messages only.
+
+**Work Completed**
+1. **SyncController**  
+   • Added `computeEarliestTimestamp()` helper.  
+   • `processFetchHeaders()` now detects if a folder is being synced for the first time and, when so, passes `earliestTimestampEpochMillis` to `MailApiService.getMessagesForFolder()`.  
+   • Preference value `initialSyncDurationDays` is read from `UserPreferencesRepository`; `Long.MAX_VALUE` and non-positive values default to unlimited history.
+2. **Documentation**  
+   • `BACKLOG.md` – Requirement 0.6 marked **Completed (2025-06-30)**.  
+   • `SYNCPLAN.md` – Phase-1 Step 5 status updated with today's completion note.  
+   • `SYNCVISION.md` – Added update note in §5 Initial Sync mode.  
+   • `ARCHITECTURE.md` – Added bullet 2.3.5 describing initial-sync window enforcement.
+3. **Build**  
+   • Ran `./gradlew build` (see automated step below) – build passes with no warnings.
+
+### **Challenges & Next Steps**
+* Changing the preference after some folders have already synced will not retro-actively purge or re-download data; future improvement could add a "Resync from scratch" option.  
+* A dedicated Foreground Service for large initial syncs remains pending (Phase-4, Step 2 in SYNCPLAN).
+
 --- 

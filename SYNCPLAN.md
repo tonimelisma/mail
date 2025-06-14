@@ -45,6 +45,7 @@ The new architecture will be centered around a SyncController singleton. Key cha
 5. **Integrate User Preferences:**
    * **Action**: Inject `UserPreferencesRepository` into the `SyncController`.
    * **Action**: During initial sync, the controller will read the `initialSyncDurationDays` preference and pass a calculated date filter to the backend services to limit the scope of the sync.
+   * **Status:** Completed on 2025-06-30 – SyncController now applies the earliest‐timestamp filter for the first page of every folder sync.
 
 ### **Phase 2: Core Logic Migration \- Replacing SyncEngine**
 

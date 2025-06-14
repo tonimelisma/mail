@@ -59,7 +59,8 @@ All data synchronization is managed by the centralized **SyncController**. This 
    * **Active Polling (Foreground):** An aggressive 5-second timer queues freshness jobs for critical folders.  
    * **Passive Polling (Background):** A battery-conscious WorkManager job queues freshness jobs approximately every 15 minutes.
 4. **Self-Perpetuating Queue (Background Sync):** The SyncController intelligently backfills the cache. When a page of messages is fetched (as a Level 4 job) and the server indicates more pages are available, a new low-priority SyncJob for the next page is automatically created and added to the queue. The nextPageToken for this process is persisted in the FolderSyncStateEntity table, making the process resilient. This replaces the need for FolderContentSyncWorker.  
-5. **Observable State:** The SyncController exposes its real-time status (e.g., isSyncing, networkAvailable, errorState) via a StateFlow\<SyncStatus\>. This allows the UI to provide a transparent user experience with global status bars, contextual feedback on pull-to-refresh, and detailed diagnostic panels.
+5. **Initial Sync Window Enforcement (NEW 2025-06-30):** On first sync of each folder, SyncController applies the user's `initialSyncDurationDays` preference and fetches only messages newer than that cutoff date.
+6. **Observable State:** The SyncController exposes its real-time status (e.g., isSyncing, networkAvailable, errorState) via a StateFlow<SyncStatus>. This allows the UI to provide a transparent user experience with global status bars, contextual feedback on pull-to-refresh, and detailed diagnostic panels.
 
 ### **2.4. Data Caching and Eviction**
 
