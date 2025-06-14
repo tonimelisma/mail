@@ -31,7 +31,8 @@ import net.melisma.core_data.model.Attachment
 import net.melisma.core_data.model.Message
 import net.melisma.core_data.preferences.DownloadPreference
 import net.melisma.core_data.preferences.UserPreferencesRepository
-import net.melisma.data.sync.SyncEngine
+import net.melisma.data.sync.SyncController
+import net.melisma.core_data.model.SyncJob
 import net.melisma.data.sync.workers.AttachmentDownloadWorker
 import net.melisma.data.sync.workers.MessageBodyDownloadWorker
 import net.melisma.domain.data.GetMessageDetailsUseCase
@@ -81,7 +82,7 @@ class MessageDetailViewModel @Inject constructor(
     private val userPreferencesRepository: UserPreferencesRepository,
     private val networkMonitor: NetworkMonitor,
     private val workManager: WorkManager,
-    private val syncEngine: SyncEngine,
+    private val syncController: SyncController,
     private val savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
@@ -172,7 +173,9 @@ class MessageDetailViewModel @Inject constructor(
 
                             if (isStale) {
                                 Timber.d("ViewModelDBG: Message ${message.remoteId} (local: ${message.id}) is stale (last sync: $lastSync). Triggering silent refresh.")
-                                syncEngine.refreshMessage(this@MessageDetailViewModel.accountId!!, message.id, message.remoteId)
+                                message.remoteId?.let { remoteId ->
+                                    syncController.submit(SyncJob.FetchFullMessageBody(remoteId, this@MessageDetailViewModel.accountId!!))
+                                } ?: Timber.w("Message ${message.id} has null remoteId; cannot request body refresh via SyncController.")
                             } else {
                                 Timber.d("ViewModelDBG: Message ${message.remoteId} (local: ${message.id}) is fresh (last sync: $lastSync). No silent refresh needed.")
                             }

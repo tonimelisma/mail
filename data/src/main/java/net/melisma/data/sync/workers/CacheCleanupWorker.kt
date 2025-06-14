@@ -9,7 +9,7 @@ import dagger.assisted.AssistedInject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
-import net.melisma.core_data.model.SyncStatus
+import net.melisma.core_data.model.EntitySyncStatus
 import net.melisma.core_db.AppDatabase
 import net.melisma.core_db.dao.AttachmentDao
 import net.melisma.core_db.dao.MessageBodyDao
@@ -79,8 +79,8 @@ class CacheCleanupWorker @AssistedInject constructor(
             val messageOlderThanTimestampThreshold = now - MIN_AGE_FOR_MESSAGE_TIMESTAMP_EVICTION_MS
 
             val excludedSyncStates = listOf(
-                SyncStatus.PENDING_UPLOAD.name,
-                SyncStatus.PENDING_DOWNLOAD.name
+                EntitySyncStatus.PENDING_UPLOAD.name,
+                EntitySyncStatus.PENDING_DOWNLOAD.name
             )
 
             // Fetch all potentially evictable messages initially
@@ -169,7 +169,7 @@ class CacheCleanupWorker @AssistedInject constructor(
                                 val fileSize = file.length()
                                 if (file.delete()) {
                                     Timber.tag(TAG).i("$tierName: Deleted attachment file: ${attachment.localFilePath} (Size: $fileSize) for msg ${message.id}")
-                                    attachmentDao.resetDownloadStatus(attachment.attachmentId, SyncStatus.IDLE.name)
+                                    attachmentDao.resetDownloadStatus(attachment.attachmentId, EntitySyncStatus.SYNCED)
                                     currentCacheSizeBytes -= fileSize
                                     Timber.tag(TAG).d("$tierName: Cache size after deleting attachment ${attachment.attachmentId}: $currentCacheSizeBytes bytes.")
                                 } else {
@@ -177,7 +177,7 @@ class CacheCleanupWorker @AssistedInject constructor(
                                 }
                             } else {
                                 Timber.tag(TAG).w("$tierName: Attachment file not found at path: ${attachment.localFilePath} for attachment ${attachment.attachmentId}, msg ${message.id}. Resetting DB status.")
-                                attachmentDao.resetDownloadStatus(attachment.attachmentId, SyncStatus.IDLE.name)
+                                attachmentDao.resetDownloadStatus(attachment.attachmentId, EntitySyncStatus.SYNCED)
                             }
                         } catch (e: Exception) {
                             Timber.tag(TAG).e(e, "$tierName: Error deleting attachment file: ${attachment.localFilePath} for msg ${message.id}")

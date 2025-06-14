@@ -6,7 +6,7 @@ import androidx.room.TypeConverters
 import net.melisma.core_db.converter.StringListConverter
 import net.melisma.core_db.converter.WellKnownFolderTypeConverter
 import net.melisma.core_db.converter.PayloadConverter
-import net.melisma.core_db.converter.SyncStatusConverter
+import net.melisma.core_db.converter.EntitySyncStatusConverter
 import net.melisma.core_db.dao.AccountDao
 import net.melisma.core_db.dao.AttachmentDao
 import net.melisma.core_db.dao.FolderDao
@@ -38,7 +38,7 @@ import net.melisma.core_db.entity.RemoteKeyEntity
 @TypeConverters(
     WellKnownFolderTypeConverter::class, 
     StringListConverter::class, 
-    SyncStatusConverter::class,
+    EntitySyncStatusConverter::class,
     PayloadConverter::class
 )
 abstract class AppDatabase : RoomDatabase() {

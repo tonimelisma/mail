@@ -25,11 +25,13 @@ import net.melisma.core_db.dao.FolderDao
 import net.melisma.core_db.dao.MessageDao
 import net.melisma.core_db.dao.PendingActionDao
 import net.melisma.core_db.entity.PendingActionEntity
+import net.melisma.data.sync.SyncController
+import net.melisma.core_data.model.SyncJob
 import net.melisma.data.sync.workers.ActionUploadWorker
 import net.melisma.data.sync.workers.AttachmentDownloadWorker
 import net.melisma.data.sync.workers.CacheCleanupWorker
 import net.melisma.data.sync.workers.FolderContentSyncWorker
-import net.melisma.data.sync.workers.FolderListSyncWorker
+import net.melisma.data.sync.workers.FolderSyncWorker
 import net.melisma.data.sync.workers.MessageBodyDownloadWorker
 import net.melisma.data.sync.workers.SingleMessageSyncWorker
 import timber.log.Timber
@@ -46,6 +48,7 @@ enum class SyncProgress {
     ERROR
 }
 
+@Deprecated("Use SyncController instead. This class is pending for removal and it's not maintained.")
 @Singleton
 class SyncEngine @Inject constructor(
     private val workManager: WorkManager,
@@ -55,6 +58,7 @@ class SyncEngine @Inject constructor(
     private val pendingActionDao: PendingActionDao,
     private val mailApiServiceSelector: MailApiServiceSelector,
     private val networkMonitor: NetworkMonitor,
+    private val syncController: SyncController,
     @ApplicationScope private val externalScope: CoroutineScope,
     @Dispatcher(MailDispatchers.IO) private val ioDispatcher: CoroutineDispatcher
 ) {
@@ -107,8 +111,8 @@ class SyncEngine @Inject constructor(
             _overallSyncState.value = SyncProgress.SYNCING // Or a more specific per-account state
 
             val uniqueWorkName = FOLDER_LIST_SYNC_WORK_NAME_PREFIX + accountId
-            val folderListWorkRequest = OneTimeWorkRequestBuilder<FolderListSyncWorker>()
-                .setInputData(workDataOf(FolderListSyncWorker.KEY_ACCOUNT_ID to accountId))
+            val folderListWorkRequest = OneTimeWorkRequestBuilder<FolderSyncWorker>()
+                .setInputData(workDataOf(FolderSyncWorker.KEY_ACCOUNT_ID to accountId))
                 .addTag("FolderListSync_${accountId}") // Tag can still be useful for querying by tag
                 .build()
 
@@ -180,7 +184,7 @@ class SyncEngine @Inject constructor(
 
                             androidx.work.WorkInfo.State.FAILED -> {
                                 val errorMessage =
-                                    workInfo.outputData.getString(FolderListSyncWorker.KEY_ERROR_MESSAGE)
+                                    workInfo.outputData.getString(FolderSyncWorker.KEY_ERROR_MESSAGE)
                                 Timber.e("$TAG: FolderListSyncWorker for account $accountId (unique work: $uniqueWorkName) FAILED. Error: $errorMessage")
                                 // TODO: P2_SYNC - Update per-account state to FOLDER_LIST_SYNC_FAILED
                                 _overallSyncState.value = SyncProgress.ERROR
@@ -204,29 +208,7 @@ class SyncEngine @Inject constructor(
     }
 
     fun syncFolderContent(accountId: String, folderId: String, folderRemoteId: String) {
-        externalScope.launch(ioDispatcher) {
-            if (!networkMonitor.isOnline.first()) {
-                Timber.w("$TAG: Network offline. Skipping FolderContentSyncWorker for accountId: $accountId, folderId: $folderId")
-                return@launch
-            }
-
-            // Diagnostic check REMOVED as upstream UUID handling for folder.id is now robust.
-            // The folderId parameter here is expected to be the local UUID (FolderEntity.id).
-
-            Timber.d("Enqueuing FolderContentSyncWorker for accountId: $accountId, folderId: $folderId, folderRemoteId: $folderRemoteId")
-            _overallSyncState.value = SyncProgress.SYNCING
-            val workRequest = OneTimeWorkRequestBuilder<FolderContentSyncWorker>()
-                .setInputData(
-                    workDataOf(
-                        "ACCOUNT_ID" to accountId,
-                        "FOLDER_ID" to folderId,
-                        "FOLDER_REMOTE_ID" to folderRemoteId
-                    )
-                )
-                .addTag("FolderContentSync_${accountId}_${folderId}")
-                .build()
-            workManager.enqueue(workRequest)
-        }
+        syncController.submit(SyncJob.ForceRefreshFolder(folderId, accountId))
     }
 
     fun downloadMessageBody(accountId: String, messageId: String) {
@@ -279,8 +261,8 @@ class SyncEngine @Inject constructor(
         Timber.d("$TAG: Scheduling periodic sync for accountId: $accountId")
         // TODO: P3_SYNC - This periodic sync should also use the new orchestrated approach.
         // It should probably trigger syncFolders(accountId) which handles the chain.
-        val periodicFolderListSync = PeriodicWorkRequestBuilder<FolderListSyncWorker>(4, TimeUnit.HOURS)
-            .setInputData(workDataOf(FolderListSyncWorker.KEY_ACCOUNT_ID to accountId))
+        val periodicFolderListSync = PeriodicWorkRequestBuilder<FolderSyncWorker>(4, TimeUnit.HOURS)
+            .setInputData(workDataOf(FolderSyncWorker.KEY_ACCOUNT_ID to accountId))
             .addTag("PeriodicFolderListSync_$accountId")
             .build()
 
@@ -370,6 +352,11 @@ class SyncEngine @Inject constructor(
             dailyCacheCleanupRequest
         )
         Timber.i("$TAG: Periodic cache cleanup worker enqueued.")
+    }
+
+    // --- Legacy compatibility wrappers ---
+    fun syncFolderContents(folderId: String, accountId: String) {
+        syncFolderContent(accountId, folderId, folderId)
     }
 }
 

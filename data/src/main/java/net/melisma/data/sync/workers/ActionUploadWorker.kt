@@ -7,24 +7,22 @@ import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.serialization.json.Json
 import net.melisma.core_data.connectivity.NetworkMonitor
 import net.melisma.core_data.datasource.MailApiService
 import net.melisma.core_data.datasource.MailApiServiceSelector
+import net.melisma.core_data.model.EntitySyncStatus
 import net.melisma.core_data.model.MessageDraft
-import net.melisma.core_data.model.WellKnownFolderType
-import net.melisma.core_data.model.SyncStatus
 import net.melisma.core_db.AppDatabase
 import net.melisma.core_db.dao.AccountDao
+import net.melisma.core_db.dao.AttachmentDao
 import net.melisma.core_db.dao.FolderDao
 import net.melisma.core_db.dao.MessageDao
 import net.melisma.core_db.dao.PendingActionDao
-import net.melisma.core_db.dao.AttachmentDao
 import net.melisma.core_db.entity.PendingActionEntity
-import net.melisma.core_db.entity.AttachmentEntity
 import net.melisma.core_db.model.PendingActionStatus
 import net.melisma.data.mapper.toEntity
 import timber.log.Timber
@@ -40,25 +38,23 @@ class ActionUploadWorker @AssistedInject constructor(
     private val folderDao: FolderDao,
     private val pendingActionDao: PendingActionDao,
     private val networkMonitor: NetworkMonitor,
-    private val attachmentDao: AttachmentDao
+    private val attachmentDao: AttachmentDao,
 ) : CoroutineWorker(appContext, workerParams) {
 
     private val TAG = "ActionUploadWorker"
 
     companion object {
         const val KEY_ACCOUNT_ID = "ACCOUNT_ID"
-        const val KEY_ENTITY_ID = "ENTITY_ID" // e.g., messageId, folderId
+        const val KEY_ENTITY_ID = "ENTITY_ID"
         const val KEY_ACTION_TYPE = "ACTION_TYPE"
-        const val KEY_ACTION_PAYLOAD = "ACTION_PAYLOAD" // JSON string for complex data
+        const val KEY_ACTION_PAYLOAD = "ACTION_PAYLOAD"
 
-        // ADDING these keys to match what DefaultMessageRepository sends
-        const val KEY_DRAFT_DETAILS = "DRAFT_DETAILS"
-        const val KEY_IS_READ = "IS_READ"
-        const val KEY_IS_STARRED = "IS_STARRED"
-        const val KEY_OLD_FOLDER_ID = "OLD_FOLDER_ID"
-        const val KEY_NEW_FOLDER_ID = "NEW_FOLDER_ID"
+        const val KEY_DRAFT_DETAILS = "draft_json"
+        const val KEY_IS_READ = "isRead"
+        const val KEY_IS_STARRED = "isStarred"
+        const val KEY_OLD_FOLDER_ID = "oldFolderId"
+        const val KEY_NEW_FOLDER_ID = "newFolderId"
 
-        // Example Action Types (define these more robustly, perhaps in a shared consts file or enum)
         const val ACTION_MARK_AS_READ = "MARK_AS_READ"
         const val ACTION_MARK_AS_UNREAD = "MARK_AS_UNREAD"
         const val ACTION_STAR_MESSAGE = "STAR_MESSAGE"
@@ -68,7 +64,6 @@ class ActionUploadWorker @AssistedInject constructor(
         const val ACTION_CREATE_DRAFT = "CREATE_DRAFT"
         const val ACTION_UPDATE_DRAFT = "UPDATE_DRAFT"
 
-        // Thread Action Types
         const val ACTION_MARK_THREAD_AS_READ = "MARK_THREAD_AS_READ"
         const val ACTION_MARK_THREAD_AS_UNREAD = "MARK_THREAD_AS_UNREAD"
         const val ACTION_DELETE_THREAD = "DELETE_THREAD"
@@ -80,11 +75,11 @@ class ActionUploadWorker @AssistedInject constructor(
 
         if (!networkMonitor.isOnline.first()) {
             Timber.w("$TAG: Network offline. Worker will retry later.")
-            return Result.retry() // Retry when network is back
+            return Result.retry()
         }
 
         var actionsProcessedInThisRun = 0
-        while (true) { 
+        while (true) {
             currentCoroutineContext().ensureActive()
 
             val action = pendingActionDao.getNextActionToProcess()
@@ -97,8 +92,7 @@ class ActionUploadWorker @AssistedInject constructor(
 
             action.attemptCount++
             action.lastAttemptAt = System.currentTimeMillis()
-            // Status will be updated based on outcome
-            pendingActionDao.updateAction(action) // Persist attempt increment and timestamp
+            pendingActionDao.updateAction(action)
 
             val account = accountDao.getAccountByIdSuspend(action.accountId)
             if (account == null) {
@@ -106,7 +100,7 @@ class ActionUploadWorker @AssistedInject constructor(
                 action.status = PendingActionStatus.FAILED
                 action.lastError = "Account not found"
                 pendingActionDao.updateAction(action)
-                continue // Try next action in the queue
+                continue
             }
 
             val mailService = mailApiServiceSelector.getServiceByProviderType(account.providerType)
@@ -115,7 +109,7 @@ class ActionUploadWorker @AssistedInject constructor(
                 action.status = PendingActionStatus.FAILED
                 action.lastError = "Mail service not available for provider ${account.providerType}"
                 pendingActionDao.updateAction(action)
-                continue // Try next action
+                continue
             }
 
             val actionOutcome = performActionInternal(mailService, action)
@@ -141,369 +135,140 @@ class ActionUploadWorker @AssistedInject constructor(
         }
 
         Timber.d("$TAG: Finished ActionUploadWorker run. Processed $actionsProcessedInThisRun actions in this cycle.")
-        // If the loop finishes, it means there are no more actions *currently processable* according to getNextActionToProcess().
-        // Return success to let WorkManager know this specific job instance is complete.
-        // New actions added to the DB will trigger a new worker instance via SyncEngine's enqueueUniqueWork.
         return Result.success()
     }
 
     private suspend fun performActionInternal(
         mailService: MailApiService,
-        action: PendingActionEntity
+        action: PendingActionEntity,
     ): kotlin.Result<Unit> {
         val accountId = action.accountId
         val entityId = action.entityId
         val actionType = action.actionType
-        val payload = action.payload // This is Map<String, String?>
+        val payload = action.payload
 
         return when (actionType) {
             ACTION_MARK_AS_READ, ACTION_MARK_AS_UNREAD -> {
-                val isReadStr = payload[KEY_IS_READ]
-                val isRead = isReadStr?.toBooleanStrictOrNull()
-                if (isRead == null) {
-                    Timber.e("$TAG: Missing or invalid 'isRead' payload for $actionType on entity $entityId. Value: '$isReadStr'")
-                    kotlin.Result.failure(IllegalArgumentException("Missing or invalid 'isRead' payload. Value: '$isReadStr'"))
-                } else {
-                    mailService.markMessageRead(entityId, isRead)
-                }
+                val isRead = payload[KEY_IS_READ]?.toBooleanStrictOrNull()
+                    ?: return kotlin.Result.failure(IllegalArgumentException("Missing or invalid 'isRead' payload."))
+                mailService.markMessageRead(entityId, isRead)
             }
             ACTION_STAR_MESSAGE -> {
-                val isStarredStr = payload[KEY_IS_STARRED]
-                val isStarred = isStarredStr?.toBooleanStrictOrNull()
-                if (isStarred == null) {
-                    Timber.e("$TAG: Missing or invalid 'isStarred' payload for $actionType on entity $entityId. Value: '$isStarredStr'")
-                    kotlin.Result.failure(IllegalArgumentException("Missing or invalid 'isStarred' payload. Value: '$isStarredStr'"))
-                } else {
-                    mailService.starMessage(entityId, isStarred)
-                }
+                val isStarred = payload[KEY_IS_STARRED]?.toBooleanStrictOrNull()
+                    ?: return kotlin.Result.failure(IllegalArgumentException("Missing or invalid 'isStarred' payload."))
+                mailService.starMessage(entityId, isStarred)
             }
-            ACTION_DELETE_MESSAGE -> {
-                mailService.deleteMessage(entityId)
-            }
+            ACTION_DELETE_MESSAGE -> mailService.deleteMessage(entityId)
             ACTION_MOVE_MESSAGE -> {
-                val targetFolderLocalId = payload[KEY_NEW_FOLDER_ID]
-                val sourceFolderLocalId = payload[KEY_OLD_FOLDER_ID] 
-                when {
-                    targetFolderLocalId == null -> {
-                        Timber.e("$TAG: Missing target folder ID for $actionType on entity $entityId")
-                        kotlin.Result.failure(IllegalArgumentException("Missing target folder ID for $actionType"))
-                    }
-                    sourceFolderLocalId == null -> {
-                         Timber.e("$TAG: Missing source folder ID for $actionType on entity $entityId")
-                         kotlin.Result.failure(IllegalArgumentException("Missing source folder ID for $actionType"))
-                    }
-                    else -> mailService.moveMessage(entityId, sourceFolderLocalId, targetFolderLocalId)
-                }
+                val targetFolderId = payload[KEY_NEW_FOLDER_ID]
+                    ?: return kotlin.Result.failure(IllegalArgumentException("Missing target folder ID"))
+                val sourceFolderId = payload[KEY_OLD_FOLDER_ID]
+                    ?: return kotlin.Result.failure(IllegalArgumentException("Missing source folder ID"))
+                mailService.moveMessage(entityId, sourceFolderId, targetFolderId)
             }
-            ACTION_SEND_MESSAGE -> {
-                val draftJson = payload[KEY_DRAFT_DETAILS]
-                if (draftJson == null) {
-                    Timber.w("$TAG: $actionType action missing '$KEY_DRAFT_DETAILS' payload for temp entity $entityId.")
-                    return kotlin.Result.failure(IllegalArgumentException("Missing '$KEY_DRAFT_DETAILS' for $actionType"))
-                }
-                try {
-                    val draft = Json.decodeFromString<MessageDraft>(draftJson)
-                    val sendResult = mailService.sendMessage(draft)
-                    if (sendResult.isSuccess) {
-                         messageDao.deleteMessageById(entityId) 
-                         Timber.d("$TAG: Temporary local message $entityId deleted after successful send.")
-                    }
-                    sendResult.map { Unit }
-                } catch (e: Exception) {
-                    Timber.e(e, "$TAG: $actionType failed to decode draftJson or during API call for temp entity $entityId.")
-                    kotlin.Result.failure(e)
-                }
-            }
-            ACTION_CREATE_DRAFT -> {
-                val draftJson = payload[KEY_DRAFT_DETAILS]
-                if (draftJson == null) {
-                    Timber.w("$TAG: $actionType action missing '$KEY_DRAFT_DETAILS' payload for entity ${action.entityId} (temp local ID).")
-                    kotlin.Result.failure(IllegalArgumentException("Missing '$KEY_DRAFT_DETAILS' for $actionType"))
-                } else {
-                    try {
-                        val draft = Json.decodeFromString<MessageDraft>(draftJson)
-                        val createResult = mailService.createDraftMessage(draft)
-                        if (createResult.isSuccess) {
-                            val serverMessage = createResult.getOrThrow()
-                            
-                            appDatabase.withTransaction {
-                                val localMessageEntity = messageDao.getMessageByIdSuspend(action.entityId)
-                                if (localMessageEntity == null) {
-                                    Timber.e("$TAG: CRITICAL - Local message entity ${action.entityId} not found for $actionType. Cannot update with server info.")
-                                    throw IllegalStateException("Local message entity ${action.entityId} not found for $actionType")
-                                }
-
-                                // Update existing local entity with server info
-                                localMessageEntity.messageId = serverMessage.remoteId // This is the SERVER ID of the message
-                                localMessageEntity.folderId = serverMessage.folderId
-                                localMessageEntity.subject = serverMessage.subject
-                                localMessageEntity.body = serverMessage.body
-                                localMessageEntity.snippet = serverMessage.bodyPreview
-                                localMessageEntity.recipientAddresses = serverMessage.recipientAddresses
-                                localMessageEntity.recipientNames = serverMessage.recipientNames
-                                localMessageEntity.hasAttachments = serverMessage.attachments.isNotEmpty() // Update based on serverMessage
-                                localMessageEntity.isRead = serverMessage.isRead
-                                localMessageEntity.isStarred = serverMessage.isStarred
-                                localMessageEntity.timestamp = serverMessage.timestamp
-                                localMessageEntity.sentTimestamp = serverMessage.sentDateTime?.let {
-                                    try { java.time.OffsetDateTime.parse(it).toInstant().toEpochMilli() } catch (e: Exception) { null }
-                                }
-                                localMessageEntity.isDraft = true
-                                localMessageEntity.isOutbox = false
-                                localMessageEntity.syncStatus = SyncStatus.SYNCED
-                                localMessageEntity.lastSyncError = null
-                                localMessageEntity.lastSuccessfulSyncTimestamp = serverMessage.lastSuccessfulSyncTimestamp ?: System.currentTimeMillis()
-                                localMessageEntity.isLocalOnly = false
-
-                                messageDao.insertOrUpdateMessages(listOf(localMessageEntity))
-                                Timber.d("$TAG: Local draft ${action.entityId} updated with server info: new remoteId ${serverMessage.remoteId}")
-
-                                // Reconcile attachments
-                                attachmentDao.deleteAttachmentsForMessage(action.entityId) // Clear old local attachments for this draft
-                                
-                                val originalDraftAttachmentsById = draft.attachments.associateBy { it.id } // Client-generated ID to original MessageDraft.Attachment
-
-                                serverMessage.attachments.forEach { serverDomainAttachment ->
-                                    // serverDomainAttachment.id IS the client-generated ID (thanks to GraphApiHelper mapping)
-                                    // serverDomainAttachment.remoteId IS the server's actual attachment ID.
-                                    // serverDomainAttachment.fileName IS the original user-visible filename.
-                                    // serverDomainAttachment.contentId IS the Graph API's contentId (actual CID for inline images).
-
-                                    val originalLocalAttachment = originalDraftAttachmentsById[serverDomainAttachment.id]
-                                    val originalLocalUri = originalLocalAttachment?.localUri
-
-                                    if (originalLocalAttachment == null) {
-                                         Timber.w("$TAG: CreateDraft - Could not find original local attachment details for client-ID '${serverDomainAttachment.id}' (Server RemoteID '${serverDomainAttachment.remoteId}', Name '${serverDomainAttachment.fileName}'). This might indicate a mismatch or an attachment added/modified directly on server not reflected in original draft. Skipping this attachment for local DB update.")
-                                         return@forEach // continue to next serverAttachment
-                                    }
-                                    
-                                    val newAttachmentEntity = AttachmentEntity(
-                                        attachmentId = serverDomainAttachment.id, // Use client-generated ID as local PK
-                                        messageId = action.entityId, // Link to the local message entity ID (which is also a client-gen ID until first sync)
-                                        accountId = action.accountId, // Populate accountId
-                                        fileName = serverDomainAttachment.fileName, // Original filename
-                                        mimeType = serverDomainAttachment.contentType,
-                                        size = serverDomainAttachment.size,
-                                        isInline = serverDomainAttachment.isInline,
-                                        contentId = serverDomainAttachment.contentId, // Actual Graph contentId (CID)
-                                        localFilePath = originalLocalUri, // Preserved local path from original draft attachment
-                                        isDownloaded = !originalLocalUri.isNullOrBlank(),
-                                        downloadTimestamp = if (!originalLocalUri.isNullOrBlank()) System.currentTimeMillis() else null,
-                                        syncStatus = SyncStatus.SYNCED, // Synced with server
-                                        lastSyncError = null,
-                                        remoteAttachmentId = serverDomainAttachment.remoteId // Store server's actual attachment ID
-                                    )
-                                    attachmentDao.insertAttachments(listOf(newAttachmentEntity))
-                                }
-                                Timber.d("$TAG: Reconciled ${serverMessage.attachments.size} attachments for draft ${action.entityId} after server creation.")
-                            }
-                            kotlin.Result.success(Unit)
-                        } else {
-                            Timber.e(createResult.exceptionOrNull(), "$TAG: $actionType API call failed for entity ${action.entityId}.")
-                            kotlin.Result.failure(createResult.exceptionOrNull() ?: IllegalStateException("Draft creation API failed"))
-                        }
-                    } catch (e: Exception) {
-                        Timber.e(e, "$TAG: $actionType action failed to decode/process draftJson for entity ${action.entityId}.")
-                        kotlin.Result.failure(e)
-                    }
-                }
-            }
-            ACTION_UPDATE_DRAFT -> {
-                val draftJson = payload[KEY_DRAFT_DETAILS]
-                if (draftJson == null) {
-                    Timber.w("$TAG: $actionType action missing '$KEY_DRAFT_DETAILS' payload for entity ${action.entityId}.")
-                    kotlin.Result.failure(IllegalArgumentException("Missing '$KEY_DRAFT_DETAILS' for $actionType"))
-                } else {
-                    try {
-                        val draft = Json.decodeFromString<MessageDraft>(draftJson)
-                        val localDraftEntityForRemoteId = messageDao.getMessageByIdSuspend(action.entityId)
-                        if (localDraftEntityForRemoteId?.messageId == null) {
-                            Timber.e("$TAG: $actionType: Cannot update draft. Local entity ${action.entityId} has no remote ID (messageId).")
-                            return kotlin.Result.failure(IllegalStateException("Draft ${action.entityId} has no remote ID for server update."))
-                        }
-                        val remoteDraftId = localDraftEntityForRemoteId.messageId!!
-
-                        val updateResult = mailService.updateDraftMessage(remoteDraftId, draft)
-                        if (updateResult.isSuccess) {
-                            val serverMessage = updateResult.getOrThrow()
-
-                            appDatabase.withTransaction {
-                                val localMessageEntity = messageDao.getMessageByIdSuspend(action.entityId)
-                                if (localMessageEntity == null) {
-                                     Timber.e("$TAG: CRITICAL - Local message entity ${action.entityId} not found for $actionType post-update. This shouldn't happen.")
-                                    throw IllegalStateException("Local message entity ${action.entityId} not found for $actionType post-update")
-                                }
-                                
-                                // Update existing local entity with server info
-                                localMessageEntity.messageId = serverMessage.remoteId // Server ID of the message
-                                localMessageEntity.folderId = serverMessage.folderId
-                                localMessageEntity.subject = serverMessage.subject
-                                localMessageEntity.body = serverMessage.body
-                                localMessageEntity.snippet = serverMessage.bodyPreview
-                                localMessageEntity.recipientAddresses = serverMessage.recipientAddresses
-                                localMessageEntity.recipientNames = serverMessage.recipientNames
-                                localMessageEntity.hasAttachments = serverMessage.attachments.isNotEmpty()
-                                localMessageEntity.isRead = serverMessage.isRead
-                                localMessageEntity.isStarred = serverMessage.isStarred
-                                localMessageEntity.timestamp = serverMessage.timestamp
-                                localMessageEntity.sentTimestamp = serverMessage.sentDateTime?.let {
-                                    try { java.time.OffsetDateTime.parse(it).toInstant().toEpochMilli() } catch (e: Exception) { null }
-                                }
-
-                                localMessageEntity.isDraft = true
-                                localMessageEntity.isOutbox = false
-                                localMessageEntity.syncStatus = SyncStatus.SYNCED
-                                localMessageEntity.lastSyncError = null
-                                localMessageEntity.lastSuccessfulSyncTimestamp = serverMessage.lastSuccessfulSyncTimestamp ?: System.currentTimeMillis()
-                                localMessageEntity.isLocalOnly = false
-                                
-                                messageDao.insertOrUpdateMessages(listOf(localMessageEntity))
-                                Timber.d("$TAG: Local draft ${action.entityId} (remoteId ${remoteDraftId}) updated with server info.")
-
-                                // Reconcile attachments
-                                attachmentDao.deleteAttachmentsForMessage(action.entityId) // Clear old local attachments
-
-                                val originalDraftAttachmentsById = draft.attachments.associateBy { it.id } // Client-generated ID to original MessageDraft.Attachment
-
-                                serverMessage.attachments.forEach { serverDomainAttachment ->
-                                    // serverDomainAttachment.id IS the client-generated ID
-                                    // serverDomainAttachment.remoteId IS the server's actual attachment ID
-                                    // serverDomainAttachment.fileName IS the original user-visible filename
-                                    // serverDomainAttachment.contentId IS the Graph API's contentId (actual CID for inline images)
-
-                                    val originalLocalAttachment = originalDraftAttachmentsById[serverDomainAttachment.id]
-                                    val originalLocalUri = originalLocalAttachment?.localUri
-
-                                     if (originalLocalAttachment == null) {
-                                         Timber.w("$TAG: UpdateDraft - Could not find original local attachment details for client-ID '${serverDomainAttachment.id}' (Server RemoteID '${serverDomainAttachment.remoteId}', Name '${serverDomainAttachment.fileName}'). Skipping this attachment for local DB update.")
-                                         return@forEach // continue to next serverAttachment
-                                    }
-
-                                    val newAttachmentEntity = AttachmentEntity(
-                                        attachmentId = serverDomainAttachment.id, // Use client-generated ID as local PK
-                                        messageId = action.entityId,
-                                        accountId = action.accountId, // Populate accountId
-                                        fileName = serverDomainAttachment.fileName,
-                                        mimeType = serverDomainAttachment.contentType,
-                                        size = serverDomainAttachment.size,
-                                        isInline = serverDomainAttachment.isInline,
-                                        contentId = serverDomainAttachment.contentId, // Actual Graph contentId (CID)
-                                        localFilePath = originalLocalUri, // Preserved local path
-                                        isDownloaded = !originalLocalUri.isNullOrBlank(),
-                                        downloadTimestamp = if (!originalLocalUri.isNullOrBlank()) System.currentTimeMillis() else null,
-                                        syncStatus = SyncStatus.SYNCED,
-                                        lastSyncError = null,
-                                        remoteAttachmentId = serverDomainAttachment.remoteId // Store server's actual attachment ID
-                                    )
-                                    attachmentDao.insertAttachments(listOf(newAttachmentEntity))
-                                }
-                                Timber.d("$TAG: Reconciled ${serverMessage.attachments.size} attachments for draft ${action.entityId} after server update.")
-                            }
-                            kotlin.Result.success(Unit)
-                        } else {
-                            Timber.e(updateResult.exceptionOrNull(), "$TAG: $actionType API call failed for entity ${action.entityId} (Remote: ${localDraftEntityForRemoteId.messageId}).")
-                            kotlin.Result.failure(updateResult.exceptionOrNull() ?: IllegalStateException("Draft update API failed"))
-                        }
-                    } catch (e: Exception) {
-                        Timber.e(e, "$TAG: $actionType action failed to decode/process draftJson for entity ${action.entityId}.")
-                        kotlin.Result.failure(e)
-                    }
-                }
-            }
+            ACTION_SEND_MESSAGE -> handleSendMessage(entityId, payload)
+            ACTION_CREATE_DRAFT -> handleCreateDraft(mailService, action)
+            ACTION_UPDATE_DRAFT -> handleUpdateDraft(mailService, action)
             ACTION_MARK_THREAD_AS_READ, ACTION_MARK_THREAD_AS_UNREAD -> {
-                val threadId = entityId
-                val isReadStr = payload[KEY_IS_READ]
-                val isRead = isReadStr?.toBooleanStrictOrNull()
-                if (isRead == null) {
-                    Timber.e("$TAG: Missing or invalid 'isRead' payload for $actionType on thread $threadId. Value: '$isReadStr'")
-                    return kotlin.Result.failure(IllegalArgumentException("Missing or invalid 'isRead' payload for $actionType. Value: '$isReadStr'"))
-                }
-                Timber.d("$TAG: Calling mailService.markThreadRead for thread $threadId, isRead: $isRead")
-                mailService.markThreadRead(threadId, isRead)
+                 val isRead = payload[KEY_IS_READ]?.toBooleanStrictOrNull()
+                    ?: return kotlin.Result.failure(IllegalArgumentException("Missing or invalid 'isRead' payload."))
+                mailService.markThreadRead(entityId, isRead)
             }
-            ACTION_DELETE_THREAD -> {
-                val threadId = entityId
-                Timber.d("$TAG: Calling mailService.deleteThread for thread $threadId")
-                mailService.deleteThread(threadId)
-            }
+            ACTION_DELETE_THREAD -> mailService.deleteThread(entityId)
             ACTION_MOVE_THREAD -> {
-                val threadId = entityId
-                val targetFolderLocalId = payload[KEY_NEW_FOLDER_ID]
-                val sourceFolderLocalId = payload[KEY_OLD_FOLDER_ID]
-
-                if (targetFolderLocalId == null) {
-                    Timber.e("$TAG: Missing '$KEY_NEW_FOLDER_ID' payload for MOVE_THREAD action on thread $threadId.")
-                    return kotlin.Result.failure(IllegalArgumentException("Missing '$KEY_NEW_FOLDER_ID' for MOVE_THREAD"))
-                }
-                if (sourceFolderLocalId == null) {
-                    Timber.e("$TAG: Missing '$KEY_OLD_FOLDER_ID' payload for MOVE_THREAD action on thread $threadId.")
-                    return kotlin.Result.failure(IllegalArgumentException("Missing '$KEY_OLD_FOLDER_ID' for MOVE_THREAD"))
-                }
-
-                val targetFolderEntity = folderDao.getFolderByIdSuspend(targetFolderLocalId)
-                val sourceFolderEntity = folderDao.getFolderByIdSuspend(sourceFolderLocalId)
-
-                if (targetFolderEntity?.remoteId == null) {
-                    val errorMsg = "Target folder (local ID: $targetFolderLocalId) not found or has no remote ID for MOVE_THREAD."
-                    Timber.e("$TAG: $errorMsg")
-                    return kotlin.Result.failure(IllegalStateException(errorMsg))
-                }
-                if (sourceFolderEntity?.remoteId == null) {
-                    val errorMsg = "Source folder (local ID: $sourceFolderLocalId) not found or has no remote ID for MOVE_THREAD."
-                    Timber.e("$TAG: $errorMsg")
-                    return kotlin.Result.failure(IllegalStateException(errorMsg))
-                }
-                
-                Timber.d("$TAG: Calling mailService.moveThread for thread $threadId from remote folder ${sourceFolderEntity.remoteId} to remote folder ${targetFolderEntity.remoteId}")
-                mailService.moveThread(threadId, sourceFolderEntity.remoteId!!, targetFolderEntity.remoteId!!)
+                val destinationFolderId = payload[KEY_NEW_FOLDER_ID]
+                     ?: return kotlin.Result.failure(IllegalArgumentException("Missing 'destinationFolderId' payload."))
+                val sourceFolderId = payload[KEY_OLD_FOLDER_ID]
+                     ?: return kotlin.Result.failure(IllegalArgumentException("Missing 'oldFolderId' payload."))
+                mailService.moveThread(entityId, sourceFolderId, destinationFolderId)
             }
             else -> {
-                Timber.e("$TAG: Unknown action type: $actionType for entity $entityId")
-                kotlin.Result.failure(IllegalArgumentException("Unknown action type: $actionType"))
+                Timber.w("$TAG: Unhandled action type: $actionType for entity $entityId")
+                kotlin.Result.failure(UnsupportedOperationException("Action type '$actionType' not supported."))
             }
         }
     }
 
-    sealed class Action {
-        enum class TargetType { MESSAGE, THREAD }
+    private suspend fun handleSendMessage(localMessageId: String, payload: Map<String, String?>): kotlin.Result<Unit> {
+        return kotlin.Result.failure(UnsupportedOperationException("SEND_MESSAGE not yet supported in refactored flow"))
+    }
 
-        data class MarkRead(
-            val targetType: TargetType,
-            val targetId: String,
-            val isRead: Boolean
-        ) : Action()
+    private suspend fun handleCreateDraft(mailService: MailApiService, action: PendingActionEntity): kotlin.Result<Unit> {
+        val draftJson = action.payload[KEY_DRAFT_DETAILS]
+            ?: return kotlin.Result.failure(IllegalArgumentException("Missing '$KEY_DRAFT_DETAILS' for create-draft"))
+        return try {
+            val draft = Json.decodeFromString<MessageDraft>(draftJson)
+            val createResult = mailService.createDraftMessage(draft)
+            if (createResult.isSuccess) {
+                val serverMessage = createResult.getOrThrow()
+                appDatabase.withTransaction {
+                    val localMessage = messageDao.getMessageByIdSuspend(action.entityId)
+                        ?: throw IllegalStateException("Local message ${action.entityId} not found for create-draft.")
 
-        data class Star(
-            val targetId: String,
-            val isStarred: Boolean
-        ) : Action()
+                    val updatedEntity = serverMessage.toEntity(action.accountId, localMessage.folderId).copy(
+                        id = localMessage.id,
+                        syncStatus = EntitySyncStatus.SYNCED,
+                        lastSyncError = null,
+                        lastSuccessfulSyncTimestamp = System.currentTimeMillis(),
+                    )
+                    messageDao.insertOrUpdateMessages(listOf(updatedEntity))
 
-        data class Delete(
-            val targetType: TargetType,
-            val targetId: String
-        ) : Action()
+                    attachmentDao.deleteAttachmentsForMessage(action.entityId)
+                    val newAttachments = serverMessage.attachments.map {
+                        it.toEntity(action.entityId, action.accountId)
+                            .copy(syncStatus = EntitySyncStatus.SYNCED)
+                    }
+                    if (newAttachments.isNotEmpty()) {
+                        attachmentDao.insertAttachments(newAttachments)
+                    }
+                    Timber.d("$TAG: Updated local draft ${action.entityId} with server info (new remoteId: ${serverMessage.id}).")
+                }
+            }
+            createResult.map { }
+        } catch (e: Exception) {
+            Timber.e(e, "$TAG: Failed to create draft on server for local entity ${action.entityId}")
+            kotlin.Result.failure(e)
+        }
+    }
 
-        data class Move(
-            val targetType: TargetType,
-            val targetId: String,
-            val destinationFolderId: String,
-            val previousFolderId: String?
-        ) : Action()
+    private suspend fun handleUpdateDraft(mailService: MailApiService, action: PendingActionEntity): kotlin.Result<Unit> {
+        val draftJson = action.payload[KEY_DRAFT_DETAILS]
+            ?: return kotlin.Result.failure(IllegalArgumentException("Missing '$KEY_DRAFT_DETAILS' for update-draft"))
+        return try {
+            val draft = Json.decodeFromString<MessageDraft>(draftJson)
+            val localMessage = messageDao.getMessageByIdSuspend(action.entityId)
+                ?: throw IllegalStateException("Cannot find local message ${action.entityId} to update draft.")
+            val remoteId = localMessage.messageId
+                ?: throw IllegalStateException("Local message ${action.entityId} has no remote ID to update draft.")
 
-        data class Send(
-            val localOutboxMessageId: String,
-            val draftJson: String
-        ) : Action()
+            val updateResult = mailService.updateDraftMessage(remoteId, draft)
+            if (updateResult.isSuccess) {
+                val serverMessage = updateResult.getOrThrow()
+                appDatabase.withTransaction {
+                    val updatedEntity = serverMessage.toEntity(action.accountId, localMessage.folderId).copy(
+                        id = localMessage.id,
+                        syncStatus = EntitySyncStatus.SYNCED,
+                        lastSyncError = null,
+                        lastSuccessfulSyncTimestamp = System.currentTimeMillis(),
+                    )
+                    messageDao.insertOrUpdateMessages(listOf(updatedEntity))
 
-        data class CreateDraft(
-            val localDraftId: String,
-            val draftJson: String
-        ) : Action()
-
-        data class UpdateDraft(
-            val localDraftId: String,
-            val draftJson: String
-        ) : Action()
+                    attachmentDao.deleteAttachmentsForMessage(action.entityId)
+                    val newAttachments = serverMessage.attachments.map {
+                        it.toEntity(action.entityId, action.accountId)
+                            .copy(syncStatus = EntitySyncStatus.SYNCED)
+                    }
+                    if (newAttachments.isNotEmpty()) {
+                        attachmentDao.insertAttachments(newAttachments)
+                    }
+                    Timber.d("$TAG: Updated local draft ${action.entityId} with server info.")
+                }
+            }
+            updateResult.map { }
+        } catch (e: Exception) {
+            Timber.e(e, "$TAG: Failed to update draft on server for local entity ${action.entityId}")
+            kotlin.Result.failure(e)
+        }
     }
 }
 

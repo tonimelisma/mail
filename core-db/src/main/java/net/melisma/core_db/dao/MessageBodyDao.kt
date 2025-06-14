@@ -6,7 +6,7 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import kotlinx.coroutines.flow.Flow
 import net.melisma.core_db.entity.MessageBodyEntity
-import net.melisma.core_data.model.SyncStatus
+import net.melisma.core_data.model.EntitySyncStatus
 
 @Dao
 interface MessageBodyDao {
@@ -47,7 +47,7 @@ interface MessageBodyDao {
         newContentType: String,
         newSizeInBytes: Long,
         newLastFetchedTimestamp: Long,
-        newSyncStatus: SyncStatus,
+        newSyncStatus: EntitySyncStatus,
         newLastSuccessfulSyncTimestamp: Long?,
         newLastAttemptTimestamp: Long
     )
@@ -61,7 +61,7 @@ interface MessageBodyDao {
     """)
     suspend fun updateSyncStatusAndError(
         messageId: String,
-        newSyncStatus: SyncStatus,
+        newSyncStatus: EntitySyncStatus,
         newLastSyncError: String?,
         newLastSyncAttemptTimestamp: Long
     )

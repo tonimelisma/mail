@@ -16,7 +16,7 @@ import net.melisma.core_data.di.Dispatcher
 import net.melisma.core_data.di.MailDispatchers
 import net.melisma.core_data.model.ErrorDetails
 import net.melisma.core_data.model.Message
-import net.melisma.core_data.model.SyncStatus
+import net.melisma.core_data.model.EntitySyncStatus
 import net.melisma.core_db.AppDatabase
 import net.melisma.core_db.dao.AttachmentDao
 import net.melisma.core_db.dao.MessageBodyDao
@@ -86,13 +86,13 @@ class SingleMessageSyncWorker @AssistedInject constructor(
             selectedMailApiService = mailApiServiceFactory.getService(accountId)
         } catch (e: MailApiServiceResolutionException) {
             Timber.e(e, "Failed to resolve MailApiService for account $accountId. LocalMsgId: $messageLocalId.")
-            messageDao.setSyncStatus(messageLocalId, SyncStatus.ERROR)
+            messageDao.setSyncStatus(messageLocalId, EntitySyncStatus.ERROR)
             val errorMessage = e.message ?: "Failed to resolve API service for account."
             messageDao.updateLastSyncError(messageLocalId, errorMessage)
             return@withContext Result.failure(workDataOf("error" to errorMessage))
         } catch (e: Exception) {
             Timber.e(e, "Unexpected error resolving MailApiService for account $accountId. LocalMsgId: $messageLocalId.")
-            messageDao.setSyncStatus(messageLocalId, SyncStatus.ERROR)
+            messageDao.setSyncStatus(messageLocalId, EntitySyncStatus.ERROR)
             val errorMessage = e.message ?: "Unexpected error resolving API service."
             messageDao.updateLastSyncError(messageLocalId, errorMessage)
             return@withContext Result.failure(workDataOf("error" to errorMessage))
@@ -101,7 +101,7 @@ class SingleMessageSyncWorker @AssistedInject constructor(
         if (messageRemoteId == null) {
             Timber.w("SingleMessageSyncWorker: Message remoteId is null for localId $messageLocalId. Cannot fetch from API.")
             val errorDetails = ErrorDetails(message = "Message has no remote ID, cannot refresh.", code = "LOCAL_ID_ONLY")
-            messageDao.setSyncStatus(messageLocalId, SyncStatus.ERROR)
+            messageDao.setSyncStatus(messageLocalId, EntitySyncStatus.ERROR)
             messageDao.updateLastSyncError(messageLocalId, errorDetails.message)
             return@withContext Result.failure()
         }
@@ -139,7 +139,7 @@ class SingleMessageSyncWorker @AssistedInject constructor(
                         isLocallyDeleted = false,
                         isDraft = false,
                         isOutbox = false,
-                        syncStatus = SyncStatus.SYNCED,
+                        syncStatus = EntitySyncStatus.SYNCED,
                         lastSuccessfulSyncTimestamp = currentAttemptTimestamp,
                         lastSyncAttemptTimestamp = currentAttemptTimestamp,
                         lastSyncError = null
@@ -157,7 +157,7 @@ class SingleMessageSyncWorker @AssistedInject constructor(
                         newContentType = bodyContentType,
                         newSizeInBytes = bodySizeInBytes,
                         newLastFetchedTimestamp = currentAttemptTimestamp,
-                        newSyncStatus = SyncStatus.SYNCED,
+                        newSyncStatus = EntitySyncStatus.SYNCED,
                         newLastSuccessfulSyncTimestamp = currentAttemptTimestamp,
                         newLastAttemptTimestamp = currentAttemptTimestamp
                     )
@@ -179,7 +179,7 @@ class SingleMessageSyncWorker @AssistedInject constructor(
                             localFilePath = null,
                             downloadTimestamp = null,
                             remoteAttachmentId = domainAttachment.remoteId,
-                            syncStatus = SyncStatus.PENDING_DOWNLOAD,
+                            syncStatus = EntitySyncStatus.PENDING_DOWNLOAD,
                             lastSyncAttemptTimestamp = null,
                             lastSuccessfulSyncTimestamp = null,
                             lastSyncError = null
@@ -200,9 +200,9 @@ class SingleMessageSyncWorker @AssistedInject constructor(
                     code = errorCode
                 )
                 Timber.e(exception, "Failed to fetch message $messageRemoteId from API. Code: $errorCode")
-                messageDao.setSyncStatus(messageLocalId, SyncStatus.ERROR)
+                messageDao.setSyncStatus(messageLocalId, EntitySyncStatus.ERROR)
                 messageDao.updateLastSyncError(messageLocalId, errorDetails.message)
-                messageBodyDao.updateSyncStatusAndError(messageLocalId, SyncStatus.ERROR, errorDetails.message, currentAttemptTimestamp)
+                messageBodyDao.updateSyncStatusAndError(messageLocalId, EntitySyncStatus.ERROR, errorDetails.message, currentAttemptTimestamp)
                 Result.failure(workDataOf("error" to errorDetails.message))
             }
         } catch (e: Exception) {
@@ -212,9 +212,9 @@ class SingleMessageSyncWorker @AssistedInject constructor(
                 code = "WORKER_EXCEPTION"
             )
             try {
-                 messageDao.setSyncStatus(messageLocalId, SyncStatus.ERROR)
+                 messageDao.setSyncStatus(messageLocalId, EntitySyncStatus.ERROR)
                  messageDao.updateLastSyncError(messageLocalId, errorDetails.message)
-                 messageBodyDao.updateSyncStatusAndError(messageLocalId, SyncStatus.ERROR, errorDetails.message, currentAttemptTimestamp)
+                 messageBodyDao.updateSyncStatusAndError(messageLocalId, EntitySyncStatus.ERROR, errorDetails.message, currentAttemptTimestamp)
             } catch (dbException: Exception) {
                 Timber.e(dbException, "Failed to update message sync state after worker exception.")
             }

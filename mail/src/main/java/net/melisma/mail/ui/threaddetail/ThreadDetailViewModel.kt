@@ -29,13 +29,14 @@ import net.melisma.core_data.model.ThreadDataState
 import net.melisma.core_data.preferences.DownloadPreference
 import net.melisma.core_data.preferences.UserPreferencesRepository
 import net.melisma.core_data.repository.ThreadRepository
-import net.melisma.data.sync.SyncEngine
-import net.melisma.data.sync.workers.MessageBodyDownloadWorker
+import net.melisma.data.sync.SyncController
+import net.melisma.core_data.model.SyncJob
 import net.melisma.domain.data.GetThreadDetailsUseCase
 import net.melisma.mail.navigation.AppRoutes
 import timber.log.Timber
 import java.util.UUID
 import javax.inject.Inject
+import net.melisma.data.sync.workers.MessageBodyDownloadWorker
 
 data class ThreadDetailScreenState(
     val threadLoadingState: ThreadDetailUIState = ThreadDetailUIState.Loading,
@@ -53,7 +54,7 @@ class ThreadDetailViewModel @Inject constructor(
     private val networkMonitor: NetworkMonitor,
     private val workManager: WorkManager,
     private val threadRepository: ThreadRepository,
-    private val syncEngine: SyncEngine,
+    private val syncController: SyncController,
     private val savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
@@ -251,7 +252,9 @@ class ThreadDetailViewModel @Inject constructor(
 
             if (isStale) {
                 Timber.d("TDB_VM: Message ${message.remoteId} (local: ${message.id}) in thread is stale (last sync: $lastSync). Triggering silent refresh.")
-                syncEngine.refreshMessage(accountId, message.id, message.remoteId)
+                message.remoteId?.let { remoteId ->
+                    syncController.submit(SyncJob.FetchFullMessageBody(remoteId, accountId))
+                }
             } else {
                 Timber.d("TDB_VM: Message ${message.remoteId} (local: ${message.id}) in thread is fresh (last sync: $lastSync). No silent refresh needed.")
             }

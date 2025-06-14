@@ -4,7 +4,7 @@ import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
-import net.melisma.core_data.model.SyncStatus
+import net.melisma.core_data.model.EntitySyncStatus
 
 @Entity(
     tableName = "messages",
@@ -60,7 +60,7 @@ data class MessageEntity(
     var scheduledSendTime: Long? = null, // For future: scheduled sending
 
     // Sync Metadata
-    var syncStatus: SyncStatus = SyncStatus.IDLE,
+    var syncStatus: EntitySyncStatus = EntitySyncStatus.SYNCED,
     var lastSyncAttemptTimestamp: Long? = null,
     var lastSuccessfulSyncTimestamp: Long?,
     // lastSyncError is already present above

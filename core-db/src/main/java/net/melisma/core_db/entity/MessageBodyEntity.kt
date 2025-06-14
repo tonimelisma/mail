@@ -5,7 +5,7 @@ import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
-import net.melisma.core_data.model.SyncStatus
+import net.melisma.core_data.model.EntitySyncStatus
 
 @Entity(
     tableName = "message_bodies",
@@ -44,7 +44,7 @@ data class MessageBodyEntity(
     // UI can decide to re-fetch based on age or user action.
 
     // Sync Metadata
-    val syncStatus: SyncStatus = SyncStatus.IDLE,
+    val syncStatus: EntitySyncStatus = EntitySyncStatus.SYNCED,
     val lastSyncAttemptTimestamp: Long? = null,
     val lastSuccessfulSyncTimestamp: Long? = null,
     val lastSyncError: String? = null,

@@ -6,6 +6,7 @@ import androidx.room.OnConflictStrategy
 import androidx.room.Query
 import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
+import net.melisma.core_data.model.EntitySyncStatus
 import net.melisma.core_db.entity.AttachmentEntity
 
 @Dao
@@ -32,23 +33,19 @@ interface AttachmentDao {
     @Update
     suspend fun updateAttachment(attachment: AttachmentEntity)
 
-    @Query(
-        """
+    @Query("UPDATE attachments SET syncStatus = :syncStatus, lastSyncError = :error WHERE attachmentId = :attachmentId")
+    suspend fun updateSyncStatus(attachmentId: String, syncStatus: EntitySyncStatus, error: String?)
+
+    @Query("""
         UPDATE attachments 
-        SET isDownloaded = :isDownloaded, 
-            localFilePath = :localFilePath, 
-            downloadTimestamp = :timestamp,
-            lastSyncError = :error
+        SET isDownloaded = 1, 
+            localFilePath = :localPath, 
+            downloadTimestamp = :downloadTimestamp,
+            syncStatus = 'SYNCED',
+            lastSyncError = NULL
         WHERE attachmentId = :attachmentId
-    """
-    )
-    suspend fun updateDownloadStatus(
-        attachmentId: String,
-        isDownloaded: Boolean,
-        localFilePath: String?,
-        timestamp: Long?,
-        error: String? = null
-    )
+    """)
+    suspend fun updateDownloadSuccess(attachmentId: String, localPath: String, downloadTimestamp: Long)
 
     @Query("DELETE FROM attachments WHERE messageId = :messageId")
     suspend fun deleteAttachmentsForMessage(messageId: String)
@@ -66,30 +63,5 @@ interface AttachmentDao {
     suspend fun getDownloadedAttachmentsForMessage(messageId: String): List<AttachmentEntity>
 
     @Query("UPDATE attachments SET isDownloaded = 0, localFilePath = NULL, downloadTimestamp = NULL, syncStatus = :newSyncStatus, lastSyncError = NULL WHERE attachmentId = :attachmentId")
-    suspend fun resetDownloadStatus(attachmentId: String, newSyncStatus: String)
-
-    @Query("""
-        UPDATE attachments
-        SET fileName = :newFileName,
-            size = :newSize,
-            mimeType = :newMimeType,
-            contentId = :newContentId,
-            isInline = :newIsInline,
-            syncStatus = :newSyncStatus,
-            lastSuccessfulSyncTimestamp = :newLastSuccessfulSyncTimestamp,
-            lastSyncAttemptTimestamp = :newLastAttemptTimestamp,
-            lastSyncError = NULL
-        WHERE attachmentId = :attachmentId
-    """)
-    suspend fun updateAttachmentMetadataAndSyncState(
-        attachmentId: String,
-        newFileName: String,
-        newSize: Long,
-        newMimeType: String,
-        newContentId: String?,
-        newIsInline: Boolean,
-        newSyncStatus: net.melisma.core_data.model.SyncStatus,
-        newLastSuccessfulSyncTimestamp: Long?,
-        newLastAttemptTimestamp: Long
-    )
+    suspend fun resetDownloadStatus(attachmentId: String, newSyncStatus: EntitySyncStatus)
 }

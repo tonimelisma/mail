@@ -1,6 +1,7 @@
 package net.melisma.data.mapper
 
 import net.melisma.core_data.model.Attachment
+import net.melisma.core_data.model.EntitySyncStatus
 import net.melisma.core_db.entity.AttachmentEntity
 
 fun AttachmentEntity.toDomainModel(): Attachment {
@@ -15,11 +16,11 @@ fun AttachmentEntity.toDomainModel(): Attachment {
         contentId = this.contentId,
         localUri = this.localFilePath,
         remoteId = this.remoteAttachmentId, // Added field
-        downloadStatus = when {
-            this.isDownloaded -> "DOWNLOADED" // Or use a more specific SyncStatus if applicable
-            this.syncStatus == net.melisma.core_data.model.SyncStatus.ERROR -> "ERROR"
-            // TODO: Determine other statuses based on SyncStatus or other fields
-            else -> "NOT_DOWNLOADED"
+        downloadStatus = when (this.syncStatus) {
+            EntitySyncStatus.SYNCED -> if (this.isDownloaded) "DOWNLOADED" else "NOT_DOWNLOADED"
+            EntitySyncStatus.PENDING_DOWNLOAD -> "DOWNLOADING"
+            EntitySyncStatus.ERROR -> "ERROR"
+            else -> "NOT_DOWNLOADED" // Default for PENDING_UPLOAD, PENDING_DELETE
         },
         lastSyncError = this.lastSyncError
     )
@@ -46,9 +47,10 @@ fun Attachment.toEntity(messageDbId: String, accountId: String): AttachmentEntit
         downloadTimestamp = if (this.localUri != null) System.currentTimeMillis() else null,
         // Initial sync status based on domain model's downloadStatus
         syncStatus = when (this.downloadStatus) {
-            "DOWNLOADED" -> net.melisma.core_data.model.SyncStatus.SYNCED
-            "ERROR" -> net.melisma.core_data.model.SyncStatus.ERROR
-            else -> net.melisma.core_data.model.SyncStatus.IDLE // Or PENDING_DOWNLOAD if that's implied
+            "DOWNLOADED" -> EntitySyncStatus.SYNCED
+            "DOWNLOADING" -> EntitySyncStatus.PENDING_DOWNLOAD
+            "ERROR" -> EntitySyncStatus.ERROR
+            else -> EntitySyncStatus.SYNCED // Assume not downloaded but synced server-side
         },
         lastSyncError = this.lastSyncError
     )

@@ -9,6 +9,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.flow.first
 import net.melisma.core_data.connectivity.NetworkMonitor
 import net.melisma.core_data.datasource.MailApiService
+import net.melisma.core_data.datasource.MailApiServiceSelector
 import net.melisma.core_data.model.MessageSyncState
 import net.melisma.core_data.model.PagedMessagesResponse
 import net.melisma.core_db.AppDatabase
@@ -23,7 +24,7 @@ class MessageRemoteMediator(
     private val accountId: String,
     private val folderId: String,
     private val database: AppDatabase,
-    private val mailApiService: MailApiService,
+    private val mailApiServiceSelector: MailApiServiceSelector,
     private val networkMonitor: NetworkMonitor,
     private val ioDispatcher: CoroutineDispatcher,
     private val onSyncStateChanged: (MessageSyncState) -> Unit
@@ -63,6 +64,9 @@ class MessageRemoteMediator(
                 )
                 return MediatorResult.Error(IllegalStateException("Parent folder ${this.folderId} not found locally. Folder sync needs to complete first."))
             }
+
+            val mailApiService = mailApiServiceSelector.getServiceByAccountId(accountId)
+                ?: return MediatorResult.Error(IllegalStateException("MailApiService not found for account $accountId"))
 
             val apiFolderIdToFetch = localFolder.remoteId ?: this.folderId
 
@@ -117,7 +121,7 @@ class MessageRemoteMediator(
                 val newNextPageToken = apiResponse.nextPageToken
                 val endOfPaginationReached = newNextPageToken == null
 
-                Timber.i("load() for $accountId/$apiFolderIdToFetch ($loadType): API success. Fetched ${messagesFromApi.size} messages. NewNextPageToken: '$newNextPageToken'. EndReached: $endOfPaginationReached")
+                Timber.i("load() for $accountId/$apiFolderIdToFetch: API success. Fetched ${messagesFromApi.size} messages. EndReached: $endOfPaginationReached")
 
                 database.withTransaction {
                     // REFRESH is handled above and does not run this transaction.
@@ -129,7 +133,7 @@ class MessageRemoteMediator(
                             prevPageToken = if (loadType == LoadType.APPEND) pageTokenToFetch else null
                         )
                     )
-                    Timber.d("load() for $accountId/${this.folderId} ($loadType): Upserted RemoteKeyEntity. Next: '$newNextPageToken', Prev: '${if (loadType == LoadType.APPEND) pageTokenToFetch else null}'.")
+                    Timber.d("load() for $accountId/${this.folderId}: Upserted RemoteKeyEntity.")
 
                     val messageEntities = messagesFromApi.map {
                         it.toEntity(
@@ -138,7 +142,7 @@ class MessageRemoteMediator(
                         )
                     }
                     messageDao.insertOrUpdateMessages(messageEntities)
-                    Timber.d("load() ($loadType) for $accountId/${this.folderId}: Inserted/Updated ${messageEntities.size} messages into DB.")
+                    Timber.d("load() for $accountId/${this.folderId}: Inserted/Updated ${messageEntities.size} messages into DB.")
                 }
 
                 return MediatorResult.Success(endOfPaginationReached = endOfPaginationReached)
@@ -147,7 +151,7 @@ class MessageRemoteMediator(
                     ?: IOException("Unknown API error during $loadType for $accountId/$apiFolderIdToFetch")
                 Timber.e(
                     exception,
-                    "load() ($loadType) for $accountId/$apiFolderIdToFetch: API call failed."
+                    "load() for $accountId/$apiFolderIdToFetch: API call failed."
                 )
                 onSyncStateChanged(
                     MessageSyncState.SyncError(

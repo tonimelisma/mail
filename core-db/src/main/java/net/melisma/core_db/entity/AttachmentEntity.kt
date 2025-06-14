@@ -4,7 +4,7 @@ import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
-import net.melisma.core_data.model.SyncStatus
+import net.melisma.core_data.model.EntitySyncStatus
 
 @Entity(
     tableName = "attachments",
@@ -37,7 +37,7 @@ data class AttachmentEntity(
     val remoteAttachmentId: String? = null,
 
     // Sync Metadata
-    val syncStatus: SyncStatus = SyncStatus.IDLE,
+    val syncStatus: EntitySyncStatus = EntitySyncStatus.SYNCED,
     val lastSyncAttemptTimestamp: Long? = null,
     val lastSuccessfulSyncTimestamp: Long? = null,
     val lastSyncError: String? = null, // Unified error tracking field
