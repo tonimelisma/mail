@@ -19,6 +19,8 @@ import net.melisma.core_db.dao.RemoteKeyDao
 import javax.inject.Singleton
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import net.melisma.core_db.dao.MessageFolderJunctionDao
+import net.melisma.core_db.dao.FolderSyncStateDao
 
 @Module
 @InstallIn(SingletonComponent::class)
@@ -88,5 +90,17 @@ object DatabaseModule {
     @Singleton
     fun providePendingActionDao(appDatabase: AppDatabase): PendingActionDao {
         return appDatabase.pendingActionDao()
+    }
+
+    @Provides
+    @Singleton
+    fun provideMessageFolderJunctionDao(appDatabase: AppDatabase): MessageFolderJunctionDao {
+        return appDatabase.messageFolderJunctionDao()
+    }
+
+    @Provides
+    @Singleton
+    fun provideFolderSyncStateDao(appDatabase: AppDatabase): FolderSyncStateDao {
+        return appDatabase.folderSyncStateDao()
     }
 } 

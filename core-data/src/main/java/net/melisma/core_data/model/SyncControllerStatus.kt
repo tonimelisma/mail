@@ -9,10 +9,12 @@ import java.io.Serializable
  * @param currentJob A description of the job currently being processed.
  * @param networkAvailable Whether the device has an active network connection.
  * @param error A description of the last error that occurred, if any.
+ * @param initialSyncDurationDays The duration of the initial sync in days, if any.
  */
 data class SyncControllerStatus(
     val isSyncing: Boolean = false,
     val currentJob: String? = null,
     val networkAvailable: Boolean = true,
     val error: String? = null,
+    val initialSyncDurationDays: Long? = null,
 ) : Serializable 

@@ -180,23 +180,29 @@ Continue Phase 1 refactor: finish wiring the PendingAction-first workflow, migra
 
 ### **Developer:** ChatGPT-o3 (Automated)
 
-### **Increment Implemented – "Phase-1-E: Initial DB Nuke-and-Pave"**
+### **Increment Implemented – "Phase-1-E2: Schema & Pref Wiring"**
 
-**Goal:** Lay database groundwork for many-to-many model by introducing junction/state tables and bumping schema version.
+**Goal:** Finalise the remaining open items in Phase 1 (many-to-many schema, backup exclusion, preference bridge) and unblock future migration work.
 
 ### **Work Completed**
-1. **Entities Added**
-   • `MessageFolderJunction` – bridges messages ↔ folders.  
-   • `FolderSyncStateEntity` – stores nextPageToken & lastSyncedTimestamp per folder.
-2. **AppDatabase**  
-   • Registered new entities, schema version bumped 15 → 16.
-3. **Migration Strategy**  
-   • `DatabaseModule` now calls `.fallbackToDestructiveMigration()` so upgrade to v16 wipes previous schema ("nuke & pave").
-4. **Build**  
-   • Project compiles successfully (`./gradlew assembleDebug`).
+1. **Database Layer**
+   • Added `MessageFolderJunctionDao` and `FolderSyncStateDao`.
+   • Registered DAOs in `AppDatabase` and provided via `DatabaseModule`.
+2. **Preference Integration**
+   • Injected `UserPreferencesRepository` into `SyncController` and now track `initialSyncDurationDays` in `SyncControllerStatus`.
+3. **Backup Rules**
+   • Replaced sample `backup_rules.xml` with production rules excluding the entire database directory and the `files/attachments/` directory from Auto-Backup.
+4. **Status DTO**
+   • Extended `SyncControllerStatus` with `initialSyncDurationDays` property.
+5. **Build**
+   • Project builds clean (`./gradlew build`). Lint error on illegal domain fixed.
 
-### **Notes / Next Steps**
-* DAOs & repositories still rely on `MessageEntity.folderId`. Next increment will remove that column and refactor queries to use the junction table.  
-* Need DAO for new entities and updates to FolderContentSyncWorker to populate junction rows.
+### **Tech-Debt / Follow-ups**
+* `MessageEntity.folderId` removal and DAO query rewrites still pending – large surface area. Work moved to Phase-1-F.
+* Workers & Repositories still rely on `folderId`. Junction DAO is unused until migration is complete.
+
+### **Next Steps**
+1. Phase-1-F – Remove `folderId` column, migrate queries to junction DAO, update workers/repositories.
+2. Begin Phase-2 foreground/WorkManager polling lifecycle once schema stable.
 
 --- 

@@ -8,6 +8,7 @@ import net.melisma.core_data.connectivity.NetworkMonitor
 import net.melisma.core_data.di.ApplicationScope
 import net.melisma.core_data.model.SyncJob
 import net.melisma.core_data.model.SyncControllerStatus
+import net.melisma.core_data.preferences.UserPreferencesRepository
 import net.melisma.data.sync.work.SyncWorkManager
 import timber.log.Timber
 import java.util.concurrent.PriorityBlockingQueue
@@ -19,7 +20,8 @@ class SyncController @Inject constructor(
     @ApplicationScope private val externalScope: CoroutineScope,
     private val queue: PriorityBlockingQueue<SyncJob>,
     private val networkMonitor: NetworkMonitor,
-    private val syncWorkManager: SyncWorkManager
+    private val syncWorkManager: SyncWorkManager,
+    private val userPreferencesRepository: UserPreferencesRepository
 ) {
 
     private val _status = MutableStateFlow(SyncControllerStatus())
@@ -29,6 +31,14 @@ class SyncController @Inject constructor(
         externalScope.launch {
             networkMonitor.isOnline.collect { isOnline ->
                 _status.value = _status.value.copy(networkAvailable = isOnline)
+            }
+        }
+
+        // Observe user preference for initial sync duration
+        externalScope.launch {
+            userPreferencesRepository.userPreferencesFlow.collect { prefs ->
+                _status.value = _status.value.copy(initialSyncDurationDays = prefs.initialSyncDurationDays)
+                initialSyncDurationDays = prefs.initialSyncDurationDays
             }
         }
         externalScope.launch { run() }
@@ -82,4 +92,11 @@ class SyncController @Inject constructor(
             }
         }
     }
+
+    /**
+     * Stores latest preference so workers or controller logic can consult.
+     * Currently unused but prepared for Phase-1 integration task.
+     */
+    @Volatile
+    var initialSyncDurationDays: Long = 90L
 } 

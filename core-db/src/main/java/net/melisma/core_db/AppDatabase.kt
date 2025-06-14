@@ -53,6 +53,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun attachmentDao(): AttachmentDao
     abstract fun remoteKeyDao(): RemoteKeyDao
     abstract fun pendingActionDao(): PendingActionDao
+    abstract fun messageFolderJunctionDao(): net.melisma.core_db.dao.MessageFolderJunctionDao
+    abstract fun folderSyncStateDao(): net.melisma.core_db.dao.FolderSyncStateDao
 
     companion object {
         // This companion object is now empty, as database creation is handled by Hilt.
