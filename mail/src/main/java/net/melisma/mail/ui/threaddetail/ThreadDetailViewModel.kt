@@ -3,11 +3,6 @@ package net.melisma.mail.ui.threaddetail
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import androidx.work.ExistingWorkPolicy
-import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.WorkInfo
-import androidx.work.WorkManager
-import androidx.work.workDataOf
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -34,7 +29,6 @@ import net.melisma.core_data.model.SyncJob
 import net.melisma.domain.data.GetThreadDetailsUseCase
 import net.melisma.mail.navigation.AppRoutes
 import timber.log.Timber
-import java.util.UUID
 import javax.inject.Inject
 
 data class ThreadDetailScreenState(
@@ -265,9 +259,6 @@ class ThreadDetailViewModel @Inject constructor(
         Timber.d("Submitting DownloadMessageBody job for $messageId (ThreadDetail)")
         syncController.submit(SyncJob.DownloadMessageBody(messageId, accId))
     }
-
-    @Suppress("UNUSED_PARAMETER")
-    private fun observeWorkStatus(dummyId: java.util.UUID, messageId: String) { /* no-op */ }
 
     private fun updateMessageBodyState(messageId: String, newBodyState: BodyLoadingState) {
         _uiState.update { currentState ->

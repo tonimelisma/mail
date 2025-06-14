@@ -13,7 +13,7 @@
 * **Requirement 0.4 (Implement Sync State Observation):** As a developer, I want the SyncController to expose a StateFlow\<SyncStatus\> that can be observed by the UI layer to provide real-time, global feedback on sync progress, network status, and error states.  
   * **Status: To Do**  
 * **Requirement 0.5 (Implement Core Sync Logic):** As a developer, I want to ensure that the SyncController's implementation strictly follows the defined 4-level priority algorithm, uses database transactions for data integrity, and persists its background sync state in a FolderSyncStateEntity.  
-  * **Status: In Progress (Upload pipeline completed 2025-06-24; cache eviction algorithm pending)**
+  * **Status: Completed (2025-06-25)**
 * **Requirement 0.6 (Integrate Initial Sync Duration):** As a developer, I want to integrate the existing user preference for "initial sync duration" into the SyncController's initial sync mode.
   * **Status: To Do**
 * **Requirement 0.7 (Isolate Attachments for Backup Exclusion):** As a developer, I want all downloaded attachments to be saved to a dedicated attachments/ directory which is excluded from cloud backups, as defined in the Phase 1 of the sync plan.

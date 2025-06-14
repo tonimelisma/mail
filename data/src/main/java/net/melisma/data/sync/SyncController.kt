@@ -612,8 +612,112 @@ class SyncController @Inject constructor(
 
     private suspend fun runCacheEviction(accountId: String) {
         withContext(ioDispatcher) {
-            Timber.d("[Stub] Cache eviction requested for account $accountId — full algorithm TBD.")
-            // We simply log for now.
+            val prefs = userPreferencesRepository.userPreferencesFlow.first()
+            val cacheLimitBytes = prefs.cacheSizeLimitBytes
+            val targetBytesAfterEvict = (cacheLimitBytes * 0.8).toLong()
+
+            val attachmentDao = appDatabase.attachmentDao()
+            val messageDao = appDatabase.messageDao()
+            val messageBodyDao = appDatabase.messageBodyDao()
+
+            // Gather current cache usage
+            val downloadedAttachments = attachmentDao.getAllDownloadedAttachments()
+                .filter { it.accountId == accountId }
+            var attachmentsBytes = downloadedAttachments.sumOf { it.size }
+
+            val messageBodies = messageBodyDao.getAllMessageBodies()
+                .filter { body ->
+                    val parent = messageDao.getMessageByIdSuspend(body.messageId)
+                    parent?.accountId == accountId
+                }
+            var bodiesBytes = messageBodies.sumOf { it.sizeInBytes }
+
+            var totalUsageBytes = attachmentsBytes + bodiesBytes
+            Timber.d("Cache usage for account $accountId: ${totalUsageBytes / 1024 / 1024} MB (limit ${cacheLimitBytes / 1024 / 1024} MB)")
+            if (totalUsageBytes <= cacheLimitBytes) return@withContext // under hard limit, no action
+            val bytesToFree = totalUsageBytes - targetBytesAfterEvict
+            if (bytesToFree <= 0) return@withContext // at or below soft target, nothing
+
+            val evictionCutoffTs = System.currentTimeMillis() - java.util.concurrent.TimeUnit.DAYS.toMillis(90)
+            var bytesFreed = 0L
+
+            appDatabase.withTransaction {
+                // 1. Evict attachments (least recently accessed messages first)
+                val candidateAttachments = downloadedAttachments
+                    .filter { attachment ->
+                        val msg = messageDao.getMessageByIdSuspend(attachment.messageId) ?: return@filter false
+                        // Exclude recent or protected messages
+                        val lastAccess = msg.lastAccessedTimestamp ?: 0L
+                        val protect = lastAccess >= evictionCutoffTs || msg.isDraft || msg.isOutbox
+                        !protect
+                    }
+                    .sortedBy { it.downloadTimestamp ?: 0L }
+
+                for (att in candidateAttachments) {
+                    if (bytesFreed >= bytesToFree) break
+                    // Delete file from disk
+                    att.localFilePath?.let { path ->
+                        try { java.io.File(path).delete() } catch (e: Exception) { Timber.w(e, "Failed to delete attachment file $path") }
+                    }
+                    // Reset DB flags so it can be redownloaded on demand
+                    attachmentDao.resetDownloadStatus(att.attachmentId, EntitySyncStatus.PENDING_DOWNLOAD)
+                    bytesFreed += att.size
+                }
+
+                // Refresh counters after attachment purge
+                attachmentsBytes -= bytesFreed.coerceAtMost(attachmentsBytes)
+                totalUsageBytes = attachmentsBytes + bodiesBytes
+                if (bytesFreed >= bytesToFree) return@withTransaction
+
+                // 2. Evict message bodies (oldest fetched first)
+                val excludedStates = listOf(
+                    EntitySyncStatus.PENDING_UPLOAD.name,
+                    EntitySyncStatus.ERROR.name,
+                    EntitySyncStatus.PENDING_DELETE.name,
+                    EntitySyncStatus.PENDING_DOWNLOAD.name
+                )
+                val candidateBodies = messageBodies
+                    .filter { body ->
+                        val parent = messageDao.getMessageByIdSuspend(body.messageId) ?: return@filter false
+                        val lastAccess = parent.lastAccessedTimestamp ?: 0L
+                        val protect = lastAccess >= evictionCutoffTs || parent.isDraft || parent.isOutbox
+                        !protect
+                    }
+                    .sortedBy { it.lastFetchedTimestamp }
+
+                for (body in candidateBodies) {
+                    if (bytesFreed >= bytesToFree) break
+                    val size = body.sizeInBytes
+                    messageBodyDao.deleteMessageBody(body.messageId)
+                    bytesFreed += size
+                    bodiesBytes -= size
+                }
+
+                totalUsageBytes = attachmentsBytes + bodiesBytes
+                if (bytesFreed >= bytesToFree) return@withTransaction
+
+                // 3. Evict entire message headers (least recently accessed)
+                val candidateMessages = messageDao.getCacheEvictionCandidates(evictionCutoffTs, excludedStates)
+                    .filter { it.accountId == accountId }
+                    .sortedBy { it.lastAccessedTimestamp ?: 0L }
+
+                for (msg in candidateMessages) {
+                    if (bytesFreed >= bytesToFree) break
+                    // Delete associated attachments files (if any)
+                    val atts = attachmentDao.getDownloadedAttachmentsForMessage(msg.id)
+                    atts.forEach { a ->
+                        a.localFilePath?.let { path ->
+                            try { java.io.File(path).delete() } catch (e: Exception) { Timber.w(e, "Failed to delete attachment file $path") }
+                        }
+                    }
+                    // Cascading delete will remove bodies via FK
+                    messageDao.deleteMessageById(msg.id)
+                    // Body + header size approximated as 0.2KB to avoid costly recalculation; continue until limit
+                    bytesFreed += 200L
+                }
+            }
+
+            Timber.i("Cache eviction freed ${bytesFreed / 1024 / 1024} MB, new usage ${(totalUsageBytes - bytesFreed) / 1024 / 1024} MB")
         }
     }
 
@@ -623,7 +727,7 @@ class SyncController @Inject constructor(
         passivePollingJob = externalScope.launch {
             while (isActive) {
                 delay(java.util.concurrent.TimeUnit.MINUTES.toMillis(15))
-                // For each account's Inbox submit FetchMessageHeaders
+                // For each account's Inbox submit FetchMessageHeaders and EvictFromCache
                 val accountDao = appDatabase.accountDao()
                 val folderDao = appDatabase.folderDao()
                 val accounts = accountDao.getAllAccounts().first()
@@ -638,6 +742,8 @@ class SyncController @Inject constructor(
                             )
                         )
                     }
+                    // Always queue a cache-eviction job as part of passive housekeeping
+                    submit(SyncJob.EvictFromCache(acc.id))
                 }
             }
         }

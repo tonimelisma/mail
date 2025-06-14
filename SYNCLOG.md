@@ -510,4 +510,28 @@ Implement the real upload path for user-generated actions (mark read, star, dele
 ### **Outcome**
 Users' offline actions now sync automatically once network is available; `PendingAction` queue drains continuously, bringing Req 0.5 "Core Sync Logic" much closer to complete.
 
+---
+
+## **Date: 2025-06-25**
+
+### **Developer:** ChatGPT-o3 (Automated)
+
+### **Increment Implemented – "Phase-4 E: Cache Eviction Algorithm"**
+
+**Goal**
+Complete the final missing piece of Core Sync Logic by implementing the cache-eviction algorithm described in SYNCVISION §2.4 and wiring its automatic scheduling into passive polling.
+
+**Work Completed**
+1. **SyncController**
+   • Replaced stub `runCacheEviction()` with full multi-step algorithm (attachments → bodies → headers) obeying user cache-limit preference and 90-day protection window.  
+   • Added per-account bytes accounting, disk file deletion, DB updates inside a single transaction.  
+   • Passive polling now queues `SyncJob.EvictFromCache` for every account every 15 minutes.
+2. **UserPreferences** – algorithm consumes `cacheSizeLimitBytes` from `UserPreferencesRepository`.
+3. **Docs Updated**  
+   • `SYNCPLAN.md`, `BACKLOG.md`, `SYNCVISION.md`, `ARCHITECTURE.md` now mark Phase-4 E and Req 0.5 as **Completed**.
+4. **Build** – Full `./gradlew build` succeeds with zero warnings.
+
+**Outcome**
+The app now enforces the user's cache-size preference automatically, freeing space proactively while protecting recent and unsynced data. Phase 4 of the sync refactor is officially finished.
+
 --- 

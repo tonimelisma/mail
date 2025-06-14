@@ -110,10 +110,6 @@ dependencies {
     implementation(libs.hilt.android)
     ksp(libs.hilt.compiler)
 
-    // Hilt WorkManager Integration
-    implementation(libs.androidx.hilt.work)
-    ksp(libs.androidx.hilt.compiler)
-
     // --- Coroutines ---
     implementation(libs.kotlinx.coroutines.core)
 

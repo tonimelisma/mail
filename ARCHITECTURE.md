@@ -69,6 +69,7 @@ All data synchronization is managed by the centralized **SyncController**. This 
 * **Eviction Policy:** A dedicated SyncJob for cache cleanup is triggered periodically or when the total cache size exceeds the user-configured limit. The policy evicts data to bring usage down to 80% of the limit.  
   * **Exclusions:** Items with a pending upload/download status, messages in the outbox, and any message (including its body and attachments) accessed within the last 90 days (tracked via lastAccessedTimestamp) are protected from eviction.  
   * **Priority:** It evicts the least recently used data first, prioritizing the removal of attachments, then message bodies, and finally message headers.
+  * _(Implemented 2025-06-25: See SyncController.runCacheEviction.)_
 
 ### **2.5. Error Handling and UX**
 

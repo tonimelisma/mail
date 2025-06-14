@@ -95,3 +95,8 @@ The backup\_rules.xml file will be configured to exclude the Room database and t
     \<\!-- Exclude all downloaded attachments from backup \--\>  
     \<exclude domain="no\_backup" path="attachments/" /\>  
 \</full-backup-content\>  
+
+* **Eviction Policy:** A dedicated SyncJob for cache cleanup is triggered periodically or when the total cache size exceeds the user-configured limit. The policy evicts data to bring usage down to 80% of the limit.
+* **Priority:** It evicts the least recently used data first, prioritizing the removal of attachments, then message bodies, and finally message headers.
+
+_(Update 2025-06-25: Cache eviction algorithm implemented in code – see SyncController.runCacheEviction.)_

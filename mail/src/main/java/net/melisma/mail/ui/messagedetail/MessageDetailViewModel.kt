@@ -6,11 +6,6 @@ import android.net.NetworkCapabilities
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import androidx.work.ExistingWorkPolicy
-import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.WorkInfo
-import androidx.work.WorkManager
-import androidx.work.workDataOf
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -36,7 +31,6 @@ import net.melisma.core_data.model.SyncJob
 import net.melisma.domain.data.GetMessageDetailsUseCase
 import net.melisma.mail.navigation.AppRoutes
 import timber.log.Timber
-import java.util.UUID
 import javax.inject.Inject
 import kotlinx.coroutines.channels.awaitClose
 
@@ -290,10 +284,6 @@ class MessageDetailViewModel @Inject constructor(
             )
         )
     }
-
-    // observeWorkStatus is now a no-op because SyncController updates flows will refresh UI automatically.
-    @Suppress("UNUSED_PARAMETER")
-    private fun observeWorkStatus(dummyId: java.util.UUID, messageId: String, attachmentId: String?) { /* No-op */ }
 
     fun retryMessageBodyDownload() {
         val currentAccountId = accountId
