@@ -64,4 +64,7 @@ interface AttachmentDao {
 
     @Query("UPDATE attachments SET isDownloaded = 0, localFilePath = NULL, downloadTimestamp = NULL, syncStatus = :newSyncStatus, lastSyncError = NULL WHERE id = :id")
     suspend fun resetDownloadStatus(id: Long, newSyncStatus: EntitySyncStatus)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertOrUpdateAttachments(attachments: List<AttachmentEntity>)
 }

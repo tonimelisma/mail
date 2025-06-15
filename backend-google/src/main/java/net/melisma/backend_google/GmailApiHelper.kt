@@ -1908,12 +1908,12 @@ class GmailApiHelper @Inject constructor(
 
     // Stub implementation for new delta sync method for messages
     override suspend fun syncMessagesForFolder(
-        folderId: String,
+        folderRemoteId: String,
         syncToken: String?, // This is the startHistoryId for delta, or null to get a fresh historyId for future deltas
         maxResults: Int?, // CORRECTED: Ensure this is 'maxResults' to match MailApiService interface
         earliestTimestampEpochMillis: Long? // New parameter
     ): Result<DeltaSyncResult<Message>> = withContext(ioDispatcher) {
-        Timber.i("syncMessagesForFolder called for folderId: $folderId. SyncToken (startHistoryId): $syncToken, earliestTimestamp: $earliestTimestampEpochMillis, maxResultsHint: $maxResults")
+        Timber.i("syncMessagesForFolder called for folderId: $folderRemoteId. SyncToken (startHistoryId): $syncToken, earliestTimestamp: $earliestTimestampEpochMillis, maxResultsHint: $maxResults")
         if (earliestTimestampEpochMillis != null) {
             Timber.w("syncMessagesForFolder (Gmail): earliestTimestampEpochMillis ($earliestTimestampEpochMillis) is provided but currently unused by the history-based delta sync logic.")
         }
@@ -1942,7 +1942,7 @@ class GmailApiHelper @Inject constructor(
             var nextSyncTokenToReturnUltimately =
                 syncToken // Initialize with current token, will be updated by the last page's historyId
 
-            Timber.d("Starting delta sync for folder $folderId from historyId: $syncToken")
+            Timber.d("Starting delta sync for folder $folderRemoteId from historyId: $syncToken")
 
             do {
                 val response: HttpResponse = httpClient.get("$BASE_URL/history") {
@@ -1951,7 +1951,7 @@ class GmailApiHelper @Inject constructor(
                         "startHistoryId",
                         syncToken
                     ) // The initial startHistoryId for the window remains constant
-                    parameter("labelId", folderId)
+                    parameter("labelId", folderRemoteId)
                     // Specify historyTypes to get only relevant events and potentially more detailed messages in messagesAdded
                     parameter("historyTypes", "messageAdded,messageDeleted,labelAdded,labelRemoved")
                     maxResults?.let { // Ensure this uses the corrected 'maxResults' parameter
@@ -1983,7 +1983,7 @@ class GmailApiHelper @Inject constructor(
                 historyResponse.history?.forEach { historyEntry ->
                     // Messages added to the account AND having the folderId label
                     historyEntry.messagesAdded?.forEach { msgContainer ->
-                        if (msgContainer.message.labelIds?.contains(folderId) == true) {
+                        if (msgContainer.message.labelIds?.contains(folderRemoteId) == true) {
                             msgContainer.message.id?.let { messageIdsToFetchDetailsFor.add(it) }
                         }
                     }
@@ -1995,14 +1995,14 @@ class GmailApiHelper @Inject constructor(
 
                     // Messages that had folderId label added
                     historyEntry.labelsAdded?.forEach { labelEvent ->
-                        if (labelEvent.labelIds.contains(folderId)) {
+                        if (labelEvent.labelIds.contains(folderRemoteId)) {
                             messageIdsToFetchDetailsFor.add(labelEvent.message.id)
                         }
                     }
 
                     // Messages that had folderId label removed
                     historyEntry.labelsRemoved?.forEach { labelEvent ->
-                        if (labelEvent.labelIds.contains(folderId)) {
+                        if (labelEvent.labelIds.contains(folderRemoteId)) {
                             deletedMessageIdsCollector.add(labelEvent.message.id)
                         }
                     }
@@ -2018,12 +2018,12 @@ class GmailApiHelper @Inject constructor(
                     val deferreds = messageIdsToFetchDetailsFor.map { msgId ->
                         async(ioDispatcher) {
                             try {
-                                Timber.v("Fetching details for messageId $msgId for delta sync folder $folderId")
+                                Timber.v("Fetching details for messageId $msgId for delta sync folder $folderRemoteId")
                                 fetchRawGmailMessage(msgId)?.let {
                                     mapGmailMessageToMessage(
                                         it,
                                         accountId,
-                                        folderId,
+                                        folderRemoteId,
                                         isForBodyContent = false
                                     )
                                 }
@@ -2044,7 +2044,7 @@ class GmailApiHelper @Inject constructor(
             val finalNewOrUpdatedItems =
                 newOrUpdatedMessageDetails.filterNot { it.id in deletedMessageIdsCollector }
 
-            Timber.i("syncMessagesForFolder (delta): Fetched ${finalNewOrUpdatedItems.size} new/updated, ${deletedMessageIdsCollector.size} deleted for folder $folderId. Next sync token: $nextSyncTokenToReturnUltimately")
+            Timber.i("syncMessagesForFolder (delta): Fetched ${finalNewOrUpdatedItems.size} new/updated, ${deletedMessageIdsCollector.size} deleted for folder $folderRemoteId. Next sync token: $nextSyncTokenToReturnUltimately")
             Result.success(
                 DeltaSyncResult(
                     newOrUpdatedItems = finalNewOrUpdatedItems,
@@ -2056,20 +2056,20 @@ class GmailApiHelper @Inject constructor(
         } catch (e: GoogleNeedsReauthenticationException) {
             Timber.w(
                 e,
-                "Google account ${e.accountId} needs re-authentication during syncMessagesForFolder (folder: $folderId)."
+                "Google account ${e.accountId} needs re-authentication during syncMessagesForFolder (folder: $folderRemoteId)."
             ) // Used e.accountId
             val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
             Result.failure(ApiServiceException(mappedDetails))
         } catch (e: ApiServiceException) {
             Timber.e(
                 e,
-                "ApiServiceException during syncMessagesForFolder for folder $folderId (Account: $localAccountIdForLogging)"
+                "ApiServiceException during syncMessagesForFolder for folder $folderRemoteId (Account: $localAccountIdForLogging)"
             )
             Result.failure(e)
         } catch (e: Exception) {
             Timber.e(
                 e,
-                "Generic exception during syncMessagesForFolder for folder $folderId (Account: $localAccountIdForLogging)"
+                "Generic exception during syncMessagesForFolder for folder $folderRemoteId (Account: $localAccountIdForLogging)"
             )
             val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
             Result.failure(ApiServiceException(mappedDetails))
@@ -2181,6 +2181,43 @@ class GmailApiHelper @Inject constructor(
             Timber.e(e, "Exception fetching message $messageRemoteId")
             val mappedDetails = errorMapper.mapExceptionToErrorDetails(e)
             Result.failure(ApiServiceException(mappedDetails))
+        }
+    }
+
+    override suspend fun hasChangesSince(
+        accountId: String,
+        deltaToken: String?
+    ): Result<Pair<Boolean, String?>> = withContext(ioDispatcher) {
+        Timber.d("hasChangesSince (Gmail) called for account $accountId. DeltaToken (startHistoryId): $deltaToken")
+        try {
+            val token = deltaToken ?: getCurrentGmailHistoryId()
+
+            val response: HttpResponse = httpClient.get("$BASE_URL/history") {
+                accept(ContentType.Application.Json)
+                parameter("startHistoryId", token)
+                parameter("maxResults", 1) // We only need to know if there's at least one change
+            }
+
+            if (!response.status.isSuccess()) {
+                val errorBody = response.bodyAsText()
+                Timber.e("hasChangesSince: Error fetching Gmail history: ${response.status} - Body: $errorBody")
+                val httpEx = ClientRequestException(response, errorBody)
+                return@withContext Result.failure(ApiServiceException(errorMapper.mapExceptionToErrorDetails(httpEx)))
+            }
+
+            val historyResponse = jsonParser.decodeFromString<GmailHistoryResponse>(response.bodyAsText())
+            val hasChanges = !historyResponse.history.isNullOrEmpty()
+            val nextToken = historyResponse.historyId
+
+            Timber.d("hasChangesSince (Gmail): hasChanges=$hasChanges, nextToken=$nextToken")
+            Result.success(hasChanges to nextToken)
+
+        } catch (e: GoogleNeedsReauthenticationException) {
+            Timber.w(e, "Google account $accountId needs re-authentication during hasChangesSince.")
+            Result.failure(ApiServiceException(errorMapper.mapExceptionToErrorDetails(e)))
+        } catch (e: Exception) {
+            Timber.e(e, "Generic exception during hasChangesSince for account $accountId")
+            Result.failure(ApiServiceException(errorMapper.mapExceptionToErrorDetails(e)))
         }
     }
 }

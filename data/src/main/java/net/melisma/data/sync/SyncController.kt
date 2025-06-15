@@ -131,6 +131,7 @@ class SyncController @Inject constructor(
                     is SyncJob.FetchNextMessageListPage -> handleFetchNextPage(job)
                     is SyncJob.SearchOnline -> handleSearchOnline(job)
                     is SyncJob.EvictFromCache -> runCacheEviction(job.accountId)
+                    is SyncJob.CheckForNewMail -> handleCheckForNewMail(job)
                 }
                 _status.value = _status.value.copy(error = null)
             } catch (e: Exception) {
@@ -207,6 +208,10 @@ class SyncController @Inject constructor(
         val messageEntities = paged.messages.map { it.toEntity(accountId) }
 
         appDatabase.withTransaction {
+            // Ensure local folders exist for all remote labels before we process messages.
+            val allRemoteLabelIds = paged.messages.flatMap { it.remoteLabelIds ?: emptyList() }.distinct()
+            ensureLocalFoldersForRemoteIds(accountId, allRemoteLabelIds)
+
             appDatabase.messageDao().insertOrUpdateMessages(messageEntities)
             val junctionDao = appDatabase.messageFolderJunctionDao()
             val folderMapByRemote = folderDao.getFoldersForAccount(accountId)
@@ -215,15 +220,20 @@ class SyncController @Inject constructor(
 
             // Reconcile label links for every message so that the junction table mirrors server state.
             paged.messages.forEach { msg ->
-                val remoteLabels = msg.remoteLabelIds ?: listOf(folderId)
+                val remoteLabels = msg.remoteLabelIds ?: listOf(apiFolderId) // Use apiFolderId as fallback
                 val localFolderIds = remoteLabels.mapNotNull { remoteId ->
-                    folderMapByRemote[remoteId]?.id ?: if (remoteId == folderId) folderId else null
+                    folderMapByRemote[remoteId]?.id
                 }.distinct()
 
                 // If we somehow cannot resolve any folder locally, still ensure message remains linked to context folder.
                 val effectiveFolderIds = if (localFolderIds.isEmpty()) listOf(folderId) else localFolderIds
-
                 junctionDao.replaceFoldersForMessage(msg.id, effectiveFolderIds)
+
+                // Persist attachment metadata
+                if (msg.hasAttachments && msg.attachments.isNotEmpty()) {
+                    val attachmentEntities = msg.attachments.map { it.toEntity() }
+                    appDatabase.attachmentDao().insertOrUpdateAttachments(attachmentEntities)
+                }
             }
 
             // Persist state
@@ -333,9 +343,8 @@ class SyncController @Inject constructor(
                 try {
                     val accounts = accountRepository.getAccounts().first()
                     accounts.forEach { account ->
-                        // More efficient: just trigger a folder list sync.
-                        // The controller can then decide what to do next based on delta.
-                        submit(SyncJob.SyncFolderList(account.id))
+                        // More efficient: just trigger a lightweight check for changes.
+                        submit(SyncJob.CheckForNewMail(account.id))
                     }
                 } catch (e: Exception) {
                     Timber.e(e, "Error during active polling")
@@ -388,6 +397,10 @@ class SyncController @Inject constructor(
             val serverFolders = delta.newOrUpdatedItems
 
             appDatabase.withTransaction {
+                // Ensure placeholders exist before we try to diff.
+                val remoteFolderDtos = serverFolders.map { it.id to it.displayName }
+                ensureLocalFoldersForRemoteIds(job.accountId, remoteFolderDtos.map { it.first }, remoteFolderDtos.associate { it })
+
                 val localFolders = folderDao.getFoldersForAccount(job.accountId).first()
                 val localFolderMap = localFolders.associateBy { it.remoteId }
                 val serverFolderMap = serverFolders.associateBy { it.id }
@@ -401,8 +414,9 @@ class SyncController @Inject constructor(
                 // Upsert server folders
                 val toUpsert = serverFolders.map { serverFolder ->
                     val existing = localFolderMap[serverFolder.id]
+                    // We can safely assume an existing placeholder, so existing should not be null.
                     val localId = existing?.id ?: java.util.UUID.randomUUID().toString()
-                    serverFolder.toEntity(job.accountId, localId)
+                    serverFolder.toEntity(job.accountId, localId).copy(isPlaceholder = false) // Un-mark as placeholder
                 }
                 if (toUpsert.isNotEmpty()) {
                     folderDao.insertOrUpdateFolders(toUpsert)
@@ -865,5 +879,58 @@ class SyncController @Inject constructor(
             setClassName(appContext, "net.melisma.mail.sync.InitialSyncForegroundService")
         }
         appContext.stopService(intent)
+    }
+
+    private suspend fun handleCheckForNewMail(job: SyncJob.CheckForNewMail) {
+        withContext(ioDispatcher) {
+            if (!networkMonitor.isOnline.first()) {
+                Timber.i("Offline – skipping CheckForNewMail for ${job.accountId}")
+                return@withContext
+            }
+
+            val accountDao = appDatabase.accountDao()
+            val service = mailApiServiceFactory.getService(job.accountId) ?: run {
+                Timber.w("MailApiService not found for account ${job.accountId}")
+                return@withContext
+            }
+
+            val currentToken = accountDao.getLatestDeltaToken(job.accountId)
+            val result = service.hasChangesSince(job.accountId, currentToken)
+
+            if (result.isFailure) {
+                Timber.e(result.exceptionOrNull(), "CheckForNewMail failed for account ${job.accountId}")
+                // Optionally surface this as a non-critical error
+                return@withContext
+            }
+
+            val (hasChanges, nextToken) = result.getOrThrow()
+            if (nextToken != null) {
+                accountDao.updateLatestDeltaToken(job.accountId, nextToken)
+            }
+
+            if (hasChanges) {
+                Timber.i("Changes detected for account ${job.accountId}. Triggering full sync.")
+                // Changes were found, trigger a more comprehensive sync
+                submit(SyncJob.SyncFolderList(job.accountId))
+                // Also immediately refresh high-priority folders like the Inbox
+                val inbox = appDatabase.folderDao().getWellKnownFolder(job.accountId, WellKnownFolderType.INBOX).firstOrNull()
+                inbox?.let {
+                    submit(SyncJob.FetchMessageHeaders(it.id, null, job.accountId))
+                }
+            } else {
+                Timber.d("No new changes detected for account ${job.accountId}")
+            }
+        }
+    }
+
+    private suspend fun ensureLocalFoldersForRemoteIds(accountId: String, remoteIds: List<String>, names: Map<String, String?> = emptyMap()) {
+        if (remoteIds.isEmpty()) return
+        val folderDao = appDatabase.folderDao()
+        appDatabase.withTransaction {
+            remoteIds.forEach { remoteId ->
+                // Use the provided name or default to the remoteId if not available
+                folderDao.insertPlaceholderIfAbsent(accountId, remoteId, names[remoteId] ?: remoteId)
+            }
+        }
     }
 } 

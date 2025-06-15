@@ -39,6 +39,9 @@ sealed class SyncJob(open val accountId: String, val priority: Int) :
         override val accountId: String
     ) : SyncJob(accountId, 50)
 
+    data class CheckForNewMail(override val accountId: String) : 
+        SyncJob(accountId, 50)
+
     data class SyncFolderList(override val accountId: String) :
         SyncJob(accountId, 40)
 

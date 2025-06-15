@@ -5,6 +5,7 @@ import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import kotlinx.coroutines.flow.Flow
 import net.melisma.core_data.model.EntitySyncStatus
 import net.melisma.core_data.model.WellKnownFolderType
@@ -59,4 +60,21 @@ interface FolderDao {
      */
     @Query("DELETE FROM folders WHERE accountId IN (:accountIds)")
     suspend fun deleteAllFoldersForAccounts(accountIds: List<String>)
+
+    @Transaction
+    suspend fun insertPlaceholderIfAbsent(accountId: String, remoteId: String, name: String) {
+        val existing = getFolderByAccountIdAndRemoteId(accountId, remoteId)
+        if (existing == null) {
+            insertOrUpdateFolders(listOf(
+                FolderEntity(
+                    id = java.util.UUID.randomUUID().toString(),
+                    accountId = accountId,
+                    remoteId = remoteId,
+                    name = name,
+                    wellKnownType = WellKnownFolderType.USER_CREATED,
+                    isPlaceholder = true
+                )
+            ))
+        }
+    }
 } 

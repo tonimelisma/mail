@@ -1651,4 +1651,39 @@ class GraphApiHelper @Inject constructor(
             Result.failure(e)
         }
     }
+
+    override suspend fun hasChangesSince(
+        accountId: String,
+        deltaToken: String?
+    ): Result<Pair<Boolean, String?>> = withContext(ioDispatcher) {
+        Timber.d("hasChangesSince (Graph) called for account $accountId. DeltaToken: $deltaToken")
+        val requestUrl = deltaToken ?: "$MS_GRAPH_ROOT_ENDPOINT/messages/delta"
+
+        try {
+            val response: HttpResponse = httpClient.get(requestUrl) {
+                accept(ContentType.Application.Json)
+                // We only need one item to know if there are changes.
+                // This is an optimization over fetching the whole first page.
+                parameter("\$top", 1)
+            }
+
+            if (!response.status.isSuccess()) {
+                val errorBody = response.bodyAsText()
+                Timber.e("hasChangesSince (Graph): Error fetching delta: ${response.status} - Body: $errorBody")
+                val httpEx = ClientRequestException(response, errorBody)
+                return@withContext Result.failure(ApiServiceException(errorMapper.mapExceptionToErrorDetails(httpEx)))
+            }
+
+            val deltaResponse = response.body<GraphDeltaResponse<KtorGraphMessage>>()
+            val hasChanges = !deltaResponse.value.isNullOrEmpty()
+            val nextToken = deltaResponse.deltaLink ?: deltaResponse.nextLink
+
+            Timber.d("hasChangesSince (Graph): hasChanges=$hasChanges, nextToken=$nextToken")
+            Result.success(hasChanges to nextToken)
+
+        } catch (e: Exception) {
+            Timber.e(e, "Generic exception during hasChangesSince (Graph) for account $accountId")
+            Result.failure(ApiServiceException(errorMapper.mapExceptionToErrorDetails(e)))
+        }
+    }
 }

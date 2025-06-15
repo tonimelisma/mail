@@ -2,12 +2,14 @@
 
 ### **Prioritized Requirements Backlog (Epics & Status)**
 
-**EPIC 0: ARCHITECTURAL REFACTOR \- SyncController Migration** (Highest Priority \- BLOCKER)
+**EPIC 0: ARCHITECTURAL REFACTOR & BUILD FIX** (Highest Priority \- BLOCKER)
 
+* **Requirement 0.0 (Resolve KSP Build Blocker):** As a developer, I need to resolve the persistent `[MissingType]` KSP error in the `:core-db` module to make the application buildable.
+  * **Status: BLOCKER (NEW)**
 * **Requirement 0.1 (Implement SyncController):** As a developer, I want to replace the SyncEngine and distributed WorkManager architecture with the centralized SyncController model.  
   * **Status: Completed (2025-06-17)**  
 * **Requirement 0.2 (Database Migration to Many-to-Many):** As a developer, I want to migrate the database schema to support a many-to-many relationship between messages and folders.  
-  * **Status: Completed (2025-06-17)**  
+  * **Status: Completed (2025-07-08)** - Schema updated for placeholders and delta tokens.  
 * **Requirement 0.3 (Remove RemoteMediator):** As a developer, I want to remove the MessageRemoteMediator and rely on the SyncController's background sync to populate the database for paging.  
   * **Status: Completed (2025-06-18)**  
 * **Requirement 0.4 (Implement Sync State Observation):** As a developer, I want the SyncController to expose a StateFlow<SyncStatus> that can be observed by the UI layer to provide real-time, global feedback on sync progress, network status, and error states.  
@@ -18,8 +20,8 @@
   * **Status: Completed (2025-06-30)**
 * **Requirement 0.7 (Isolate Attachments for Backup Exclusion):** As a developer, I want all downloaded attachments to be saved to a dedicated attachments/ directory inside the no_backup area which the platform never backs up.
   * **Status: Completed (2025-06-26)**
-* **Requirement 0.8 (Polling Lifecycle – Foreground & Background):** Implement 5-second active polling and 15-minute passive WorkManager job to queue low-priority freshness jobs.  
-  * **Status: Completed (2025-06-19)**
+* **Requirement 0.8 (Polling Lifecycle – Foreground & Background):** Implement lightweight delta polling instead of full folder sync.
+  * **Status: In Progress (Blocked by Build)** - All data-layer components (API, DAO) are complete. `SyncController` integration is done but cannot be verified.
 
 **EPIC 1: Core Mail Viewing** (Highest Priority)
 
@@ -60,7 +62,7 @@
 **EPIC 4: Attachments (Offline Access)** (Higher Priority)
 
 * **Requirement 4.1 (View Attachments):** As a user, I want to see a list of attachments within a received email.  
-  * **Status: Implemented**  
+  * **Status: In Progress (Blocked by Build)** - DAO and mappers are complete. `SyncController` integration is done but cannot be verified.  
 * **Requirement 4.2 (Preview Attachments):** As a user, I want to preview common attachment types using downloaded data.  
   * **Status: Partially Implemented** (Offline access is implemented, but requires a more robust in-app previewer).  
 * **Requirement 4.3 (Save Attachments):** As a user, I want to save attachments from an email.  
@@ -82,7 +84,7 @@
 * **Requirement 5.6 (Data Caching & Eviction):** The app must cache data locally with a multi-tiered eviction strategy.  
   * **Status: Implemented**  
 * **Requirement 5.7 (Background Sync):** The app must periodically check for new emails and sync changes.  
-  * **Status: Blocked by EPIC 0** (Functionality is being migrated from WorkManager to the SyncController).  
+  * **Status: In Progress (Blocked by Build)** - Functionality is being migrated from WorkManager to the SyncController.  
 * **Requirement 5.Z (Delayed Send Notification):** Notify user if an email fails to send after retries.  
   * **Status: Planned**
 

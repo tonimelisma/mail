@@ -39,5 +39,6 @@ data class FolderEntity(
     val lastSyncError: String? = null,
     val lastFullContentSyncTimestamp: Long? = null, // For MessageRemoteMediator: last time all pages were fetched
     val nextPageToken: String? = null, // For MessageRemoteMediator: token for the next page of messages
-    val messageListSyncToken: String? = null // Token for delta syncing the message list within this folder
+    val messageListSyncToken: String? = null, // Token for delta syncing the message list within this folder
+    val isPlaceholder: Boolean = false // Added for folders created on-the-fly from message labels
 ) 

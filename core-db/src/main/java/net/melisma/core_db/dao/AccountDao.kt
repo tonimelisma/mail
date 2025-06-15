@@ -46,4 +46,10 @@ interface AccountDao {
     // Generic sync error update for the account
     @Query("UPDATE accounts SET lastGenericSyncError = :errorMessage WHERE id = :accountId")
     suspend fun updateAccountSyncError(accountId: String, errorMessage: String)
+
+    @Query("SELECT latestDeltaToken FROM accounts WHERE id = :accountId")
+    suspend fun getLatestDeltaToken(accountId: String): String?
+
+    @Query("UPDATE accounts SET latestDeltaToken = :token WHERE id = :accountId")
+    suspend fun updateLatestDeltaToken(accountId: String, token: String?)
 } 

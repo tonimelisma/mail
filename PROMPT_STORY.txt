@@ -1,15 +1,15 @@
-Our intern attempted to implement @SYNCPLAN.md to fulfill @SYNCVISION.md. Their log is @SYNCLOG.md. For background see @BACKLOG.md and @ARCHITECTURE.md 
+Our intern attempted to implement @SYNCPLAN.md to fulfill @SYNCVISION.md. Their log is @SYNCLOG.md@FIX.md @FIXLOG.md  . For background see @BACKLOG.md and @ARCHITECTURE.md 
 
-Your job is to top up their work and fix all the remaining bugs. You need to complete the refactoring. You need to implement @FIX.md.
+Your job is to top up their work and fix all the remaining bugs. You need to complete the refactoring. You need to implement @FIX2.md 
 
-1. Explain all of the work that needs to happen to successfully accomplish the FIX.md plan. Explain clearly the body of work you seek to accomplish and the outcomes.
+1. Explain all of the work that needs to happen to successfully accomplish the FIX2.md plan. Explain clearly the body of work you seek to accomplish and the outcomes.
 2. Don't trust the markdown documents. Read the code as it is today on disk to understand its state and reason about it.
 3. Create a detailed plan, step by step on changes needed. Show it to me.
 4. Where are the soft spots in your analysis? Enumerate them to me.
 5. Read the rest of the files on disk required to harden the soft spots. Ensure you know each and every API that will be affected by your changes and have read the actual files on disk and know them before moving to the next step.
 6. Implement the required changes.
 7. Build and fix any build errors.
-8. What ARCHITECTURE.md and BACKLOG.md each do? Explain out loud their roles. Then update all the relevant files. Ensure all current details are retained unless obsolete. Use FIXLOG.md as your main file for updates on progress, any tech debt you encountered, deviations from plan, new ideas and unfinished work.
+8. What ARCHITECTURE.md and BACKLOG.md each do? Explain out loud their roles. Then update all the relevant files. Ensure all current details are retained unless obsolete. Use FIX2.md as your main file for updates on progress, any tech debt you encountered, deviations from plan, new ideas and unfinished work.
 9. Check to make sure you didn't introduce any placeholders in the documents such as parts that say "this section is just like before".
 10. Use your tools to do a git commit of everything changed. Ensure the comment is a one-liner. Then git push.
 

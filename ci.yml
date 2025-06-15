@@ -1,0 +1,8 @@
+  - name: Build with Gradle
+    run: ./gradlew build
+
+  - name: Run tests
+    run: ./gradlew testDebugUnitTest
+  # TODO: Consider adding lint, code coverage, or other quality checks here
+  # For example: ./gradlew lintDebug
+  # 

@@ -262,6 +262,20 @@ interface MailApiService {
      */
     suspend fun getMessage(messageRemoteId: String): Result<Message>
 
+    /**
+     * Performs a lightweight check to see if there have been any changes since the last
+     * delta token was issued.
+     *
+     * @param accountId The ID of the account to check.
+     * @param deltaToken The token from the previous sync check. Null for the very first check.
+     * @return A Result containing a Pair: a Boolean that is true if changes were detected,
+     * and a String holding the new delta token for the next check.
+     */
+    suspend fun hasChangesSince(
+        accountId: String,
+        deltaToken: String?
+    ): Result<Pair<Boolean, String?>>
+
     // Future methods to consider:
     // - syncFolders(syncToken) - For delta syncing with sync token
 }

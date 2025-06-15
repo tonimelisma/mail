@@ -5,6 +5,7 @@ plugins {
     alias(libs.plugins.kotlin.ksp) // KSP for Room
     alias(libs.plugins.hilt.gradle)
     alias(libs.plugins.kotlin.serialization) // Added Kotlin Serialization plugin
+    alias(libs.plugins.androidx.room)
 }
 
 android {
@@ -34,8 +35,11 @@ android {
         jvmTarget = "17"
     }
     ksp {
-        arg("room.schemaLocation", "$projectDir/schemas")
         arg("room.incremental", "true")
+    }
+
+    room {
+        schemaDirectory("$projectDir/schemas")
     }
 }
 

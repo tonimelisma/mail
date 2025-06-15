@@ -3,6 +3,7 @@ package net.melisma.core_db
 import androidx.room.Database
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
+import androidx.room.AutoMigration
 import net.melisma.core_db.converter.StringListConverter
 import net.melisma.core_db.converter.WellKnownFolderTypeConverter
 import net.melisma.core_db.converter.PayloadConverter
@@ -25,6 +26,7 @@ import net.melisma.core_db.entity.MessageEntity
 import net.melisma.core_db.entity.PendingActionEntity
 import net.melisma.core_db.entity.MessageFolderJunction
 import net.melisma.core_db.entity.FolderSyncStateEntity
+import net.melisma.core_db.migration.M18_M19
 
 @Database(
     entities = [
@@ -33,12 +35,15 @@ import net.melisma.core_db.entity.FolderSyncStateEntity
         MessageEntity::class,
         MessageBodyEntity::class,
         AttachmentEntity::class,
+        PendingActionEntity::class,
         MessageFolderJunction::class,
-        FolderSyncStateEntity::class,
-        PendingActionEntity::class
+        FolderSyncStateEntity::class
     ],
-    version = 19,
-    exportSchema = true
+    version = 20,
+    exportSchema = true,
+    autoMigrations = [
+        AutoMigration(from = 17, to = 18)
+    ]
 )
 @TypeConverters(
     WellKnownFolderTypeConverter::class, 
@@ -59,6 +64,12 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun folderSyncStateDao(): FolderSyncStateDao
 
     companion object {
-        // This companion object is now empty, as database creation is handled by Hilt.
+        val M18_19 = M18_M19()
+        val M19_20 = object : androidx.room.migration.Migration(19, 20) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE accounts ADD COLUMN latestDeltaToken TEXT")
+                db.execSQL("ALTER TABLE folders ADD COLUMN isPlaceholder INTEGER NOT NULL DEFAULT 0")
+            }
+        }
     }
 }
