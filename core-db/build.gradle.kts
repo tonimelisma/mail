@@ -33,6 +33,10 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+    ksp {
+        arg("room.schemaLocation", "$projectDir/schemas")
+        arg("room.incremental", "true")
+    }
 }
 
 dependencies {

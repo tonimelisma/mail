@@ -35,4 +35,17 @@ interface MessageFolderJunctionDao {
             insertAll(newFolderIds.map { fid -> MessageFolderJunction(messageId, fid) })
         }
     }
+
+    /**
+     * Inserts a single message-folder link. Safe on conflict (REPLACE).
+     */
+    suspend fun addLabel(messageId: String, folderId: String) {
+        insertAll(listOf(MessageFolderJunction(messageId, folderId)))
+    }
+
+    /**
+     * Removes a single message-folder link.
+     */
+    @Query("DELETE FROM message_folder_junction WHERE messageId = :messageId AND folderId = :folderId")
+    suspend fun removeLabel(messageId: String, folderId: String)
 } 

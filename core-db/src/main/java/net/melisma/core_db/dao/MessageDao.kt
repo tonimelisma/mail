@@ -85,9 +85,6 @@ interface MessageDao {
     @Query("DELETE FROM messages WHERE messageId IN (:remoteMessageIds)")
     suspend fun deleteMessagesByRemoteIds(remoteMessageIds: List<String>): Int
 
-    @Query("UPDATE messages SET id = id WHERE id = :messageId AND (:newFolderId IS NOT NULL OR :newFolderId IS NULL)")
-    suspend fun updateFolderId(messageId: String, newFolderId: String)
-
     @Query("""
         SELECT m.* FROM messages m
         LEFT JOIN message_folder_junction j ON m.id = j.messageId
@@ -129,12 +126,14 @@ interface MessageDao {
     """)
     suspend fun getMessageIdsByThreadIdAndFolder(threadId: String, folderId: String): List<String>
 
-    @Query("UPDATE messages SET id = id WHERE id IN (:messageIds) AND (:newFolderId IS NOT NULL OR :newFolderId IS NULL)")
-    suspend fun updateFolderIdForMessages(messageIds: List<String>, newFolderId: String)
-
     @Query("UPDATE messages SET isLocallyDeleted = 1 WHERE id IN (:messageIds)")
     suspend fun markMessagesAsLocallyDeleted(messageIds: List<String>)
 
     @Query("UPDATE messages SET lastSyncError = :error WHERE id = :messageId")
     suspend fun updateLastSyncError(messageId: String, error: String)
+
+    // --- Helpers added to satisfy legacy repository usage (will be removed after refactor) ---
+
+    @Query("UPDATE messages SET syncStatus = :syncStatus WHERE id IN (:messageIds)")
+    suspend fun setSyncStatusForMessages(messageIds: List<String>, syncStatus: EntitySyncStatus)
 } 
