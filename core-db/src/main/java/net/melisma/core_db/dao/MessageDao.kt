@@ -119,16 +119,6 @@ interface MessageDao {
     @Query("UPDATE messages SET isRead = :isRead WHERE id IN (:messageIds)")
     suspend fun updateReadStateForMessages(messageIds: List<String>, isRead: Boolean)
 
-    @Query("""
-        SELECT m.id FROM messages AS m
-        INNER JOIN message_folder_junction j ON m.id = j.messageId
-        WHERE m.threadId = :threadId AND j.folderId = :folderId
-    """)
-    suspend fun getMessageIdsByThreadIdAndFolder(threadId: String, folderId: String): List<String>
-
-    @Query("UPDATE messages SET isLocallyDeleted = 1 WHERE id IN (:messageIds)")
-    suspend fun markMessagesAsLocallyDeleted(messageIds: List<String>)
-
     @Query("UPDATE messages SET lastSyncError = :error WHERE id = :messageId")
     suspend fun updateLastSyncError(messageId: String, error: String)
 
@@ -136,4 +126,7 @@ interface MessageDao {
 
     @Query("UPDATE messages SET syncStatus = :syncStatus WHERE id IN (:messageIds)")
     suspend fun setSyncStatusForMessages(messageIds: List<String>, syncStatus: EntitySyncStatus)
+
+    // Legacy one-to-many helpers removed 2025-07-??.  Thread operations now rely solely on
+    // junction-table aware helpers (getMessageIdsByThreadId & DAO label ops).
 } 
