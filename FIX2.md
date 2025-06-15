@@ -67,4 +67,99 @@ This is a deep, unconventional error likely stemming from a complex interaction 
     *   `ActiveGoogleAccountHolder`: Decide if the active account needs to be persisted across app restarts.
 3.  **Wire up UI Error Handling:** The `SyncController` now exposes an `error` `StateFlow`, but no UI component is observing it. A global error-display mechanism (e.g., a Snackbar in the main activity) should be implemented to show these persistent sync errors to the user.
 4.  **Finalize Attachment Handling:** The logic for *sending* attachments with a draft and *parsing* attachments on received messages is incomplete. This is a core email feature that needs to be finished.
-5.  **Revisit Microsoft Mappers:** The `MicrosoftAccountMappers.kt` file was difficult to edit and may contain other subtle issues. It should be reviewed and cleaned up. 
+5.  **Revisit Microsoft Mappers:** The `MicrosoftAccountMappers.kt` file was difficult to edit and may contain other subtle issues. It should be reviewed and cleaned up.
+
+---
+
+## **4. Progress Since Plan Publication (July 4 2025)**
+
+The remediation work described in earlier conversations has **unblocked the build** and delivered a compiling application. Key accomplishments:
+
+1. **KSP `[MissingType]` Error Resolved**  
+   • Added missing Room entity/DAO imports and cleaned circular dependencies.  
+   • Provided a dedicated `PriorityBlockingQueue` via `SyncQueueModule` and removed the duplicate definition that confused Hilt/KSP.  
+   • Consolidated `SyncConstants` into a single package, eliminating shadow-class references that fooled KSP's type resolver.
+2. **Sync API Consistency Restored**  
+   • Re-aligned `SyncJob.UploadAction` with its callers and updated all enumeration usages.  
+   • Removed legacy WorkManager constants and stale repository methods.
+3. **Room Schema & DAO Fixes**  
+   • Added the missing helper queries to `FolderDao` and `MessageDao`.  
+   • Enabled `fallbackToDestructiveMigration()` to allow development builds while the schema is still in flux.
+4. **Dependency-Injection Clean-up**  
+   • Eliminated circular `SyncController ↔ FolderRepository` binding.  
+   • Ensured a single, singleton instance of `PriorityBlockingQueue`.
+5. **Type‐Safety Pass**  
+   • Converted `attachmentId` from `String` to `Long` across models, mappers, repos, and viewmodels.
+6. **Build Status**  
+   `./gradlew build` now finishes with **BUILD SUCCESSFUL** on all modules (`:core-db`, `:data`, `:mail`).
+
+## 4a. Progress – July 6-7 2025 (Latest)
+
+The following breakthroughs were delivered in the latest two increments (see commits 229c435, 7ed8660, ff0ce46):
+
+1. **DAO Modernisation**
+   • Deleted obsolete one-to-many helpers from `MessageDao`.
+   • Added `addLabel`/`removeLabel` helpers to `MessageFolderJunctionDao` and updated repositories to use them.
+
+2. **Room Schema Export**
+   • Enabled `room.schemaLocation` in `core-db` build script and committed v18 JSON schema – first step toward proper migrations.
+
+3. **Multi-Label Plumbing Complete for Gmail**
+   • Added `remoteLabelIds` field to the `Message` domain model.
+   • Gmail mapper now forwards full `labelIds` list.
+   • `SyncController.processFetchHeaders()` reconciles server label list → junction rows, falling back gracefully when a remoteId has no local mapping yet.
+
+4. **Microsoft Backend Compatibility**
+   • Graph mapper now sets `remoteLabelIds = listOf(parentFolderId)` so the reconciliation path works uniformly even though Graph only supports single-folder.
+
+5. **Repositories Updated**
+   • `moveMessage` / `moveThread` now use fine-grained add/remove DAO calls preserving secondary labels.
+
+6. **Build Green**
+   • Full project builds successfully; KSP schema generation errors resolved.
+
+---
+
+## **5. Outstanding Build Warnings**
+
+The following non-blocking issues remain visible in the Gradle output and should be triaged:
+
+* **Unchecked cast** in `DefaultFolderRepository.kt` (generic type erasure).  
+* **Parameter-name mismatch** warning in generated Room stubs (`FolderWithMessageCounts`).  
+* **Room schema export** is disabled – the `schemas/` directory is empty, breaking `./gradlew verifySchema`.  
+* **Destructive migrations** are still enabled – acceptable for development, but must be replaced with proper migrations before beta.
+
+---
+
+## **6. Immediate Next Steps (Phase 2 Continued)**
+
+1. **Finalize the Message-Folder Many-to-Many Model**  
+   • Remove obsolete `folderId` column from `MessageEntity`.  
+   • Replace DAO methods that mutate `folderId` with label-aware junction operations (`addLabel`, `removeLabel`, `replaceLabels`).  
+   • Update repositories (`moveMessage`, `moveThread`) to use the new DAO contract.  
+   • Extend `SyncController` to reconcile server labels via `replaceLabels`.
+2. **Introduce Proper Room Migrations**  
+   • Generate versioned JSON schemas and add migration scripts to move away from destructive fallback.
+3. **Reactivate and Repair Test Suite**  
+   • Un-skip `GmailApiHelperTest.kt` and adjust assertions to the new APIs.  
+   • Add unit tests for `SyncController`'s label reconciliation logic.
+4. **UI Error Surface**  
+   • Observe `SyncController.error` `StateFlow` in the main activity and surface as a Snackbar/toast with retry.
+5. **Attachment Handling Completion**  
+   • Finish multipart upload for drafts with attachments.  
+   • Parse attachment metadata in incoming messages and show download UI.
+6. **Microsoft Mapper Audit**  
+   • Deep review of `MicrosoftAccountMappers.kt`; remove commented dead-code blocks and add unit tests.
+7. **CI Hygiene**  
+   • Turn schema export verification and test tasks back on in CI to prevent regression.
+
+## 6a. Remaining Work After Latest Progress
+
+* **Microsoft Detail Audit (ARCH-2, item 6):** Verify all Graph upload helpers (move, delete) still work with new label semantics.
+* **Placeholder Folder Creation:** When Gmail returns a label not yet seen locally, SyncController currently falls back to context folder. We need a strategy to create local placeholder folders (future story).
+* **Polling Optimisation:** Replace 5-second header fetch with lightweight `SyncJob.CheckForNewMail` delta call per account.
+* **UI Error Surface / Attachment handling / Tests / CI** – unchanged.
+
+---
+
+> **Target Outcome:** Enter feature-freeze on the data layer within one week, paving the way for UI polish and beta release. 

@@ -474,7 +474,8 @@ class GraphApiHelper @Inject constructor(
             isStarred = ktorGraphMessage.flag?.flagStatus == "flagged",
             hasAttachments = ktorGraphMessage.hasAttachments ?: false,
             attachments = emptyList(), // Placeholder for received attachments
-            lastSuccessfulSyncTimestamp = System.currentTimeMillis()
+            lastSuccessfulSyncTimestamp = System.currentTimeMillis(),
+            remoteLabelIds = listOfNotNull(actualFolderId)
         )
     }
 

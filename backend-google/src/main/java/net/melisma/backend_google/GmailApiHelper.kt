@@ -667,7 +667,8 @@ class GmailApiHelper @Inject constructor(
                 recipientAddresses = extractRecipientAddresses(gmailMessage),
                 isStarred = gmailMessage.labelIds?.contains(GMAIL_LABEL_ID_STARRED) == true,
                 hasAttachments = gmailMessage.payload?.parts?.any { !it.filename.isNullOrBlank() && !it.body?.attachmentId.isNullOrBlank() } == true,
-                attachments = currentAttachments
+                attachments = currentAttachments,
+                remoteLabelIds = gmailMessage.labelIds
             )
         } catch (e: Exception) {
             Timber.e(e, "Error mapping GmailMessage to Message: ${e.message}")
@@ -1717,7 +1718,8 @@ class GmailApiHelper @Inject constructor(
             recipientAddresses = extractRecipientAddresses(gmailMessage),
             isStarred = gmailMessage.labelIds?.contains(GMAIL_LABEL_ID_STARRED) == true,
             hasAttachments = gmailMessage.payload?.parts?.any { !it.filename.isNullOrBlank() && !it.body?.attachmentId.isNullOrBlank() } == true,
-            attachments = currentAttachments
+            attachments = currentAttachments,
+            remoteLabelIds = gmailMessage.labelIds
         )
     }
 
