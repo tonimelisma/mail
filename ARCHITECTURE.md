@@ -54,7 +54,7 @@ graph TD
     *   Handling sync errors and managing sync state.
     *   Performing efficient, delta-based polling to check for new mail.
 *   **DAOs (Data Access Objects):** Room interfaces that define the SQL queries for interacting with the database tables.
-*   **Room Database (`AppDatabase.kt`):** The implementation of the local SQLite database. It defines the tables (entities) and provides instances of the DAOs. The schema is built on a **many-to-many** relationship between Messages and Folders, facilitated by the `MessageFolderJunction` table.
+*   **Room Database (`AppDatabase.kt`):** The implementation of the local SQLite database. It defines the tables (entities) and provides instances of the DAOs. The schema is built on a **many-to-many** relationship between Messages and Folders, facilitated by the `MessageFolderJunction` table. When the sync layer encounters a remote label that does not yet exist locally it **creates a placeholder `FolderEntity`** (`isPlaceholder = true`). These placeholders are hidden from the navigation drawer until a subsequent folder-list delta-sync replaces them with the full server representation.
 *   **Mail API Services:** A set of interfaces (`MailApiService.kt`) and their implementations (`GmailApiHelper.kt`, `GraphApiHelper.kt`) that abstract the details of communicating with different email provider APIs (Google, Microsoft).
 *   **Network (Ktor):** The HTTP client used to make network requests to the email provider APIs.
 

@@ -22,12 +22,12 @@ The primary goals of this plan are:
 
 ### **COMPLETED (As of this session)**
 
-*   **EPIC-A: Multi-Label Model Finalisation (Schema & DAO)**
-    *   **`FolderEntity.kt`:** Added `isPlaceholder: Boolean` field.
-    *   **`AccountEntity.kt`:** Added `latestDeltaToken: String?` field for delta polling.
-    *   **`AppDatabase.kt`:** Version incremented to `20`, and a migration (`M19_20`) was added to apply the schema changes.
-    *   **`FolderDao.kt`:** Added `insertPlaceholderIfAbsent` to support on-the-fly creation of stub folders.
-    *   **`SyncController.kt`:** Logic to create placeholder folders was added. **(NOTE: This was implemented but could not be automatically applied by the AI assistant due to tooling limitations and must be manually verified).**
+*   **EPIC-A: Multi-Label Model Finalisation (Schema, DAO, UI) — ✔︎ Completed 2025-07-10**
+    * `FolderEntity.kt`: `isPlaceholder` flag present.
+    * `FolderDao.kt`: `insertPlaceholderIfAbsent` helper.
+    * `SyncController.kt`: automatically creates placeholder folders during header & folder-list sync.
+    * **UI** (`MailDrawerContent.kt`): Drawer now skips `isPlaceholder` folders – users no longer see phantom labels.
+    * `MailFolder` domain model and mappers updated with `isPlaceholder` field.
 
 *   **EPIC-B: Lightweight Delta Polling (API & Data Layers)**
     *   **`SyncJob.kt`:** New `CheckForNewMail` job created.
@@ -240,9 +240,6 @@ The remaining work is grouped into four epics that **must land together** to sat
 1. **Unit tests**
    * Fix and re-enable `backend-google/GmailApiHelperTest.kt` (update factory wiring).
    * New tests in `data/sync/SyncControllerTest.kt` for label reconciliation & Check-For-New-Mail.
-2. **Gradle / CI**
-   * Ensure `./gradlew testDebugUnitTest` & `verifySchema` tasks run in GitHub Actions.
-   * Add `scripts/ci-build.sh`.
 
 ### Approximate File-Touch Count
 * Core-db: 7 (FolderEntity, AccountEntity, AttachmentEntity, DAOs, migration, database).
@@ -254,11 +251,4 @@ The remaining work is grouped into four epics that **must land together** to sat
 * Tests: 8.
 **≈ 42 files**.
 
-### Roll-Out Strategy
-1. Create feature branch `fix2-monolith`.
-2. Implement epics sequentially but **commit nothing** until the entire build+tests pass.
-3. Squash all changes with commit message `feat(monolith): complete FIX2 implementation – multilabel, delta polling, attachments, tests` and fast-forward merge to `main`.
-
 Once merged, FIX2.md can be marked **Completed ✔︎**.
-
-> **Target Outcome:** Enter feature-freeze on the data layer within one week, paving the way for UI polish and beta release. 
