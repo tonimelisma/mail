@@ -2138,7 +2138,9 @@ class GmailApiHelper @Inject constructor(
             isStarred = gmailMessage.labelIds?.contains(GMAIL_LABEL_ID_STARRED) ?: false,
             hasAttachments = attachments.isNotEmpty(),
             attachments = attachments,
-            lastSuccessfulSyncTimestamp = System.currentTimeMillis() // Freshly fetched
+            lastSuccessfulSyncTimestamp = System.currentTimeMillis(), // Freshly fetched
+            remoteLabelIds = gmailMessage.labelIds
+            // isOutbox default false
         )
     }
 

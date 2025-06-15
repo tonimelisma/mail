@@ -34,8 +34,8 @@ import net.melisma.data.sync.SyncConstants
 import androidx.core.content.ContextCompat
 import android.content.Intent
 import net.melisma.core_data.repository.AccountRepository
-import net.melisma.core_data.repository.FolderRepository
 import net.melisma.core_data.datasource.MailApiServiceFactory
+import kotlinx.coroutines.flow.update
 
 @Singleton
 class SyncController @Inject constructor(
@@ -48,8 +48,7 @@ class SyncController @Inject constructor(
     private val appDatabase: net.melisma.core_db.AppDatabase,
     @net.melisma.core_data.di.Dispatcher(net.melisma.core_data.di.MailDispatchers.IO)
     private val ioDispatcher: kotlinx.coroutines.CoroutineDispatcher,
-    private val accountRepository: AccountRepository,
-    private val folderRepository: FolderRepository
+    private val accountRepository: AccountRepository
 ) {
 
     private val _status = MutableStateFlow(SyncControllerStatus())
@@ -170,7 +169,7 @@ class SyncController @Inject constructor(
     }
 
     private suspend fun processFetchHeaders(folderId: String, pageToken: String?, accountId: String) {
-        val service = mailApiServiceFactory.create(accountId) ?: run {
+        val service = mailApiServiceFactory.getService(accountId) ?: run {
             Timber.w("MailApiService not found for account $accountId")
             return
         }
@@ -210,10 +209,20 @@ class SyncController @Inject constructor(
         appDatabase.withTransaction {
             appDatabase.messageDao().insertOrUpdateMessages(messageEntities)
             val junctionDao = appDatabase.messageFolderJunctionDao()
-            val junctions = messageEntities.map { me ->
-                net.melisma.core_db.entity.MessageFolderJunction(me.id, folderId)
+            val folderMapByRemote = folderDao.getFoldersForAccount(accountId)
+                .first()
+                .associateBy { it.remoteId }
+
+            val allJunctions = mutableListOf<net.melisma.core_db.entity.MessageFolderJunction>()
+            paged.messages.forEach { msg ->
+                val labels = msg.remoteLabelIds ?: listOf(folderId)
+                labels.forEach { remoteLabelId ->
+                    val localFolder = folderMapByRemote[remoteLabelId]
+                    val localId = localFolder?.id ?: folderId // fallback to context folder
+                    allJunctions.add(net.melisma.core_db.entity.MessageFolderJunction(msg.id, localId))
+                }
             }
-            junctionDao.insertAll(junctions)
+            junctionDao.insertAll(allJunctions.distinct())
 
             // Persist state
             appDatabase.folderSyncStateDao().upsert(
@@ -262,7 +271,7 @@ class SyncController @Inject constructor(
 
             folderDao.updateSyncStatus(job.folderId, EntitySyncStatus.PENDING_DOWNLOAD)
 
-            val service = mailApiServiceFactory.create(job.accountId) ?: run {
+            val service = mailApiServiceFactory.getService(job.accountId) ?: run {
                 Timber.w("MailApiService not found for account ${job.accountId}")
                 return@withContext
             }
@@ -356,7 +365,7 @@ class SyncController @Inject constructor(
                 maybeStartInitialSyncService()
             }
 
-            val service = mailApiServiceFactory.create(job.accountId) ?: run {
+            val service = mailApiServiceFactory.getService(job.accountId) ?: run {
                 Timber.w("MailApiService not found for account ${job.accountId}")
                 return@withContext
             }
@@ -419,7 +428,7 @@ class SyncController @Inject constructor(
 
             messageDao.setSyncStatus(job.messageId, EntitySyncStatus.PENDING_DOWNLOAD)
 
-            val service = mailApiServiceSelector.getServiceByAccountId(job.accountId) ?: run {
+            val service = mailApiServiceFactory.getService(job.accountId) ?: run {
                 Timber.w("MailApiService not found for account ${job.accountId}")
                 return@withContext
             }
@@ -474,12 +483,12 @@ class SyncController @Inject constructor(
                 return@withContext
             }
 
-            val service = mailApiServiceSelector.getServiceByAccountId(job.accountId) ?: run {
+            val service = mailApiServiceFactory.getService(job.accountId) ?: run {
                 Timber.w("MailApiService not found for account ${job.accountId}")
                 return@withContext
             }
 
-            val result = service.downloadAttachment(job.messageId, job.attachmentId)
+            val result = service.downloadAttachment(job.messageId, job.attachmentId.toString())
 
             if (result.isFailure) {
                 val ex = result.exceptionOrNull()
@@ -517,7 +526,7 @@ class SyncController @Inject constructor(
                 return@withContext
             }
 
-            val service = mailApiServiceSelector.getServiceByAccountId(job.accountId) ?: run {
+            val service = mailApiServiceFactory.getService(job.accountId) ?: run {
                 Timber.w("MailApiService not found for account ${job.accountId}")
                 return@withContext
             }
@@ -702,7 +711,7 @@ class SyncController @Inject constructor(
                         try { java.io.File(path).delete() } catch (e: Exception) { Timber.w(e, "Failed to delete attachment file $path") }
                     }
                     // Reset DB flags so it can be redownloaded on demand
-                    attachmentDao.resetDownloadStatus(att.attachmentId, EntitySyncStatus.PENDING_DOWNLOAD)
+                    attachmentDao.resetDownloadStatus(att.id, EntitySyncStatus.PENDING_DOWNLOAD)
                     bytesFreed += att.size
                 }
 
@@ -795,7 +804,7 @@ class SyncController @Inject constructor(
                 return@withContext
             }
 
-            val service = mailApiServiceSelector.getServiceByAccountId(job.accountId) ?: run {
+            val service = mailApiServiceFactory.getService(job.accountId) ?: run {
                 Timber.w("MailApiService not found for account ${job.accountId}")
                 return@withContext
             }

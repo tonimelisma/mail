@@ -10,6 +10,7 @@ import java.time.OffsetDateTime
  * @property id The unique identifier of the message provided by the backend service.
  * @property accountId The unique identifier of the account associated with the message.
  * @property folderId The unique identifier of the folder associated with the message.
+ * @property remoteLabelIds Optional list of remote folder/label IDs this message currently belongs to on the provider.
  * @property receivedDateTime The date and time the message was received, typically in ISO 8601 format string.
  * @property sentDateTime The date and time the message was sent, typically in ISO 8601 format string.
  * @property subject The subject line of the message. Can be null or empty.
@@ -34,6 +35,13 @@ data class Message(
     val id: String,
     val accountId: String,
     val folderId: String,
+    /**
+     * Optional list of remote folder/label IDs this message currently belongs to on the provider.
+     * For Gmail this aligns with "labelIds"; for Outlook it will usually be a single folderId.
+     * Null when the provider/mapper has not supplied the data.  The value is used exclusively
+     * by the data layer (SyncController) to reconcile the MessageFolderJunction table.
+     */
+    val remoteLabelIds: List<String>? = null,
     val threadId: String?,
     val receivedDateTime: String,
     val sentDateTime: String?,
@@ -83,7 +91,8 @@ fun Message.Companion.fromApi(
     attachments: List<Attachment> = emptyList(),
     remoteId: String? = null, // Added
     lastSuccessfulSyncTimestamp: Long? = null, // Added
-    isOutbox: Boolean = false // Added for outbox functionality
+    isOutbox: Boolean = false, // Added for outbox functionality
+    remoteLabelIds: List<String>? = null // NEW – full remote label list
 ): Message {
     val derivedTimestamp = try {
         OffsetDateTime.parse(receivedDateTime).toInstant().toEpochMilli()
@@ -94,6 +103,7 @@ fun Message.Companion.fromApi(
         id = id,
         accountId = accountId,
         folderId = folderId,
+        remoteLabelIds = remoteLabelIds,
         threadId = threadId,
         receivedDateTime = receivedDateTime,
         sentDateTime = sentDateTime,
