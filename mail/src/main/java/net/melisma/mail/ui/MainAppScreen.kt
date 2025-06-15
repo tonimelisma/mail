@@ -46,6 +46,7 @@ import timber.log.Timber
 import androidx.hilt.navigation.compose.hiltViewModel
 import net.melisma.mail.ui.sync.SyncStatusBar
 import net.melisma.mail.ui.sync.SyncStatusViewModel
+import net.melisma.mail.ui.sync.SyncErrorSnackbar
 
 // Helper functions that were originally in MainActivity or might be needed
 // (Consider moving to a Util file if they become more general)
@@ -134,7 +135,10 @@ fun MainAppScreen(
             bottomBar = {
                 val syncStatusViewModel: SyncStatusViewModel = hiltViewModel()
                 val syncStatus by syncStatusViewModel.status.collectAsStateWithLifecycle()
-                SyncStatusBar(status = syncStatus)
+                androidx.compose.foundation.layout.Column {
+                    SyncStatusBar(status = syncStatus)
+                    SyncErrorSnackbar(status = syncStatus)
+                }
             }
         ) { innerPadding ->
             Box(modifier = Modifier.padding(innerPadding)) {
