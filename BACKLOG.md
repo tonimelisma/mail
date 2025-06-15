@@ -1,114 +1,74 @@
-# **Melisma Mail \- Backlog (Synthesized)**
+# **Melisma Mail - Backlog (Updated after Code Review)**
+
+**Legend:** 🟢 (Completed) | 🟡 (Partial) | 🔴 (Not Started)
 
 ### **Prioritized Requirements Backlog (Epics & Status)**
 
-**EPIC 0: ARCHITECTURAL REFACTOR & BUILD FIX** (Highest Priority \- BLOCKER)
+**EPIC 0: ARCHITECTURAL REFACTOR & BUILD FIX** (Highest Priority - BLOCKER)
 
-* **Requirement 0.0 (Resolve KSP Build Blocker):** As a developer, I need to resolve the persistent `[MissingType]` KSP error in the `:core-db` module to make the application buildable.
-  * **Status: Completed (2025-07-08)** – Migration stub added, auto-migration disabled; project builds successfully.
-* **Requirement 0.1 (Implement SyncController):** As a developer, I want to replace the SyncEngine and distributed WorkManager architecture with the centralized SyncController model.  
-  * **Status: Completed (2025-06-17)**  
-* **Requirement 0.2 (Database Migration to Many-to-Many):** As a developer, I want to migrate the database schema to support a many-to-many relationship between messages and folders.  
-  * **Status: Completed (2025-07-10)** – Placeholder-folder creation finished & UI now hides them; delta tokens in place.  
-* **Requirement 0.3 (Remove RemoteMediator):** As a developer, I want to remove the MessageRemoteMediator and rely on the SyncController's background sync to populate the database for paging.  
-  * **Status: Completed (2025-06-18)**  
-* **Requirement 0.4 (Implement Sync State Observation):** As a developer, I want the SyncController to expose a StateFlow<SyncStatus> that can be observed by the UI layer to provide real-time, global feedback on sync progress, network status, and error states.  
-  * **Status: Completed (2025-06-27)**  
-* **Requirement 0.5 (Implement Core Sync Logic):** As a developer, I want to ensure that the SyncController's implementation strictly follows the defined 4-level priority algorithm, uses database transactions for data integrity, and persists its background sync state in a FolderSyncStateEntity.  
-  * **Status: Completed (2025-06-25)**
-* **Requirement 0.6 (Integrate Initial Sync Duration):** As a developer, I want to integrate the existing user preference for "initial sync duration" into the SyncController's initial sync mode.
-  * **Status: Completed (2025-06-30)**
-* **Requirement 0.7 (Isolate Attachments for Backup Exclusion):** As a developer, I want all downloaded attachments to be saved to a dedicated attachments/ directory inside the no_backup area which the platform never backs up.
-  * **Status: Completed (2025-06-26)**
-* **Requirement 0.8 (Polling Lifecycle – Foreground & Background):** Implement lightweight delta polling instead of full folder sync.
-  * **Status: Completed** - All data-layer and sync controller components are complete.
+*   **Requirement 0.0 (Resolve KSP Build Blocker):** 🟢 **Completed** - The application builds successfully. Auto-migrations were disabled in favor of destructive migrations to resolve KSP `MissingType` errors during heavy development.
+*   **Requirement 0.1 (Implement SyncController):** 🟢 **Completed** - The `SyncController` is fully implemented as the centralized component for all data synchronization, replacing the old `SyncEngine`.
+*   **Requirement 0.2 (Database Migration to Many-to-Many):** 🟢 **Completed** - The database schema now correctly uses a `MessageFolderJunction` table for a many-to-many relationship. Placeholder folder creation is also implemented.
+*   **Requirement 0.3 (Remove RemoteMediator):** 🟢 **Completed** - The Paging 3 `RemoteMediator` has been removed. Paging is now driven by the local database, which is populated by the `SyncController`'s background sync.
+    *   ***Tech Debt:*** Stale comments referencing the old `RemoteMediator` architecture remain in `FolderEntity.kt` and `MainViewModel.kt`.
+*   **Requirement 0.4 (Implement Sync State Observation):** 🟢 **Completed** - The `SyncController` exposes a `StateFlow<SyncControllerStatus>` which is observed by the UI to show real-time sync status, network state, and errors.
+*   **Requirement 0.5 (Implement Core Sync Logic):** 🟢 **Completed** - The `SyncController` correctly implements the priority queue, uses Room transactions for data integrity, and persists sync state in `FolderSyncStateEntity`.
+*   **Requirement 0.6 (Integrate Initial Sync Duration):** 🟢 **Completed** - The user preference for "initial sync duration" is integrated and used by the `SyncController`.
+*   **Requirement 0.7 (Isolate Attachments for Backup Exclusion):** 🟢 **Completed** - Downloaded attachments are correctly saved to the `no_backup` directory to exclude them from Android's Auto Backup.
+*   **Requirement 0.8 (Polling Lifecycle – Foreground & Background):** 🟢 **Completed** - The app correctly switches between aggressive (5s) foreground delta polling and battery-saving (15min) background polling.
 
 **EPIC 1: Core Mail Viewing** (Highest Priority)
 
-* **Requirement 1.1 (View Message List):** As a user, I want to see a list of emails within a selected folder, with data sourced from local cache.  
-  * **Status: Implemented**  
-  * *Note:* Paging is now handled by the SyncController's background sync, making RemoteMediator obsolete (see Req 0.3).  
-* **Requirement 1.2 (View Single Message):** As a user, I want to tap on an email to view its full content, available offline if cached, and auto-refreshed if online.  
-  * **Status: Implemented**  
-* **Requirement 1.3 (Folder Navigation):** As a user, I want to navigate between different mail folders.  
-  * **Status: Implemented**  
-* **Requirement 1.4 (Unified Inbox \- UI/UX):** As a user, I want an option to view emails from all my accounts in a single combined inbox.  
-  * **Status: Implemented (2025-07-03)**
-* **Requirement 1.5 (Conversation View \- UI/UX):** As a user, I want emails belonging to the same thread to be grouped.  
-  * **Status: Implemented**
+*   **Requirement 1.1 (View Message List):** 🟢 **Completed** - The UI displays a list of emails from the local database using Paging 3 for efficient loading.
+*   **Requirement 1.2 (View Single Message):** 🟢 **Completed** - Tapping an email opens a detail view. The app correctly triggers a download for the message body if it's not cached locally.
+*   **Requirement 1.3 (Folder Navigation):** 🟢 **Completed** - A navigation drawer allows users to switch between accounts and folders.
+*   **Requirement 1.4 (Unified Inbox - UI/UX):** 🟢 **Completed** - A unified inbox is implemented, fetching messages from all folders with the `INBOX` well-known type.
+*   **Requirement 1.5 (Conversation View - UI/UX):** 🟢 **Completed** - The app groups emails by `threadId` to provide a conversation view.
 
 **EPIC 2: Basic Mail Actions (Offline Capable)** (High Priority)
 
-* **Requirement 2.1 (Mark Read/Unread):** As a user, I want to mark messages as read or unread, with changes queued for sync.  
-  * **Status: Implemented**  
-* **Requirement 2.2 (Delete Message):** As a user, I want to delete one or more messages, with changes queued for sync.  
-  * **Status: Implemented**  
-* **Requirement 2.3 (Archive Message):** As a user, I want to archive one or more messages, with changes queued for sync.  
-  * **Status: Implemented**  
-* **Requirement 2.4 (Customizable Swipe Actions \- UI/UX):** As a user, I want to configure swipe actions.  
-  * **Status: Pending**
+*   **Requirement 2.1 (Mark Read/Unread):** 🟢 **Completed** - Messages and threads can be marked as read/unread. Changes are applied locally first and then queued for synchronization.
+*   **Requirement 2.2 (Delete Message):** 🟢 **Completed** - Messages and threads can be deleted. The action is queued for sync.
+*   **Requirement 2.3 (Archive Message):** 🟢 **Completed** - Archiving is implemented as a "move" operation.
+*   **Requirement 2.4 (Customizable Swipe Actions - UI/UX):** 🔴 **Not Started** - There is no implementation for swipe actions.
 
 **EPIC 3: Composing & Sending (Offline Capable)** (Medium-High Priority)
 
-* **Requirement 3.1 (Compose New Email):** As a user, I want to compose a new email, with drafts saved locally if offline.  
-  * **Status: Implemented**  
-* **Requirement 3.2 (Send Email):** As a user, I want to send the composed email, adding it to an Outbox to be synced.  
-  * **Status: Implemented** (Robust attachment handling for both Gmail and Microsoft Graph is complete).  
-* **Requirement 3.3 (Reply/Reply-All/Forward):** As a user, I want to reply, reply-all, or forward a message.  
-  * **Status: Implemented**  
-* **Requirement 3.4 (Signature Management):** As a user, I want to define and manage email signatures.  
-  * **Status: Pending**
+*   **Requirement 3.1 (Compose New Email):** 🟡 **Partial** - The backend logic to create and save drafts is implemented in the repository, but there is no UI to compose a new email. The FAB is a placeholder.
+*   **Requirement 3.2 (Send Email):** 🟢 **Completed** - The backend logic for sending emails is robust. It correctly adds messages to an Outbox (conceptually, by setting a `PENDING_UPLOAD` state) and queues them for sync.
+*   **Requirement 3.3 (Reply/Reply-All/Forward):** 🔴 **Not Started** - This is blocked by the lack of a compose screen. UI entry points are missing.
+*   **Requirement 3.4 (Signature Management):** 🔴 **Not Started** - There is no implementation for email signatures.
 
 **EPIC 4: Attachments (Offline Access)** (Higher Priority)
 
-* **Requirement 4.1 (View Attachments):** As a user, I want to see a list of attachments within a received email.  
-  * **Status: Completed (2025-07-08)** - DAO, mappers, and SyncController pipeline are complete. UI can now observe attachment data.  
-* **Requirement 4.2 (Preview Attachments):** As a user, I want to preview common attachment types using downloaded data.  
-  * **Status: Partially Implemented** (Offline access is implemented, but requires a more robust in-app previewer).  
-* **Requirement 4.3 (Save Attachments):** As a user, I want to save attachments from an email.  
-  * **Status: Implemented**  
-* **Requirement 4.4 (Share Attachments):** As a user, I want to share attachments directly from an email.  
-  * **Status: Pending**  
-* **Requirement 4.5 (Attach Files):** As a user, I want to attach files when composing an email.  
-  * **Status: Implemented** (Robust sending support for attachments is complete).
+*   **Requirement 4.1 (View Attachments):** 🟢 **Completed** - The message detail screen displays a list of attachments.
+*   **Requirement 4.2 (Preview Attachments):** 🟡 **Partial** - The app can download and open attachments using the Android system's file handlers, but it lacks a dedicated in-app previewer for a more integrated experience.
+*   **Requirement 4.3 (Save Attachments):** 🟢 **Completed** - Attachments are downloaded to the app's private storage, making them available offline.
+*   **Requirement 4.4 (Share Attachments):** 🔴 **Not Started** - There is no UI or intent handling for sharing attachments.
+*   **Requirement 4.5 (Attach Files):** 🟡 **Partial** - The data models support adding attachments to a draft, but the compose UI to select and add files is missing.
 
 **EPIC 5: Account & App Foundation (Offline-First Core)**
 
-* **Requirement 5.1 (Authentication):** As a user, I want to securely sign in and out of my email accounts.  
-  * **Status: Implemented**  
-* **Requirement 5.X (Transparent Sync Status):** Users should have clear visibility into sync status and errors.  
-  * **Status: Implemented**  
-  * **UI/UX Details:** A global status bar now displays syncing, offline, and error states (req 0.4).  
-* **Requirement 5.Y (Configurable Sync & Cache):** As a user, I want to control cache settings (size limits, initial sync duration, attachment download preferences).  
-  * **Status: Implemented**  
-* **Requirement 5.6 (Data Caching & Eviction):** The app must cache data locally with a multi-tiered eviction strategy.  
-  * **Status: Implemented**  
-* **Requirement 5.7 (Background Sync):** The app must periodically check for new emails and sync changes.  
-  * **Status: Completed**
-* **Requirement 5.Z (Delayed Send Notification):** Notify user if an email fails to send after retries.  
-  * **Status: Planned**
+*   **Requirement 5.1 (Authentication):** 🟢 **Completed** - Secure sign-in/out for Google and Microsoft accounts is implemented.
+*   **Requirement 5.X (Transparent Sync Status):** 🟢 **Completed** - A global status bar clearly indicates syncing, offline, and error states.
+*   **Requirement 5.Y (Configurable Sync & Cache):** 🟢 **Completed** - The settings screen allows configuration of cache size and initial sync duration.
+*   **Requirement 5.6 (Data Caching & Eviction):** 🟢 **Completed** - An eviction strategy is implemented in the `SyncController` to manage cache size based on usage and limits.
+*   **Requirement 5.7 (Background Sync):** 🟢 **Completed** - The app uses an efficient background polling mechanism to check for and sync new mail.
+*   **Requirement 5.Z (Delayed Send Notification):** 🔴 **Not Started** - There is no notification system for persistently failed send actions.
 
 **EPIC 6: Advanced Mail Organization & Search (Offline Capable)** (Medium Priority)
 
-* **Requirement 6.1 (Move Message):** As a user, I want to move messages between folders.  
-  * **Status: Implemented**  
-* **Requirement 6.2 (Advanced Search Filters):** As a user, I want to search emails using advanced filters (local FTS + online).  
-  * **Status: Partially Implemented (2025-07-03)** – Online search pipeline delivered via `SyncJob.SearchOnline`; UI filter options & complex query parser still pending. Filter chips for Unread/Starred added to Unified Inbox, laying groundwork.
-* **Requirement 6.3 (Download/View Attachments):** Users should be able to download and open attachments.
-  * **Status: Completed**
-* **Requirement 6.4 (Compose with Attachments):** Users should be able to add attachments when composing an email.
-  * **Status: Implemented**
+*   **Requirement 6.1 (Move Message):** 🟢 **Completed** - Moving messages between folders is implemented.
+*   **Requirement 6.2 (Advanced Search Filters):** 🟡 **Partial** - The backend pipeline for online search exists, but the UI for advanced filtering (beyond unread/starred) and complex queries is not implemented.
+*   **Requirement 6.3 (Download/View Attachments):** 🟢 **Completed** - Functionality is in place to download and view attachments.
+*   **Requirement 6.4 (Compose with Attachments):** 🟡 **Partial** - Status corrected. Backend models support this, but the UI is missing.
 
 **EPIC 7: Settings & Configuration** (Medium Priority)
 
-* **Requirement 7.1 (Basic Settings):** As a user, I want access to basic settings (account management, theme).  
-  * **Status: Implemented**  
-* **Requirement 7.2 (Sync and Cache Configuration):** As a user, I want to configure initial sync duration and local cache size limits.  
-  * **Status: Implemented**
+*   **Requirement 7.1 (Basic Settings):** 🟢 **Completed** - A settings screen exists for managing accounts and app preferences.
+*   **Requirement 7.2 (Sync and Cache Configuration):** 🟢 **Completed** - Users can configure sync and cache settings.
 
 **EPIC 8: Integrations** (Lower Priority)
 
-* **Requirement 8.1 (Calendar Integration):** As a user, I want to create calendar events from email content.  
-  * **Status: Pending**  
-* **Requirement 8.2 (Contact Integration):** As a user, I want to save email senders as device contacts.  
-  * **Status: Pending**
+*   **Requirement 8.1 (Calendar Integration):** 🔴 **Not Started** - The `calendar` module is a placeholder with no functional code.
+*   **Requirement 8.2 (Contact Integration):** 🔴 **Not Started** - There is no implementation for contact integration.
