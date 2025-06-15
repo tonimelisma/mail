@@ -18,7 +18,8 @@ import net.melisma.core_data.model.EntitySyncStatus
         )
     ],
     indices = [
-        Index(value = ["message_id"], unique = true)
+        Index(value = ["message_id"], unique = true),
+        Index(value = ["syncStatus"])
     ]
 )
 data class MessageBodyEntity(
