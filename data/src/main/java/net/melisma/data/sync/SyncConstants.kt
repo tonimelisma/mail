@@ -1,4 +1,4 @@
-package net.melisma.data.sync.workers
+package net.melisma.data.sync
 
 /**
  * Legacy constants previously defined in the ActionUploadWorker.  The actual upload logic has
@@ -17,7 +17,7 @@ object SyncConstants {
     const val KEY_OLD_FOLDER_ID = "oldFolderId"
     const val KEY_NEW_FOLDER_ID = "newFolderId"
 
-    const val ACTION_MARK_AS_READ = "mark_as_read"
+    const val ACTION_MARK_AS_READ = "MARK_AS_READ"
     const val ACTION_MARK_AS_UNREAD = "MARK_AS_UNREAD"
     const val ACTION_STAR_MESSAGE = "STAR_MESSAGE"
     const val ACTION_DELETE_MESSAGE = "DELETE_MESSAGE"

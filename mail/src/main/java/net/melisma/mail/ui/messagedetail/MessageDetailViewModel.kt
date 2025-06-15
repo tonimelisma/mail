@@ -275,12 +275,13 @@ class MessageDetailViewModel @Inject constructor(
             currentState.copy(attachmentDisplayStates = newStates, transientError = null)
         }
 
+        val localId = attachment.id.toLongOrNull() ?: return
         Timber.d("ViewModelDBG: Submitting DownloadAttachment job for attachment ${attachment.id} in message $msgId.")
         syncController.submit(
             SyncJob.DownloadAttachment(
                 accountId = accId,
                 messageId = msgId,
-                attachmentId = attachment.id
+                attachmentId = localId
             )
         )
     }

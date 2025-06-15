@@ -1019,25 +1019,6 @@ class MainViewModel @Inject constructor(
         }
     }
 
-    fun onToastMessageShown() {
-        val selectedAccountId = _uiState.value.selectedFolderAccountId
-        val selectedFolderId = _uiState.value.selectedFolder?.id
-
-        if (selectedAccountId == account.id && selectedFolderId == folder.id) {
-            return
-        }
-
-        Timber.d("onFolderSelected: New selection: Account=${account.emailAddress}, Folder=${folder.displayName}. Current view mode: ${_uiState.value.currentViewMode}")
-
-        _uiState.update {
-            it.copy(
-                selectedFolderAccountId = account.id,
-                selectedFolder = folder
-            )
-        }
-        updatePagers()
-    }
-
     fun onAddAccountClicked(activity: Activity) {
         // ... existing code ...
     }

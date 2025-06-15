@@ -213,16 +213,18 @@ class SyncController @Inject constructor(
                 .first()
                 .associateBy { it.remoteId }
 
-            val allJunctions = mutableListOf<net.melisma.core_db.entity.MessageFolderJunction>()
+            // Reconcile label links for every message so that the junction table mirrors server state.
             paged.messages.forEach { msg ->
-                val labels = msg.remoteLabelIds ?: listOf(folderId)
-                labels.forEach { remoteLabelId ->
-                    val localFolder = folderMapByRemote[remoteLabelId]
-                    val localId = localFolder?.id ?: folderId // fallback to context folder
-                    allJunctions.add(net.melisma.core_db.entity.MessageFolderJunction(msg.id, localId))
-                }
+                val remoteLabels = msg.remoteLabelIds ?: listOf(folderId)
+                val localFolderIds = remoteLabels.mapNotNull { remoteId ->
+                    folderMapByRemote[remoteId]?.id ?: if (remoteId == folderId) folderId else null
+                }.distinct()
+
+                // If we somehow cannot resolve any folder locally, still ensure message remains linked to context folder.
+                val effectiveFolderIds = if (localFolderIds.isEmpty()) listOf(folderId) else localFolderIds
+
+                junctionDao.replaceFoldersForMessage(msg.id, effectiveFolderIds)
             }
-            junctionDao.insertAll(allJunctions.distinct())
 
             // Persist state
             appDatabase.folderSyncStateDao().upsert(

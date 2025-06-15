@@ -52,4 +52,11 @@ interface FolderDao {
 
     @Query("DELETE FROM folders WHERE accountId = :accountId AND remoteId IN (:remoteIds)")
     suspend fun deleteFoldersByRemoteIds(accountId: String, remoteIds: List<String>): Int
+
+    /**
+     * Deletes all folders that belong to any of the given account IDs.  Used when an account is
+     * removed from the device so that dangling folder rows don't remain.
+     */
+    @Query("DELETE FROM folders WHERE accountId IN (:accountIds)")
+    suspend fun deleteAllFoldersForAccounts(accountIds: List<String>)
 } 

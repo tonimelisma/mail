@@ -15,6 +15,8 @@ import net.melisma.core_db.dao.FolderDao
 import net.melisma.core_db.dao.MessageBodyDao
 import net.melisma.core_db.dao.MessageDao
 import net.melisma.core_db.dao.PendingActionDao
+import net.melisma.core_db.dao.MessageFolderJunctionDao
+import net.melisma.core_db.dao.FolderSyncStateDao
 import net.melisma.core_db.entity.AccountEntity
 import net.melisma.core_db.entity.AttachmentEntity
 import net.melisma.core_db.entity.FolderEntity

@@ -26,7 +26,10 @@ sealed class SyncJob(open val accountId: String, val priority: Int) :
 
     // Level 2: Fulfilling User Intent - Uploading user-generated changes.
     data class UploadAction(
-        override val accountId: String
+        override val accountId: String,
+        val actionType: String? = null,
+        val entityId: String? = null,
+        val payload: Map<String, String?> = emptyMap()
     ) : SyncJob(accountId, 75)
 
     // Level 4: Background Freshness & Backfill - Opportunistic, battery-conscious syncing.
@@ -54,7 +57,7 @@ sealed class SyncJob(open val accountId: String, val priority: Int) :
 
     // Attachment download – treat with Level 1 urgency when user taps attachment.
     data class DownloadAttachment(
-        val attachmentId: String,
+        val attachmentId: Long,
         val messageId: String,
         override val accountId: String
     ) : SyncJob(accountId, 90)

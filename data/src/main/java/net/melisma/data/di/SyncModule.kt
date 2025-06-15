@@ -17,10 +17,4 @@ import javax.inject.Singleton
 @Module
 @InstallIn(SingletonComponent::class)
 object SyncModule {
-
-    @Provides
-    @Singleton
-    fun provideSyncJobQueue(): PriorityBlockingQueue<SyncJob> {
-        return PriorityBlockingQueue<SyncJob>()
-    }
 } 

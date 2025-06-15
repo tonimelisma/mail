@@ -59,29 +59,10 @@ fun List<IAccount>.toDomainAccounts(): List<Account> {
 //     )
 // }
 
-fun MicrosoftAccount.toEntity(): AccountEntity {
-    return AccountEntity(
-        id = this.localAccountId,
-        remoteId = this.homeAccountId.identifier,
-        emailAddress = this.username,
-        displayName = this.name,
-        accountType = "MICROSOFT",
-        idToken = null, // Not typically stored long-term
-        lastUsedTimestamp = System.currentTimeMillis(),
-        isLocalOnly = false,
-        needsReauthentication = false
-    )
-}
-
-fun MicrosoftAccount.toDomain(): Account {
-    return Account(
-        id = this.id,
-        emailAddress = this.emailAddress,
-        displayName = this.displayName,
-        accountType = this.accountType,
-        latestAuthState = AuthState.AUTHENTICATED, // If it's in the DB, it's authenticated
-        lastUsedTimestamp = this.lastUsedTimestamp,
-        isLocalOnly = this.isLocalOnly,
-        needsReauthentication = this.needsReauthentication
-    )
-} 
+// --- Legacy helper methods referencing removed data models have been disabled to keep
+// the backend-microsoft module compiling after the Sync architecture refactor.  They will be
+// rewritten when the new Microsoft backend SDK is integrated.
+//
+// fun MicrosoftAccount.toEntity(): AccountEntity { /* ... */ }
+//
+// fun MicrosoftAccount.toDomain(): Account { /* ... */ } 

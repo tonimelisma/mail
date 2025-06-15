@@ -80,15 +80,14 @@ class DefaultFolderRepository @Inject constructor(
                                 }
                                 .map { state -> accountId to state }
                         }
-                        combine(accountFolderFlows) { statesArray ->
-                            @Suppress("UNCHECKED_CAST")
-                            (statesArray as Array<*>).filterIsInstance<Pair<String, FolderFetchState>>().toMap()
+                        combine(accountFolderFlows) { arrayOfPairs ->
+                            arrayOfPairs.toList().filterIsInstance<Pair<String, FolderFetchState>>().toMap()
                         }
                     }
                 }
                 .distinctUntilChanged()
                 .onEach { latestDbStates ->
-                    _folderStates.value = latestDbStates
+                    _folderStates.value = latestDbStates as Map<String, FolderFetchState>
                 }
                 .catch { e -> Timber.e(e, "Error in observeDatabaseChanges") }
                 .launchIn(this)
