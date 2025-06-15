@@ -31,7 +31,7 @@
 * **Requirement 1.3 (Folder Navigation):** As a user, I want to navigate between different mail folders.  
   * **Status: Implemented**  
 * **Requirement 1.4 (Unified Inbox \- UI/UX):** As a user, I want an option to view emails from all my accounts in a single combined inbox.  
-  * **Status: Planned**  
+  * **Status: Implemented (2025-07-03)**
 * **Requirement 1.5 (Conversation View \- UI/UX):** As a user, I want emails belonging to the same thread to be grouped.  
   * **Status: Implemented**
 
@@ -83,8 +83,6 @@
   * **Status: Implemented**  
 * **Requirement 5.7 (Background Sync):** The app must periodically check for new emails and sync changes.  
   * **Status: Blocked by EPIC 0** (Functionality is being migrated from WorkManager to the SyncController).  
-* **Requirement 5.8 (Push Notifications):** As a user, I want to receive notifications for new emails.  
-  * **Status: Pending**  
 * **Requirement 5.Z (Delayed Send Notification):** Notify user if an email fails to send after retries.  
   * **Status: Planned**
 
@@ -93,7 +91,7 @@
 * **Requirement 6.1 (Move Message):** As a user, I want to move messages between folders.  
   * **Status: Implemented**  
 * **Requirement 6.2 (Advanced Search Filters):** As a user, I want to search emails using advanced filters (local FTS + online).  
-  * **Status: Partially Implemented (2025-07-01)** – Online search pipeline delivered via `SyncJob.SearchOnline`; UI filter options & complex query parser still pending.  
+  * **Status: Partially Implemented (2025-07-03)** – Online search pipeline delivered via `SyncJob.SearchOnline`; UI filter options & complex query parser still pending. Filter chips for Unread/Starred added to Unified Inbox, laying groundwork.
 * **Requirement 6.3 (Junk/Spam Management):** As a user, I want to mark emails as junk/spam.  
   * **Status: Pending**  
 * **Requirement 6.4 (Folder Management):** As a user, I want to create, rename, and delete custom mail folders.  

@@ -19,6 +19,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.Inbox
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Badge
@@ -56,6 +57,7 @@ import java.util.Locale
 fun MailDrawerContent(
     state: MainScreenState,
     onFolderSelected: (folder: MailFolder, account: Account) -> Unit,
+    onUnifiedInboxSelected: () -> Unit,
     onSettingsClicked: () -> Unit,
     onRefreshFolders: (accountId: String) -> Unit
 ) {
@@ -78,18 +80,36 @@ fun MailDrawerContent(
 
     ModalDrawerSheet {
         LazyColumn(modifier = Modifier.fillMaxSize()) { // Now resolved
-            // --- Drawer Header ---
+            // App title header remains first
             item {
-                Text( // Now resolved
+                Text(
                     stringResource(R.string.app_name),
                     style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.padding(
-                        horizontal = 16.dp,
-                        vertical = 20.dp
-                    ) // Now resolved
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 20.dp)
                 )
             }
-            item { HorizontalDivider() } // Now resolved
+            // Divider after app title
+            item { HorizontalDivider() }
+
+            // New: All Inboxes navigation item
+            item {
+                NavigationDrawerItem(
+                    label = {
+                        Text(stringResource(id = R.string.all_inboxes))
+                    },
+                    selected = state.selectedFolder?.id == "UNIFIED-INBOX",
+                    onClick = onUnifiedInboxSelected,
+                    icon = {
+                        Icon(
+                            imageVector = Icons.Filled.Inbox,
+                            contentDescription = stringResource(R.string.cd_all_inboxes)
+                        )
+                    },
+                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                )
+            }
+            // Divider between unified inbox and accounts section
+            item { HorizontalDivider() }
 
             // --- Accounts and Folders Section ---
             state.accounts.forEach { account ->

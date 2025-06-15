@@ -58,6 +58,23 @@ interface MessageDao {
     """)
     fun getMessagesPagingSource(accountId: String, folderId: String): PagingSource<Int, MessageEntity>
 
+    // NEW: PagingSource that returns messages belonging to any INBOX folder across all accounts.
+    @Query(
+        """
+        SELECT m.* FROM messages AS m
+        INNER JOIN message_folder_junction j ON m.id = j.messageId
+        INNER JOIN folders f ON j.folderId = f.id
+        WHERE f.wellKnownType = 'INBOX'
+        AND (:filterUnread = 0 OR m.isRead = 0)
+        AND (:filterStarred = 0 OR m.isStarred = 1)
+        ORDER BY m.timestamp DESC
+        """
+    )
+    fun getUnifiedInboxPagingSource(
+        filterUnread: Boolean,
+        filterStarred: Boolean
+    ): PagingSource<Int, MessageEntity>
+
     @Query("UPDATE messages SET isRead = :isRead WHERE id = :messageId")
     suspend fun updateReadStatus(messageId: String, isRead: Boolean)
 

@@ -105,6 +105,18 @@ class DefaultMessageRepository @Inject constructor(
         ).flow.map { pagingData -> pagingData.map { it.toDomainModel(folderId) } }
     }
 
+    override fun getUnifiedInboxPager(
+        pagingConfig: PagingConfig,
+        filterUnread: Boolean,
+        filterStarred: Boolean
+    ): Flow<PagingData<Message>> {
+        Timber.d("getUnifiedInboxPager called with unread=$filterUnread, starred=$filterStarred")
+        return Pager(
+            config = pagingConfig,
+            pagingSourceFactory = { messageDao.getUnifiedInboxPagingSource(filterUnread, filterStarred) }
+        ).flow.map { pagingData -> pagingData.map { it.toDomainModel() } }
+    }
+
     override suspend fun setTargetFolder(account: Account?, folder: MailFolder?) {
         // This method is now obsolete and intentionally left blank.
         // Sync is handled by other mechanisms like observeMessagesForFolder and refreshMessages.

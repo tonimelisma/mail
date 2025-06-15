@@ -102,6 +102,10 @@ fun MainAppScreen(
                     scope.launch { drawerState.close() }
                     mainViewModel.selectFolder(folder, account)
                 },
+                onUnifiedInboxSelected = {
+                    scope.launch { drawerState.close() }
+                    mainViewModel.selectUnifiedInbox()
+                },
                 onSettingsClicked = {
                     scope.launch { drawerState.close() }
                     navController.navigate(AppRoutes.SETTINGS)
@@ -247,7 +251,13 @@ fun MainAppScreen(
                                         )
                                         MessageListContent(
                                             messages = lazyMessageItems,
+                                            accounts = state.accounts,
                                             accountContext = selectedAccount,
+                                            isUnifiedInbox = state.selectedFolder?.id == MainViewModel.UNIFIED_INBOX_ID,
+                                            isUnreadFilterActive = state.isUnreadFilterActive,
+                                            isStarredFilterActive = state.isStarredFilterActive,
+                                            onUnreadFilterToggle = { mainViewModel.toggleUnreadFilter() },
+                                            onStarredFilterToggle = { mainViewModel.toggleStarredFilter() },
                                             onMessageClick = { messageId ->
                                                 Timber.d(
                                                     "MessageListContent clicked. Message ID: $messageId, Account ID: ${selectedAccount?.id}"

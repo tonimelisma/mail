@@ -31,6 +31,8 @@ import kotlinx.serialization.decodeFromString
 import net.melisma.core_data.model.MessageDraft
 import net.melisma.core_db.model.PendingActionStatus
 import net.melisma.data.sync.workers.ActionUploadWorker
+import androidx.core.content.ContextCompat
+import android.content.Intent
 
 @Singleton
 class SyncController @Inject constructor(
@@ -358,6 +360,12 @@ class SyncController @Inject constructor(
             val accountDao = appDatabase.accountDao()
             val folderDao = appDatabase.folderDao()
 
+            // Start foreground Initial Sync service if this appears to be the very first sync for the account.
+            val accountEntity = accountDao.getAccountByIdSuspend(job.accountId)
+            if (accountEntity?.lastFolderListSyncTimestamp == null) {
+                maybeStartInitialSyncService()
+            }
+
             val service = mailApiServiceSelector.getServiceByAccountId(job.accountId) ?: run {
                 Timber.w("MailApiService not found for account ${job.accountId}")
                 return@withContext
@@ -401,6 +409,8 @@ class SyncController @Inject constructor(
             }
 
             accountDao.updateFolderListSyncSuccess(job.accountId, System.currentTimeMillis())
+            // If the service is running and sync is now complete, attempt to stop it.
+            stopInitialSyncServiceIfIdle()
             accountDao.updateFolderListSyncToken(job.accountId, delta.nextSyncToken)
             Timber.d("Folder list sync completed for ${job.accountId}")
         }
@@ -827,5 +837,21 @@ class SyncController @Inject constructor(
             }
             Timber.d("Online search stored ${messages.size} results for query '${job.query}' (account ${job.accountId})")
         }
+    }
+
+    /** Starts the [net.melisma.mail.sync.InitialSyncForegroundService] if not already running. */
+    private fun maybeStartInitialSyncService() {
+        val intent = Intent().apply {
+            setClassName(appContext, "net.melisma.mail.sync.InitialSyncForegroundService")
+        }
+        ContextCompat.startForegroundService(appContext, intent)
+    }
+
+    /** Sends stop signal for the InitialSyncForegroundService if it is running. */
+    private fun stopInitialSyncServiceIfIdle() {
+        val intent = Intent().apply {
+            setClassName(appContext, "net.melisma.mail.sync.InitialSyncForegroundService")
+        }
+        appContext.stopService(intent)
     }
 } 

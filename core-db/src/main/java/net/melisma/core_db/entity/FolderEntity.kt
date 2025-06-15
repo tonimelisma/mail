@@ -19,7 +19,8 @@ import net.melisma.core_data.model.WellKnownFolderType
     ],
     indices = [
         Index(value = ["accountId"]),
-        Index(value = ["accountId", "remoteId"], unique = true)
+        Index(value = ["accountId", "remoteId"], unique = true),
+        Index(value = ["wellKnownType"])
     ]
 )
 data class FolderEntity(

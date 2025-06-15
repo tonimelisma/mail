@@ -69,7 +69,9 @@ data class MainScreenState(
     val currentBodyDownloadPreference: DownloadPreference = DownloadPreference.ALWAYS,
     val currentAttachmentDownloadPreference: DownloadPreference = DownloadPreference.ON_WIFI,
     val availableDownloadPreferences: List<DownloadPreference> = DownloadPreference.entries.toList(),
-    val toastMessage: String? = null
+    val toastMessage: String? = null,
+    val isUnreadFilterActive: Boolean = false,
+    val isStarredFilterActive: Boolean = false
 ) {
     val isAnyFolderLoading: Boolean
         get() = foldersByAccountId.values.any { it is FolderFetchState.Loading }
@@ -941,6 +943,74 @@ class MainViewModel @Inject constructor(
 
     fun refreshCurrentFolderView(activity: Activity?) {
         // Implementation of refreshCurrentFolderView method
+    }
+
+    /**
+     * Selects the synthetic "All Inboxes" view which aggregates INBOX mail from every account.
+     */
+    fun selectUnifiedInbox() {
+        Timber.i("selectUnifiedInbox() called – Switching to global inbox view")
+
+        // Create a synthetic MailFolder domain object for UI purposes.
+        val unifiedFolder = MailFolder(
+            id = UNIFIED_INBOX_ID,
+            displayName = "All Inboxes",
+            totalItemCount = 0,
+            unreadItemCount = 0,
+            type = WellKnownFolderType.INBOX
+        )
+
+        // Update UI state – no single account context for unified inbox
+        _uiState.update {
+            it.copy(
+                selectedFolderAccountId = null,
+                selectedFolder = unifiedFolder
+            )
+        }
+
+        // Cancel previous folder's pager job if any
+        currentFolderMessagesJob?.cancel()
+
+        // Supply a unified pager to the UI
+        _messagesPagerFlow.value = messageRepository.getUnifiedInboxPager(
+            pagingConfig = PagingConfig(
+                pageSize = 30,
+                prefetchDistance = 10,
+                enablePlaceholders = false,
+                initialLoadSize = 60
+            ),
+            filterUnread = _uiState.value.isUnreadFilterActive,
+            filterStarred = _uiState.value.isStarredFilterActive
+        ).cachedIn(viewModelScope)
+    }
+
+    /**
+     * Toggles the 'Unread' filter for the unified inbox view and refreshes the message list.
+     */
+    fun toggleUnreadFilter() {
+        val newFilterState = !_uiState.value.isUnreadFilterActive
+        _uiState.update { it.copy(isUnreadFilterActive = newFilterState) }
+        // Only refresh the pager if we are currently in the unified inbox view
+        if (_uiState.value.selectedFolder?.id == UNIFIED_INBOX_ID) {
+            selectUnifiedInbox()
+        }
+    }
+
+    /**
+     * Toggles the 'Starred' filter for the unified inbox view and refreshes the message list.
+     */
+    fun toggleStarredFilter() {
+        val newFilterState = !_uiState.value.isStarredFilterActive
+        _uiState.update { it.copy(isStarredFilterActive = newFilterState) }
+        // Only refresh the pager if we are currently in the unified inbox view
+        if (_uiState.value.selectedFolder?.id == UNIFIED_INBOX_ID) {
+            selectUnifiedInbox()
+        }
+    }
+
+    companion object {
+        /** Special pseudo-folder ID representing "All Inboxes" */
+        const val UNIFIED_INBOX_ID = "UNIFIED-INBOX"
     }
 }
 

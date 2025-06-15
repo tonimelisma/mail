@@ -50,6 +50,16 @@ interface MessageRepository {
     ): Flow<PagingData<Message>>
 
     /**
+     * Returns a PagingData flow that emits messages across *all* accounts whose folders are marked as INBOX.
+     * This powers the unified "All Inboxes" view.
+     */
+    fun getUnifiedInboxPager(
+        pagingConfig: PagingConfig,
+        filterUnread: Boolean,
+        filterStarred: Boolean
+    ): Flow<PagingData<Message>>
+
+    /**
      * Sets the target account and folder for which messages should be fetched and observed via [messageDataState].
      * Calling this typically cancels any previous fetch and triggers an initial fetch for the new target.
      * Passing null for either parameter should clear the target and reset [messageDataState] to [MessageDataState.Initial].

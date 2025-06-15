@@ -199,4 +199,8 @@
     <string name="action_retry">Retry</string>
     <string name="attachment_status_error_retry_short">Error. Tap to retry.</string>
 
+    <!-- Unified inbox strings -->
+    <string name="all_inboxes">All Inboxes</string>
+    <string name="cd_all_inboxes">All inboxes icon</string>
+
 </resources>

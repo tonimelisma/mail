@@ -10,7 +10,7 @@ android {
     compileSdk = 35 // Aligned with :app module
 
     defaultConfig {
-        minSdk = 26 // Aligned with :app module
+        minSdk = 30
     }
 
     compileOptions {

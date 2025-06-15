@@ -16,9 +16,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CloudOff
+import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.Email
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -48,7 +51,13 @@ fun MessageListContent(
     messages: LazyPagingItems<Message>, // Changed to LazyPagingItems
     // isLoading: Boolean,           // Derived from messages.loadState
     // error: String?,               // Derived from messages.loadState
+    accounts: List<Account>,
     accountContext: Account?,
+    isUnifiedInbox: Boolean,
+    isUnreadFilterActive: Boolean,
+    isStarredFilterActive: Boolean,
+    onUnreadFilterToggle: () -> Unit,
+    onStarredFilterToggle: () -> Unit,
     onMessageClick: (String) -> Unit,
     onRetry: () -> Unit, // For retry button on error
     onRefresh: () -> Unit // For pull to refresh
@@ -56,6 +65,16 @@ fun MessageListContent(
     Column(modifier = Modifier.fillMaxSize()) {
         if (accountContext != null) {
             AccountContextHeader(account = accountContext)
+            HorizontalDivider()
+        }
+
+        if (isUnifiedInbox) {
+            FilterChipRow(
+                isUnreadFilterActive = isUnreadFilterActive,
+                isStarredFilterActive = isStarredFilterActive,
+                onUnreadFilterToggle = onUnreadFilterToggle,
+                onStarredFilterToggle = onStarredFilterToggle
+            )
             HorizontalDivider()
         }
 
@@ -121,6 +140,7 @@ fun MessageListContent(
                     MessageListSuccessContentPaging(
                         messages = messages,
                         onMessageClick = onMessageClick,
+                        accounts = accounts,
                         isAppending = isAppending,
                         appendError = appendError?.error?.localizedMessage
                     )
@@ -135,6 +155,7 @@ fun MessageListContent(
 private fun MessageListSuccessContentPaging(
     messages: LazyPagingItems<Message>,
     onMessageClick: (String) -> Unit,
+    accounts: List<Account>,
     isAppending: Boolean,
     appendError: String?
 ) {
@@ -146,7 +167,12 @@ private fun MessageListSuccessContentPaging(
             val message = messages[index]
             // Timber.v("Displaying item at index $index, messageId: ${message?.id}") // Too verbose
             if (message != null) {
-                MessageListItem(message = message, onClick = { onMessageClick(message.id) })
+                val accountForMessage = accounts.find { it.id == message.accountId }
+                MessageListItem(
+                    message = message,
+                    onClick = { onMessageClick(message.id) },
+                    account = accountForMessage
+                )
                 HorizontalDivider(thickness = 0.5.dp)
             }
         }
@@ -257,6 +283,54 @@ internal fun AccountContextHeader(account: Account) {
             ), // Use formatted string
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+private fun FilterChipRow(
+    isUnreadFilterActive: Boolean,
+    isStarredFilterActive: Boolean,
+    onUnreadFilterToggle: () -> Unit,
+    onStarredFilterToggle: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        FilterChip(
+            selected = isUnreadFilterActive,
+            onClick = onUnreadFilterToggle,
+            label = { Text("Unread") },
+            leadingIcon = if (isUnreadFilterActive) {
+                {
+                    Icon(
+                        imageVector = Icons.Filled.Done,
+                        contentDescription = "Unread filter active",
+                        modifier = Modifier.size(FilterChipDefaults.IconSize)
+                    )
+                }
+            } else {
+                null
+            }
+        )
+        FilterChip(
+            selected = isStarredFilterActive,
+            onClick = onStarredFilterToggle,
+            label = { Text("Starred") },
+            leadingIcon = if (isStarredFilterActive) {
+                {
+                    Icon(
+                        imageVector = Icons.Filled.Done,
+                        contentDescription = "Starred filter active",
+                        modifier = Modifier.size(FilterChipDefaults.IconSize)
+                    )
+                }
+            } else {
+                null
+            }
         )
     }
 }

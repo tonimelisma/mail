@@ -1,7 +1,9 @@
 package net.melisma.mail.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -9,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -17,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import net.melisma.core_data.model.Account
 import net.melisma.core_data.model.Message
 import timber.log.Timber
 
@@ -24,7 +28,8 @@ import timber.log.Timber
 @Composable
 fun MessageListItem(
     message: Message,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    account: Account? = null
 ) {
     Timber.d(
         "Displaying Message ID: ${message.id}, Subject: '${message.subject}', Sender: '${message.senderName ?: message.senderAddress}'"
@@ -50,6 +55,12 @@ fun MessageListItem(
                 modifier = Modifier.weight(1f, fill = false) // Prevent sender taking too much space
             )
             Spacer(Modifier.width(8.dp))
+
+            if (account != null) {
+                AccountChip(account = account)
+                Spacer(Modifier.width(8.dp))
+            }
+
             Text(
                 text = formatMessageDate(message.receivedDateTime), // Use helper from Util.kt
                 style = MaterialTheme.typography.bodySmall,
@@ -72,6 +83,23 @@ fun MessageListItem(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 2, // Show couple of lines for preview
             overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+private fun AccountChip(account: Account) {
+    val color = getAccountColor(account.id)
+    Box(
+        modifier = Modifier
+            .background(color.copy(alpha = 0.2f), shape = RoundedCornerShape(4.dp))
+            .padding(horizontal = 6.dp, vertical = 2.dp)
+    ) {
+        Text(
+            text = account.emailAddress.take(2).uppercase(),
+            color = color,
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Bold
         )
     }
 }

@@ -16,6 +16,7 @@ import androidx.compose.material.icons.filled.Inbox
 import androidx.compose.material.icons.filled.Report
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import net.melisma.core_data.model.WellKnownFolderType
 import timber.log.Timber
@@ -23,6 +24,7 @@ import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.util.Locale
+import kotlin.math.abs
 
 /**
  * Helper to get appropriate icon for common folders using updated names.
@@ -83,4 +85,23 @@ fun formatMessageDate(dateTimeString: String?): String {
         Timber.w(e, "Error parsing date: $dateTimeString")
         dateTimeString // Return original string if parsing fails
     }
+}
+
+/**
+ * Generates a stable, visually pleasing color from a list based on the account ID's hash code.
+ * This ensures that each account is always represented by the same color in the UI.
+ *
+ * @param accountId The unique ID of the account.
+ * @return A [Color] to be used for UI elements related to this account.
+ */
+fun getAccountColor(accountId: String): Color {
+    val colors = listOf(
+        Color(0xFFF44336), Color(0xFFE91E63), Color(0xFF9C27B0), Color(0xFF673AB7),
+        Color(0xFF3F51B5), Color(0xFF2196F3), Color(0xFF03A9F4), Color(0xFF00BCD4),
+        Color(0xFF009688), Color(0xFF4CAF50), Color(0xFF8BC34A), Color(0xFFCDDC39),
+        Color(0xFFFFC107), Color(0xFFFF9800), Color(0xFFFF5722), Color(0xFF795548)
+    )
+    // Use the absolute value of the hash code to prevent negative indices
+    val index = abs(accountId.hashCode()) % colors.size
+    return colors[index]
 }

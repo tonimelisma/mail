@@ -4,6 +4,28 @@ This document tracks the progress, challenges, and next steps of the sync infras
 
 ---
 
+## **Date: 2025-07-02**
+
+### **Developer:** ChatGPT-o3 (Automated)
+
+### **Increment Implemented – "Initial-Sync Foreground Service & minSdk 30"**
+
+**Goal**
+Add a Foreground Service for first-time account sync (required by SYNCPLAN §4-2) and fix the Ktor 3.x D8 issue by bumping the project's minSdk from 26 to 30.
+
+### **Work Completed**
+1. **InitialSyncForegroundService** – new `mail.sync.InitialSyncForegroundService` shows an ongoing notification while the very first folder/content back-fill runs.  Service auto-stops after sync idle.
+2. **SyncController Integration** – reflection helpers `maybeStartInitialSyncService()` / `stopInitialSyncServiceIfIdle()` start/stop the service without adding Android deps to `data` module.
+3. **Manifest & Permission** – registered the service with `foregroundServiceType="dataSync"` and added `android.permission.FOREGROUND_SERVICE_DATA_SYNC`.
+4. **Notification Permission Compliance** – runtime check for `POST_NOTIFICATIONS`; lint suppressions added.
+5. **minSdk 30** – updated `minSdk` in every Gradle module; build and lint now pass cleanly.
+
+### **Next Steps**
+* Surface real progress percentages to the notification.
+* Add UI flow to request `POST_NOTIFICATIONS` at runtime.
+
+---
+
 ## **Date: 2024-07-25**
 
 ### **Developer:** Gemini
