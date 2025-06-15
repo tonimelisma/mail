@@ -33,6 +33,10 @@ import net.melisma.mail.navigation.AppRoutes
 import timber.log.Timber
 import javax.inject.Inject
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import net.melisma.core_data.model.EntitySyncStatus
+import net.melisma.core_db.dao.AttachmentDao
 
 // The sealed interface MessageDetailUIState that was here has been removed.
 // It should be defined in its own file: MessageDetailUIState.kt
@@ -52,7 +56,7 @@ enum class ContentDisplayState {
 data class MessageDetailScreenState(
     val messageOverallState: MessageDetailUIState = MessageDetailUIState.Loading,
     val bodyDisplayState: ContentDisplayState = ContentDisplayState.LOADING,
-    val attachmentDisplayStates: Map<String, ContentDisplayState> = emptyMap(),
+    val attachments: List<Attachment> = emptyList(), // Replaces attachmentDisplayStates
     // Preferences and network state, still needed for logic
     val bodyDownloadPreference: DownloadPreference = DownloadPreference.ALWAYS,
     val attachmentDownloadPreference: DownloadPreference = DownloadPreference.ON_WIFI,
@@ -74,6 +78,7 @@ class MessageDetailViewModel @Inject constructor(
     private val userPreferencesRepository: UserPreferencesRepository,
     private val networkMonitor: NetworkMonitor,
     private val syncController: SyncController,
+    private val attachmentDao: AttachmentDao, // Inject AttachmentDao
     private val savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
@@ -125,7 +130,20 @@ class MessageDetailViewModel @Inject constructor(
     private fun loadMessageDetails(accountId: String, messageId: String) {
         viewModelScope.launch {
             Timber.d("ViewModelDBG: Launching coroutine to call getMessageDetailsUseCase for $messageId")
-            getMessageDetailsUseCase(messageId, accountId)
+
+            // Create a flow that combines message details with its attachments
+            val messageWithAttachmentsFlow = getMessageDetailsUseCase(messageId, accountId)
+                .flatMapLatest { message ->
+                    if (message == null) {
+                        flowOf(null to emptyList<Attachment>())
+                    } else {
+                        attachmentDao.getAttachmentsForMessage(message.id).map { attachments ->
+                            message to attachments
+                        }
+                    }
+                }
+
+            messageWithAttachmentsFlow
                 .onStart {
                     Timber.d("ViewModelDBG: UseCase Flow started for $messageId. Emitting Loading state.")
                     _uiState.update { it.copy(messageOverallState = MessageDetailUIState.Loading, bodyDisplayState = ContentDisplayState.LOADING) }
@@ -141,12 +159,13 @@ class MessageDetailViewModel @Inject constructor(
                         )
                     }
                 }
-                .collect { message ->
+                .collect { (message, attachments) ->
                     if (message != null) {
-                        Timber.d("ViewModelDBG: UseCase Flow collected message for $messageId. Subject: '${message.subject}'. RemoteId: ${message.remoteId}, LastSync: ${message.lastSuccessfulSyncTimestamp}")
+                        Timber.d("ViewModelDBG: UseCase Flow collected message for $messageId. Subject: '${message.subject}'. Attachments: ${attachments.size}")
                         _uiState.update { currentState ->
                             currentState.copy(
-                                messageOverallState = MessageDetailUIState.Success(message)
+                                messageOverallState = MessageDetailUIState.Success(message),
+                                attachments = attachments // Update attachments in the state
                             )
                         }
                         val currentUiState = _uiState.value
@@ -185,12 +204,10 @@ class MessageDetailViewModel @Inject constructor(
     private fun evaluateAndTriggerDownloads(
         message: Message,
         isOnline: Boolean,
-        isWifi: Boolean // isWifi is now less relevant for immediate body download if online at all
+        isWifi: Boolean
     ) {
         var finalBodyState: ContentDisplayState
-        val newAttachmentStates = _uiState.value.attachmentDisplayStates.toMutableMap()
-        val bodyPref = _uiState.value.bodyDownloadPreference // Still needed for logging/potential future logic
-        val attachmentPref = _uiState.value.attachmentDownloadPreference
+        val bodyPref = _uiState.value.bodyDownloadPreference
 
         // Evaluate Body
         if (!message.body.isNullOrBlank()) {
@@ -206,49 +223,11 @@ class MessageDetailViewModel @Inject constructor(
                 } else {
                     Timber.d("ViewModelDBG: Body download already marked as DOWNLOADING for ${message.id}. Skipping re-enqueue.")
                 }
-                // Check for violation of UX rule
-                if (bodyPref == DownloadPreference.ON_WIFI && !isWifi) {
-                    Timber.e("ViewModelDBG_DIRE_ERROR: Body download for ${message.id} initiated on non-WiFi, but preference was ON_WIFI. This is an override for active view. Logging for awareness.")
-                }
             } else { // Device is OFFLINE
                 finalBodyState = ContentDisplayState.NOT_DOWNLOADED_OFFLINE
             }
         }
-
-        // Evaluate Attachments (retains existing preference-based logic for attachments for now, can be aligned if needed)
-        message.attachments.forEach { att ->
-            if (!att.localUri.isNullOrBlank()) {
-                newAttachmentStates[att.id] = ContentDisplayState.DOWNLOADED
-            } else { // Attachment not downloaded
-                if (isOnline) {
-                    if (attachmentPref == DownloadPreference.ALWAYS ||
-                        (attachmentPref == DownloadPreference.ON_WIFI && isWifi) || // Strict ON_WIFI for attachments background
-                        attachmentPref == DownloadPreference.ON_DEMAND // Active view implies demand
-                    ) {
-                        // For attachments, if ON_WIFI, only download if on Wi-Fi or if Always/OnDemand
-                        // This differs from body's immediate download on any online connection for active view.
-                        // If an attachment also needs immediate download on any connection for active view, this logic needs adjustment.
-                        newAttachmentStates[att.id] = ContentDisplayState.DOWNLOADING
-                        val existingState = _uiState.value.attachmentDisplayStates[att.id]
-                        if (existingState != ContentDisplayState.DOWNLOADING) {
-                            enqueueAttachmentDownloadInternal(message.id, accountId!!, att)
-                        } else {
-                            Timber.d("ViewModelDBG: Attachment ${att.id} download already marked as DOWNLOADING. Skipping re-enqueue.")
-                        }
-                    } else if (attachmentPref == DownloadPreference.ON_WIFI && !isWifi) {
-                        newAttachmentStates[att.id] = ContentDisplayState.NOT_DOWNLOADED_WILL_DOWNLOAD_ON_WIFI
-                    } else {
-                        // If online but doesn't meet Always, or (OnWifi and isWifi), or OnDemand, it might be waiting for connection type or explicit user action.
-                        // This state assumes if not downloading now, it will happen when conditions meet (e.g. Wi-Fi)
-                        newAttachmentStates[att.id] = ContentDisplayState.NOT_DOWNLOADED_WILL_DOWNLOAD_WHEN_ONLINE
-                        Timber.d("ViewModelDBG: Attachment ${att.id} for ${message.id} not downloading. Pref: $attachmentPref, Online: $isOnline, Wifi: $isWifi")
-                    }
-                } else { // Device is OFFLINE
-                    newAttachmentStates[att.id] = ContentDisplayState.NOT_DOWNLOADED_OFFLINE
-                }
-            }
-        }
-        _uiState.update { it.copy(bodyDisplayState = finalBodyState, attachmentDisplayStates = newAttachmentStates) }
+        _uiState.update { it.copy(bodyDisplayState = finalBodyState) }
     }
 
     private fun enqueueMessageBodyDownloadInternal(msgId: String, accId: String) {
@@ -264,26 +243,23 @@ class MessageDetailViewModel @Inject constructor(
         syncController.submit(SyncJob.DownloadMessageBody(messageId = msgId, accountId = accId))
     }
 
-    private fun enqueueAttachmentDownloadInternal(msgId: String, accId: String, attachment: Attachment) {
-        if (_uiState.value.attachmentDisplayStates[attachment.id] == ContentDisplayState.DOWNLOADING) {
-             Timber.d("ViewModelDBG: Attachment download already in progress for ${attachment.id}.")
-            return
+    fun onAttachmentClicked(attachment: Attachment) {
+        if (attachment.localFilePath.isNullOrBlank()) {
+            // Not downloaded yet, trigger download
+            val currentAccountId = accountId
+            val currentMessageId = messageId
+            if (currentAccountId != null && currentMessageId != null) {
+                Timber.d("ViewModelDBG: Manually triggering download for attachment ${attachment.id}")
+                syncController.submit(
+                    SyncJob.DownloadAttachment(
+                        accountId = currentAccountId,
+                        messageId = currentMessageId,
+                        attachmentId = attachment.id
+                    )
+                )
+            }
         }
-        _uiState.update { currentState ->
-            val newStates = currentState.attachmentDisplayStates.toMutableMap()
-            newStates[attachment.id] = ContentDisplayState.DOWNLOADING
-            currentState.copy(attachmentDisplayStates = newStates, transientError = null)
-        }
-
-        val localId = attachment.id.toLongOrNull() ?: return
-        Timber.d("ViewModelDBG: Submitting DownloadAttachment job for attachment ${attachment.id} in message $msgId.")
-        syncController.submit(
-            SyncJob.DownloadAttachment(
-                accountId = accId,
-                messageId = msgId,
-                attachmentId = localId
-            )
-        )
+        // The UI will handle opening the file if localFilePath is present
     }
 
     fun retryMessageBodyDownload() {
@@ -296,29 +272,6 @@ class MessageDetailViewModel @Inject constructor(
             enqueueMessageBodyDownloadInternal(currentMessageId, currentAccountId)
         } else {
             Timber.w("ViewModelDBG: Cannot retry body download, accountId or messageId is null.")
-        }
-    }
-
-    fun retryAttachmentDownload(attachmentIdToRetry: String) {
-        val currentAccountId = accountId
-        val currentMessageId = messageId
-        val currentMessage = (_uiState.value.messageOverallState as? MessageDetailUIState.Success)?.message
-
-        if (currentAccountId != null && currentMessageId != null && currentMessage != null) {
-            currentMessage.attachments.find { it.id == attachmentIdToRetry }?.let { attachmentToRetry ->
-                Timber.d("ViewModelDBG: Retrying attachment download for ${attachmentToRetry.id} in message $currentMessageId")
-                // Set state to DOWNLOADING immediately for responsiveness
-                _uiState.update { currentState ->
-                    val newStates = currentState.attachmentDisplayStates.toMutableMap()
-                    newStates[attachmentToRetry.id] = ContentDisplayState.DOWNLOADING
-                    currentState.copy(attachmentDisplayStates = newStates, transientError = null)
-                }
-                enqueueAttachmentDownloadInternal(currentMessageId, currentAccountId, attachmentToRetry)
-            } ?: run {
-                Timber.w("ViewModelDBG: Attachment with id $attachmentIdToRetry not found in current message for retry.")
-            }
-        } else {
-            Timber.w("ViewModelDBG: Cannot retry attachment download, missing account/message info or attachment not found.")
         }
     }
 

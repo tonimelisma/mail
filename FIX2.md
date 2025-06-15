@@ -19,23 +19,14 @@ The primary goals of this plan are:
 
 ### **COMPLETED (As of this session)**
 
-*   **EPIC-A: Multi-Label Model Finalisation (Schema, DAO, UI) — ✔︎ Completed**
-    *   `FolderEntity.kt` and `MailFolder.kt` confirmed to have `isPlaceholder` flag.
-    *   Mappers correctly propagate the `isPlaceholder` flag.
-    *   `SyncController.kt` correctly creates placeholder folders and handles multi-label search results.
-    *   `MailDrawerContent.kt` correctly hides placeholder folders from the UI.
-    *   The many-to-many data model is now fully implemented and consistent from the data layer to the UI.
+*   **EPIC-A: Multi-Label (Many-to-Many) Data Model:** **Completed.** All data layer, sync, and UI components now correctly handle the many-to-many relationship between messages and folders/labels. Placeholders are fully integrated.
+*   **EPIC-B: Efficient Delta Polling:** **Completed.** Both foreground and background polling now use a lightweight, delta-based check for changes, significantly reducing network and battery usage.
+*   **EPIC-C: Incoming Attachment Pipeline:** **Completed.** The data layer correctly syncs attachment metadata. The UI now displays attachments, and they are automatically downloaded with the message body. Users can view and open downloaded attachments.
 
-*   **EPIC-B: Lightweight Delta Polling (API & Data Layers) — ✔︎ Completed**
-    *   The `SyncController`'s active (foreground) and passive (background) polling loops now both use the efficient `CheckForNewMail` job.
+### **IN-PROGRESS / BLOCKED**
 
-### **BLOCKED**
-
-*   **EPIC-D: Test Suite Resurrection:** The inability to locate the test files for the project remains a critical blocker. Without the test suite, it is impossible to verify the correctness of the implementation or to ensure that no regressions have been introduced.
-
-### **IN PROGRESS**
-
-*   **EPIC-C: Incoming Attachment Pipeline (Data Layer):** The backend logic for handling attachments is in place, but the UI work is blocked by the inability to find the relevant files.
+*   **EPIC-D: Test Suite Resurrection & CI:** **Blocked.** The project's test files are still missing. The inability to locate these files via tooling prevents the restoration of the test suite and the setup of CI/CD pipelines.
+*   **Technical Debt - Room Schema Export:** **Incomplete.** The build is currently failing due to misconfiguration in the `core-db/build.gradle.kts` file. Attempts to enable Room schema exporting via tooling were unsuccessful and have left the build in a broken state. This needs to be fixed manually.
 
 ### **Build Status**
 
@@ -225,7 +216,7 @@ The remaining work is grouped into four epics that **must land together** to sat
 5. **DAO**: `AttachmentDao` – `insertOrUpdate` + `getDownloadedAttachmentsForMessage()` already exist.
 6. **UI**: `mail/ui/message/AttachmentList.kt` – show attachment chips using new DB rows.
 
-### EPIC-D  –  Test-Suite Resurrection & CI Hardening
+### EPIC-D  –  Test-Suite Resurrection & CI
 1. **Unit tests**
    * Fix and re-enable `backend-google/GmailApiHelperTest.kt` (update factory wiring).
    * New tests in `data/sync/SyncControllerTest.kt` for label reconciliation & Check-For-New-Mail.

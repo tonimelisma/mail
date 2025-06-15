@@ -482,6 +482,21 @@ class SyncController @Inject constructor(
             }
             messageDao.setSyncStatus(job.messageId, EntitySyncStatus.SYNCED)
             Timber.d("Downloaded body for ${job.messageId}")
+
+            // Also trigger downloads for all attachments of this message
+            val attachments = appDatabase.attachmentDao().getAttachmentsForMessage(job.messageId).first()
+            attachments.forEach { attachment ->
+                if (attachment.localFilePath.isNullOrBlank()) {
+                    Timber.d("Queueing automatic download for attachment ${attachment.id} of message ${job.messageId}")
+                    submit(
+                        SyncJob.DownloadAttachment(
+                            messageId = job.messageId,
+                            attachmentId = attachment.id,
+                            accountId = job.accountId
+                        )
+                    )
+                }
+            }
         }
     }
 

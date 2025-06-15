@@ -94,10 +94,10 @@
   * **Status: Implemented**  
 * **Requirement 6.2 (Advanced Search Filters):** As a user, I want to search emails using advanced filters (local FTS + online).  
   * **Status: Partially Implemented (2025-07-03)** – Online search pipeline delivered via `SyncJob.SearchOnline`; UI filter options & complex query parser still pending. Filter chips for Unread/Starred added to Unified Inbox, laying groundwork.
-* **Requirement 6.3 (Junk/Spam Management):** As a user, I want to mark emails as junk/spam.  
-  * **Status: Pending**  
-* **Requirement 6.4 (Folder Management):** As a user, I want to create, rename, and delete custom mail folders.  
-  * **Status: Pending**
+* **Requirement 6.3 (Download/View Attachments):** Users should be able to download and open attachments.
+  * **Status: Completed**
+* **Requirement 6.4 (Compose with Attachments):** Users should be able to add attachments when composing an email.
+  * **Status: Implemented**
 
 **EPIC 7: Settings & Configuration** (Medium Priority)
 

@@ -2,10 +2,13 @@
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
-    alias(libs.plugins.kotlin.ksp) // KSP for Room
-    alias(libs.plugins.hilt.gradle)
-    alias(libs.plugins.kotlin.serialization) // Added Kotlin Serialization plugin
+    alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.androidx.room)
+    id("com.google.devtools.ksp")
+}
+
+room {
+    schemaDirectory("$projectDir/schemas")
 }
 
 android {
@@ -36,10 +39,6 @@ android {
     }
     ksp {
         arg("room.incremental", "true")
-    }
-
-    room {
-        schemaDirectory("$projectDir/schemas")
     }
 }
 

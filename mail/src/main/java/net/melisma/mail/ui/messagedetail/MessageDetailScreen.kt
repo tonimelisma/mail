@@ -60,6 +60,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import net.melisma.core_data.model.Attachment
+import net.melisma.core_data.model.EntitySyncStatus
 import net.melisma.mail.R
 import timber.log.Timber
 import java.time.OffsetDateTime
@@ -129,7 +130,7 @@ fun MessageDetailScreen(
 
                 is MessageDetailUIState.Error -> {
                     Text(
-                        text = overallMessageState.errorMessage,
+                        text = overallState.errorMessage,
                         color = MaterialTheme.colorScheme.error,
                         modifier = Modifier
                             .align(Alignment.Center)
@@ -138,7 +139,7 @@ fun MessageDetailScreen(
                 }
 
                 is MessageDetailUIState.Success -> {
-                    val currentMessage = overallMessageState.message
+                    val currentMessage = overallState.message
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
@@ -251,7 +252,7 @@ fun MessageDetailScreen(
                             }
                         }
 
-                        if (currentMessage.attachments.isNotEmpty()) {
+                        if (screenState.attachments.isNotEmpty()) {
                             Spacer(modifier = Modifier.height(16.dp))
                             Text(stringResource(R.string.attachments_title), style = MaterialTheme.typography.titleMedium)
                             HorizontalDivider()
@@ -260,14 +261,11 @@ fun MessageDetailScreen(
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                                 contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 8.dp)
                             ) {
-                                items(items = currentMessage.attachments, key = { attachment -> attachment.id }) { attachmentItem: Attachment ->
-                                    val attachmentState = screenState.attachmentDisplayStates[attachmentItem.id]
-                                        ?: ContentDisplayState.LOADING
+                                items(items = screenState.attachments, key = { attachment -> attachment.id }) { attachmentItem: Attachment ->
                                     AttachmentCard(
                                         attachment = attachmentItem,
-                                        displayState = attachmentState,
                                         context = context,
-                                        onRetryClick = { viewModel.retryAttachmentDownload(attachmentItem.id) }
+                                        onClick = { viewModel.onAttachmentClicked(attachmentItem) }
                                     )
                                 }
                             }
@@ -283,30 +281,21 @@ fun MessageDetailScreen(
 @Composable
 fun AttachmentCard(
     attachment: Attachment,
-    displayState: ContentDisplayState,
     context: android.content.Context,
-    onRetryClick: () -> Unit
+    onClick: () -> Unit
 ) {
+    val displayState = when {
+        !attachment.localFilePath.isNullOrBlank() -> ContentDisplayState.DOWNLOADED
+        attachment.syncStatus == EntitySyncStatus.PENDING_DOWNLOAD -> ContentDisplayState.DOWNLOADING
+        attachment.syncStatus == EntitySyncStatus.ERROR -> ContentDisplayState.ERROR
+        else -> ContentDisplayState.NOT_DOWNLOADED_OFFLINE // Default state for not-yet-downloaded
+    }
+
     Card(
         modifier = Modifier
             .width(150.dp)
             .height(120.dp)
-            .clickable(enabled = displayState == ContentDisplayState.DOWNLOADED || displayState == ContentDisplayState.ERROR) {
-                if (displayState == ContentDisplayState.DOWNLOADED && !attachment.localUri.isNullOrEmpty()) {
-                    val uri = attachment.localUri!!.toUri()
-                    val intent = Intent(Intent.ACTION_VIEW).apply {
-                        setDataAndType(uri, attachment.contentType ?: "*/*")
-                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    }
-                    try {
-                        context.startActivity(intent)
-                    } catch (e: ActivityNotFoundException) {
-                        Timber.e(e, "No app found to open attachment: ${attachment.fileName}")
-                    }
-                } else if (displayState == ContentDisplayState.ERROR) {
-                    onRetryClick()
-                }
-            },
+            .clickable(onClick = onClick),
     ) {
         Column(
             modifier = Modifier
@@ -330,13 +319,10 @@ fun AttachmentCard(
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Icon(Icons.Filled.ErrorOutline, contentDescription = stringResource(id = R.string.cd_error_icon), modifier = Modifier.size(32.dp), tint = MaterialTheme.colorScheme.error)
                             Spacer(modifier = Modifier.height(4.dp))
-                            Text(stringResource(R.string.attachment_status_error_retry_short), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                            Text("Error", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                         }
                     }
-                    ContentDisplayState.NOT_DOWNLOADED_WILL_DOWNLOAD_ON_WIFI -> Text(stringResource(R.string.attachment_status_waiting_wifi), style = MaterialTheme.typography.bodySmall, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                    ContentDisplayState.NOT_DOWNLOADED_WILL_DOWNLOAD_WHEN_ONLINE -> Text(stringResource(R.string.attachment_status_waiting_online), style = MaterialTheme.typography.bodySmall, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                    ContentDisplayState.NOT_DOWNLOADED_OFFLINE -> Text(stringResource(R.string.attachment_status_offline), style = MaterialTheme.typography.bodySmall, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                    ContentDisplayState.NOT_DOWNLOADED_PREFERENCE_ON_DEMAND -> Text(stringResource(R.string.attachment_status_on_demand_pref), style = MaterialTheme.typography.bodySmall, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                    else -> Icon(Icons.AutoMirrored.Filled.InsertDriveFile, contentDescription = attachment.fileName, modifier = Modifier.size(32.dp), tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
                 }
             }
             Spacer(modifier = Modifier.height(8.dp))
