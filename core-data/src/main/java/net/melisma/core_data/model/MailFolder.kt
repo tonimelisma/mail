@@ -30,5 +30,12 @@ data class MailFolder(
     val displayName: String,
     val totalItemCount: Int,
     val unreadItemCount: Int,
-    val type: WellKnownFolderType = WellKnownFolderType.USER_CREATED // Default to USER_CREATED
+    val type: WellKnownFolderType = WellKnownFolderType.USER_CREATED, // Default to USER_CREATED
+    /**
+     * True if this folder was created locally as a placeholder because it was referenced by a
+     * remote label but has not yet been fetched from the server.  Placeholder folders should be
+     * hidden (or visually downgraded) in the UI until a full folder-list sync converts them into
+     * real folders.
+     */
+    val isPlaceholder: Boolean = false
 )

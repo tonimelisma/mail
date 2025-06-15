@@ -190,7 +190,8 @@ fun MailDrawerContent(
                                 }
                                 Column { // Now resolved
                                     sortedFolders.forEach { folder ->
-                                        // Note: FolderItem call might fail if getIconForFolder is missing/not imported
+                                        if (folder.isPlaceholder) return@forEach // Skip placeholder folders
+
                                         FolderItem(
                                             folder = folder,
                                             isSelected = folder.id == state.selectedFolder?.id && account.id == state.selectedFolderAccountId,

@@ -15,7 +15,8 @@ fun MailFolder.toEntity(accountId: String, localId: String): FolderEntity {
         name = this.displayName,
         wellKnownType = this.type, // ADDED: MailFolder.type is WellKnownFolderType enum
         totalCount = this.totalItemCount,
-        unreadCount = this.unreadItemCount
+        unreadCount = this.unreadItemCount,
+        isPlaceholder = this.isPlaceholder
         // Other FolderEntity fields like parentFolderId, syncStatus etc., are not set here.
         // They would be set either by default in FolderEntity or updated later by sync workers if needed.
     )
@@ -29,6 +30,7 @@ fun FolderEntity.toDomainModel(): MailFolder {
         unreadItemCount = this.unreadCount ?: 0,
         type = this.wellKnownType
             ?: WellKnownFolderType.USER_CREATED, // Use new wellKnownType field
+        isPlaceholder = this.isPlaceholder,
         // Add remoteId to MailFolder if it's needed by the UI for other purposes,
         // or if parts of the ViewModel layer still need to reference folders by their remoteId transiently.
         // For example: remoteId = this.remoteId 
