@@ -18,8 +18,6 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
-import net.melisma.core_data.connectivity.NetworkMonitor
-import net.melisma.core_data.datasource.MailApiServiceSelector
 import net.melisma.core_data.di.ApplicationScope
 import net.melisma.core_data.di.Dispatcher
 import net.melisma.core_data.di.MailDispatchers
@@ -52,7 +50,6 @@ import javax.inject.Singleton
 
 @Singleton
 class DefaultMessageRepository @Inject constructor(
-    private val mailApiServiceSelector: MailApiServiceSelector,
     @Dispatcher(MailDispatchers.IO) private val ioDispatcher: CoroutineDispatcher,
     @ApplicationScope private val externalScope: CoroutineScope,
     private val messageDao: MessageDao,
@@ -61,8 +58,7 @@ class DefaultMessageRepository @Inject constructor(
     private val pendingActionDao: PendingActionDao,
     private val messageFolderJunctionDao: MessageFolderJunctionDao,
     private val appDatabase: AppDatabase,
-    private val syncController: SyncController,
-    private val networkMonitor: NetworkMonitor
+    private val syncController: SyncController
 ) : MessageRepository {
 
     private val _messageSyncState = MutableStateFlow<MessageSyncState>(MessageSyncState.Idle)
@@ -142,9 +138,7 @@ class DefaultMessageRepository @Inject constructor(
         }
 
         return messageDao.getMessageById(messageId).map { entity ->
-            entity?.let { msg ->
-                msg.toDomainModel("")
-            }
+            entity?.toDomainModel("")
         }
     }
 

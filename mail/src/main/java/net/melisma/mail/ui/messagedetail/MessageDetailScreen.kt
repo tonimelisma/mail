@@ -160,14 +160,18 @@ fun MessageDetailScreen(
                             remember { DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM) }
                         val parsedDate = remember(currentMessage.receivedDateTime) {
                             try {
-                                currentMessage.receivedDateTime?.let { OffsetDateTime.parse(it) }
+                                OffsetDateTime.parse(currentMessage.receivedDateTime)
                             } catch (e: Exception) {
                                 Timber.e(e, "Failed to parse date: ${currentMessage.receivedDateTime}")
                                 null
                             }
                         }
+
+                        val formattedDate =
+                            parsedDate?.format(formatter) ?: currentMessage.receivedDateTime
+
                         Text(
-                            text = stringResource(R.string.message_received_label, parsedDate?.format(formatter) ?: currentMessage.receivedDateTime ?: stringResource(R.string.unknown_date)),
+                            text = stringResource(R.string.message_received_label, formattedDate),
                             style = MaterialTheme.typography.bodySmall
                         )
                         Spacer(modifier = Modifier.height(16.dp))
@@ -337,7 +341,7 @@ fun AttachmentCard(
             }
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = attachment.fileName ?: stringResource(R.string.unknown_attachment_name),
+                text = attachment.fileName.ifBlank { stringResource(R.string.unknown_attachment_name) },
                 style = MaterialTheme.typography.bodySmall,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
