@@ -4,7 +4,6 @@ import android.app.Activity
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -28,15 +27,13 @@ import net.melisma.core_data.model.FolderFetchState
 import net.melisma.core_data.model.MailFolder
 import net.melisma.core_data.model.MailThread
 import net.melisma.core_data.model.Message
+import net.melisma.core_data.model.SyncJob
 import net.melisma.core_data.repository.FolderRepository
 import net.melisma.core_db.dao.AccountDao
 import net.melisma.core_db.dao.FolderDao
-import net.melisma.data.mapper.toDomainAccount
 import net.melisma.data.mapper.toDomainModel
 import net.melisma.data.sync.SyncController
-import net.melisma.core_data.model.SyncJob
 import timber.log.Timber
-import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -80,13 +77,16 @@ class DefaultFolderRepository @Inject constructor(
                                 }
                                 .map { state -> accountId to state }
                         }
-                        combine(accountFolderFlows) { arrayOfPairs ->
-                            arrayOfPairs.toList().toMap()
+                        val combined: Flow<Map<String, FolderFetchState>> =
+                            combine(accountFolderFlows) { arrayOfPairs ->
+                                @Suppress("UNCHECKED_CAST")
+                                (arrayOfPairs as Array<Pair<String, FolderFetchState>>).toMap()
                         }
+                        combined
                     }
                 }
                 .distinctUntilChanged()
-                .onEach { latestDbStates ->
+                .onEach { latestDbStates: Map<String, FolderFetchState> ->
                     _folderStates.value = latestDbStates
                 }
                 .catch { e -> Timber.e(e, "Error in observeDatabaseChanges") }

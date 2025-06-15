@@ -78,6 +78,7 @@ android {
 dependencies {
     // --- Project Modules ---
     implementation(project(":core-data"))
+    implementation(project(":core-db"))
     implementation(project(":data"))
     implementation(project(":domain"))
     implementation(project(":backend-microsoft"))

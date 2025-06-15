@@ -1,42 +1,33 @@
 package net.melisma.mail.ui.messagedetail
 
-import android.net.ConnectivityManager
-import android.net.Network
-import android.net.NetworkCapabilities
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.onStart
-import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import net.melisma.core_data.connectivity.NetworkMonitor
 import net.melisma.core_data.model.Attachment
 import net.melisma.core_data.model.Message
+import net.melisma.core_data.model.SyncJob
 import net.melisma.core_data.preferences.DownloadPreference
 import net.melisma.core_data.preferences.UserPreferencesRepository
+import net.melisma.core_db.dao.AttachmentDao
 import net.melisma.data.sync.SyncController
-import net.melisma.core_data.model.SyncJob
 import net.melisma.domain.data.GetMessageDetailsUseCase
 import net.melisma.mail.navigation.AppRoutes
 import timber.log.Timber
 import javax.inject.Inject
-import kotlinx.coroutines.channels.awaitClose
-import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.flowOf
-import net.melisma.core_data.model.EntitySyncStatus
-import net.melisma.core_db.dao.AttachmentDao
 
 // The sealed interface MessageDetailUIState that was here has been removed.
 // It should be defined in its own file: MessageDetailUIState.kt
@@ -159,7 +150,9 @@ class MessageDetailViewModel @Inject constructor(
                         )
                     }
                 }
-                .collect { (message, attachments) ->
+                .collect { pair ->
+                    val message = pair.first
+                    val attachments = pair.second as List<Attachment>
                     if (message != null) {
                         Timber.d("ViewModelDBG: UseCase Flow collected message for $messageId. Subject: '${message.subject}'. Attachments: ${attachments.size}")
                         _uiState.update { currentState ->
@@ -207,7 +200,7 @@ class MessageDetailViewModel @Inject constructor(
         isWifi: Boolean
     ) {
         var finalBodyState: ContentDisplayState
-        val bodyPref = _uiState.value.bodyDownloadPreference
+        _uiState.value.bodyDownloadPreference
 
         // Evaluate Body
         if (!message.body.isNullOrBlank()) {
@@ -244,22 +237,23 @@ class MessageDetailViewModel @Inject constructor(
     }
 
     fun onAttachmentClicked(attachment: Attachment) {
-        if (attachment.localFilePath.isNullOrBlank()) {
+        if (attachment.localUri.isNullOrBlank()) {
             // Not downloaded yet, trigger download
             val currentAccountId = accountId
             val currentMessageId = messageId
             if (currentAccountId != null && currentMessageId != null) {
                 Timber.d("ViewModelDBG: Manually triggering download for attachment ${attachment.id}")
+                val attachmentIdLong = attachment.id.toLongOrNull() ?: -1L
                 syncController.submit(
                     SyncJob.DownloadAttachment(
                         accountId = currentAccountId,
                         messageId = currentMessageId,
-                        attachmentId = attachment.id
+                        attachmentId = attachmentIdLong
                     )
                 )
             }
         }
-        // The UI will handle opening the file if localFilePath is present
+        // The UI will handle opening the file if localUri is present
     }
 
     fun retryMessageBodyDownload() {

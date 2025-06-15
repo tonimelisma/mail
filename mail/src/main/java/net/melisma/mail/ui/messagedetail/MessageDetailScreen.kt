@@ -1,7 +1,5 @@
 package net.melisma.mail.ui.messagedetail
 
-import android.content.ActivityNotFoundException
-import android.content.Intent
 import android.webkit.WebView
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.tween
@@ -55,7 +53,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.net.toUri
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
@@ -130,7 +127,7 @@ fun MessageDetailScreen(
 
                 is MessageDetailUIState.Error -> {
                     Text(
-                        text = overallState.errorMessage,
+                        text = overallMessageState.errorMessage,
                         color = MaterialTheme.colorScheme.error,
                         modifier = Modifier
                             .align(Alignment.Center)
@@ -139,7 +136,7 @@ fun MessageDetailScreen(
                 }
 
                 is MessageDetailUIState.Success -> {
-                    val currentMessage = overallState.message
+                    val currentMessage = overallMessageState.message
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
@@ -285,10 +282,10 @@ fun AttachmentCard(
     onClick: () -> Unit
 ) {
     val displayState = when {
-        !attachment.localFilePath.isNullOrBlank() -> ContentDisplayState.DOWNLOADED
-        attachment.syncStatus == EntitySyncStatus.PENDING_DOWNLOAD -> ContentDisplayState.DOWNLOADING
-        attachment.syncStatus == EntitySyncStatus.ERROR -> ContentDisplayState.ERROR
-        else -> ContentDisplayState.NOT_DOWNLOADED_OFFLINE // Default state for not-yet-downloaded
+        !attachment.localUri.isNullOrBlank() -> ContentDisplayState.DOWNLOADED
+        attachment.downloadStatus == EntitySyncStatus.PENDING_DOWNLOAD.name -> ContentDisplayState.DOWNLOADING
+        attachment.downloadStatus == EntitySyncStatus.ERROR.name -> ContentDisplayState.ERROR
+        else -> ContentDisplayState.NOT_DOWNLOADED_OFFLINE
     }
 
     Card(
