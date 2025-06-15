@@ -162,4 +162,65 @@ The following non-blocking issues remain visible in the Gradle output and should
 
 ---
 
+## 7. Implementation Execution Plan (2025-07-xx)
+
+The remaining work is grouped into four epics that **must land together** to satisfy the "monolithic" requirement.  Every bullet lists the concrete code-changes and files that will be touched.
+
+### EPIC-A  –  Multi-Label Model Finalisation  (Placeholder folders)
+1. **Create local placeholders** when a remote label/folder has no local mapping.
+   * `data/sync/SyncController.kt`  – add helper `ensureLocalFolderForRemote()` and call from `processFetchHeaders()` & `handleSyncFolderList()`.
+   * `core-db/entity/FolderEntity.kt` – `isPlaceholder:Boolean` column (default false).
+   * `core-db/dao/FolderDao.kt` – `insertPlaceholderIfAbsent(accountId, remoteId)`.
+   * `core-db/AppDatabase.kt` – schema version ➜ 20, add migration 19→20 in `core-db/migration/M19_M20.kt`.
+   * **UI**: `mail/ui/folder/FolderListScreen.kt`  – hide placeholder folders (or gray them out).
+
+### EPIC-B  –  Lightweight Delta Polling  (Check-For-New-Mail)
+1. **SyncJob** `CheckForNewMail(accountId)` → priority 50.
+2. `SyncController`
+   * Add `handleCheckForNewMail()`; if provider reports "hasChanges"=true queue `SyncFolderList` + per-folder `FetchMessageHeaders`.
+   * 5-second **active polling** now enqueues Check-jobs instead of `SyncFolderList`.
+3. **MailApiService**
+   * Interface method `hasChangesSince(accountId, syncToken:String?): Result<Boolean>`.
+   * Implementations: `GmailApiHelper.kt`, `GraphApiHelper.kt` – call provider delta endpoint and return boolean.
+4. **State**: store per-account changeToken in `AccountEntity.latestDeltaToken`.
+5. **Files touched (delta)**: 8 across `core-data`, `backend-google`, `backend-microsoft`, `data`.
+
+### EPIC-C  –  Incoming Attachment Pipeline
+1. **DTOs** for attachment list & content already exist.  Hook them in:
+   * `backend-google/GmailApiHelper.kt` & `backend-microsoft/GraphApiHelper.kt` – `getMessageAttachmentsInternal()` called from `processFetchHeaders()` when `hasAttachments=true`.
+2. **AttachmentEntity**
+   * Add `downloadStatus` enum + `localFilePath` columns already present; populate.
+3. **SyncController**
+   * When mapping messages, collect attachment metadata, upsert `AttachmentEntity` rows.
+4. **Repositories**
+   * `DefaultMessageRepository.downloadAttachment()` resurrected: enqueue `SyncJob.DownloadAttachment`.
+   * Remove all legacy "AttachmentDownloadWorker" comments.
+5. **DAO**: `AttachmentDao` – `insertOrUpdate` + `getDownloadedAttachmentsForMessage()` already exist.
+6. **UI**: `mail/ui/message/AttachmentList.kt` – show attachment chips using new DB rows.
+
+### EPIC-D  –  Test-Suite Resurrection & CI Hardening
+1. **Unit tests**
+   * Fix and re-enable `backend-google/GmailApiHelperTest.kt` (update factory wiring).
+   * New tests in `data/sync/SyncControllerTest.kt` for label reconciliation & Check-For-New-Mail.
+2. **Gradle / CI**
+   * Ensure `./gradlew testDebugUnitTest` & `verifySchema` tasks run in GitHub Actions.
+   * Add `scripts/ci-build.sh`.
+
+### Approximate File-Touch Count
+* Core-db: 7 (FolderEntity, AccountEntity, AttachmentEntity, DAOs, migration, database).
+* Core-data: 3 (SyncJob, models).
+* Backend-google: 3.
+* Backend-microsoft: 3.
+* Data-module (controller, repos, di): 12.
+* Mail-module (UI): 6.
+* Tests: 8.
+**≈ 42 files**.
+
+### Roll-Out Strategy
+1. Create feature branch `fix2-monolith`.
+2. Implement epics sequentially but **commit nothing** until the entire build+tests pass.
+3. Squash all changes with commit message `feat(monolith): complete FIX2 implementation – multilabel, delta polling, attachments, tests` and fast-forward merge to `main`.
+
+Once merged, FIX2.md can be marked **Completed ✔︎**.
+
 > **Target Outcome:** Enter feature-freeze on the data layer within one week, paving the way for UI polish and beta release. 
