@@ -63,9 +63,19 @@ graph TD
 1.  The user pulls to refresh the Inbox screen.
 2.  The UI calls `viewModel.refreshInbox()`.
 3.  The ViewModel submits a `SyncJob.ForceRefreshFolder` to the `SyncController`.
-4.  The `SyncController` picks up the job, calls the appropriate `MailApiService` implementation (`getMessagesForFolder`).
+4.  The `SyncController` picks up the job, calls the appropriate `MailApiService` implementation (`syncMessagesForFolder` using a delta token).
 5.  The `MailApiService` makes a network request to the email server.
-6.  The `SyncController` receives the response, maps the DTOs to `MessageEntity` objects, and saves them to the database via `MessageDao`. It also updates the `MessageFolderJunction` table to reflect the latest labels.
+6.  The `SyncController` receives the response, maps the DTOs to `MessageEntity` and `AttachmentEntity` objects, and saves them to the database via their respective DAOs. It also updates the `MessageFolderJunction` table to reflect the latest labels, creating placeholder `FolderEntity` records if needed.
 7.  The Room database notifies its observers of the change.
 8.  The ViewModel, which is observing a `Flow` from the `MessageDao`, receives the new list of messages and updates its UI state.
 9.  The Compose UI automatically recomposes to display the new messages.
+
+## Data Flow Example: Lightweight Background Sync
+
+1.  A polling timer in the `SyncController` fires (e.g., every 5 seconds in foreground, 15 minutes in background).
+2.  The `SyncController` submits a `SyncJob.CheckForNewMail` for each account.
+3.  The job handler calls the `MailApiService.hasChangesSince(deltaToken)` method.
+4.  The API service makes a highly efficient delta query to the server.
+5.  If `hasChangesSince` returns `false`, nothing else happens.
+6.  If it returns `true`, the `SyncController` queues a `SyncJob.SyncFolderList` to get the full list of changes, ensuring the local state is brought back in sync with the server.
+7.  The data flow then proceeds as in the "Refreshing the Inbox" example.

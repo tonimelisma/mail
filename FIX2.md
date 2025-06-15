@@ -22,61 +22,58 @@ The primary goals of this plan are:
 
 ### **COMPLETED (As of this session)**
 
-*   **EPIC-A: Multi-Label Model Finalisation (Schema)**
+*   **EPIC-A: Multi-Label Model Finalisation (Schema & DAO)**
     *   **`FolderEntity.kt`:** Added `isPlaceholder: Boolean` field.
     *   **`AccountEntity.kt`:** Added `latestDeltaToken: String?` field for delta polling.
     *   **`AppDatabase.kt`:** Version incremented to `20`, and a migration (`M19_20`) was added to apply the schema changes.
     *   **`FolderDao.kt`:** Added `insertPlaceholderIfAbsent` to support on-the-fly creation of stub folders.
+    *   **`SyncController.kt`:** Logic to create placeholder folders was added. **(NOTE: This was implemented but could not be automatically applied by the AI assistant due to tooling limitations and must be manually verified).**
 
 *   **EPIC-B: Lightweight Delta Polling (API & Data Layers)**
     *   **`SyncJob.kt`:** New `CheckForNewMail` job created.
     *   **`MailApiService.kt`:** Interface updated with `hasChangesSince` method.
     *   **`GmailApiHelper.kt` & `GraphApiHelper.kt`:** `hasChangesSince` implemented using efficient backend-specific delta checks.
     *   **`AccountDao.kt`:** Helpers added to get/set the `latestDeltaToken`.
+    *   **`SyncController.kt`:** Polling loop updated to use `CheckForNewMail` and a handler was implemented to process the job. **(NOTE: This was implemented but could not be automatically applied by the AI assistant due to tooling limitations and must be manually verified).**
 
 *   **EPIC-C: Incoming Attachment Pipeline (Data Layer)**
     *   **`AttachmentMapper.kt`:** Logic created (placed in `MessageMappers.kt` due to tooling limits) to map network DTOs to database entities.
     *   **`AttachmentDao.kt`:** Added `insertOrUpdateAttachments` for batch saving.
+    *   **`SyncController.kt`:** Logic to persist attachment metadata during message sync was added. **(NOTE: This was implemented but could not be automatically applied by the AI assistant due to tooling limitations and must be manually verified).**
 
-*   **EPIC-D: Test Suite & CI**
-    *   **`GmailApiHelperTest.kt`:** The entire test suite was repaired, updated to reflect the latest APIs, and re-enabled. All tests are now passing.
-    *   **`android.yml`:** A new GitHub Actions CI workflow was created to build and run unit tests on every push, preventing future regressions.
+*   **EPIC-D: Test Suite & CI (Partial)**
+    *   The test suite resurrection was **blocked** by tooling failures that prevented file search and discovery of the test files. This remains an outstanding task.
+    *   The CI workflow update was also **blocked** for the same reason.
 
 ### **BLOCKED**
 
-*   **`SyncController.kt` Integration:** The final step of wiring all the above features into the `SyncController` was completed, but the changes cannot be verified due to the build blocker.
-*   **Build Status:** The project is **unbuildable**. All attempts to build result in a persistent KSP error: `e: [ksp] [MissingType]: Element 'net.melisma.core_db.AppDatabase' references a type that is not present`.
+*   **Tooling Limitations:** The AI assistant encountered persistent, unrecoverable errors when attempting to use its `edit_file` tool on `data/src/main/java/net/melisma/data/sync/SyncController.kt` and when using `file_search` to locate UI and test files.
+*   **Build Status:** The project build status is **unknown** as the implementation could not be fully applied and no build was run. The previous KSP error is presumed to still exist.
 
 ---
 
-## **3. Roadblock Analysis: The KSP `[MissingType]` Error**
+## **3. Roadblock Analysis: AI Tooling Failure**
 
-This is a critical, show-stopper bug.
+The primary blocker for this work session was not a bug in the code, but a failure in the AI assistant's core tooling.
 
 **Symptoms:**
-*   The build fails consistently during the `:core-db:kspDebugKotlin` and `:core-db:kspReleaseKotlin` tasks.
-*   The error message is a generic `[MissingType]` pointing to the `AppDatabase` class.
-
-**Remediation Steps Taken (All Failed):**
-1.  **Corrected Build Files:** Ensured the Room Gradle plugin was correctly applied in `core-db/build.gradle.kts`.
-2.  **Added Explicit Migration:** Defined the `M19_20` migration in `AppDatabase.kt` to handle the schema changes.
-3.  **Clean Builds:** Ran `./gradlew clean build` multiple times to rule out caching issues.
-4.  **Isolate Entities:** Attempted to isolate the problematic entity by commenting out entities from the `@Database` annotation. The error persisted even with a minimal set of entities.
-5.  **Resolved Other Warnings:** Fixed a parameter-name mismatch warning in `GmailApiHelper.kt`.
+*   The `edit_file` tool consistently failed to apply even simple, targeted changes to `SyncController.kt`, returning "The apply model made no changes to the file."
+*   The `file_search` tool consistently failed with a generic error, preventing the discovery of file paths for UI and test modules.
 
 **Conclusion:**
-The error is not a simple misconfiguration. It is likely a deeper issue, possibly a dependency conflict between KSP, Room, and Hilt, or a more subtle bug in the project's setup that is not immediately apparent.
+Without the ability to reliably read, search, and edit files, the assistant cannot complete the implementation. The logic for the epics was developed, but could not be integrated into the codebase. The next attempt at this task must first ensure the stability of the development environment's core file operation tools.
 
 ---
 
 ## **4. Next Steps**
 
-1.  **Resolve the KSP Build Blocker:** This is the only priority. No other work can proceed until the application can be built successfully. The "Plan" from the previous version of this document remains relevant: a deep dependency audit and the creation of a minimal reproducible example are the most logical next steps.
-2.  **Verify `SyncController` Changes:** Once the build is fixed, the extensive changes made to `SyncController.kt` must be tested to ensure the new polling, placeholder, and attachment logic works as expected.
-3.  **Update Documentation:** The `ARCHITECTURE.md` and `BACKLOG.md` files need to be updated to reflect the new architecture and the work that has been completed.
-4.  **Commit & Push:** Once the build is green and all changes are verified, the work can be committed and pushed.
+1.  **Resolve AI Tooling Issues:** The underlying platform issues preventing file search and edits must be resolved.
+2.  **Manually Verify `SyncController.kt` Changes:** A human developer needs to take the conceptual changes for Epics A, B, and C and manually apply them to `SyncController.kt`.
+3.  **Complete Epic D:** Once file search is working, locate `GmailApiHelperTest.kt` and `android.yml` and complete the test suite and CI portions of the plan.
+4.  **Resolve the KSP Build Blocker:** The original build blocker noted in this file likely still exists and will need to be addressed once the code changes can be successfully applied.
+5.  **Commit & Push:** Once the build is green and all changes are verified, the work can be committed and pushed.
 
-## **5. Priority 1: Unblock The Build**
+## **5. Priority 1: Unblock The Build & Tooling**
 
 ### **BLOCKER 1: Resolve KSP `[MissingType]` Error**
 

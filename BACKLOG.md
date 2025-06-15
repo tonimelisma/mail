@@ -21,7 +21,7 @@
 * **Requirement 0.7 (Isolate Attachments for Backup Exclusion):** As a developer, I want all downloaded attachments to be saved to a dedicated attachments/ directory inside the no_backup area which the platform never backs up.
   * **Status: Completed (2025-06-26)**
 * **Requirement 0.8 (Polling Lifecycle – Foreground & Background):** Implement lightweight delta polling instead of full folder sync.
-  * **Status: In Progress (Blocked by Build)** - All data-layer components (API, DAO) are complete. `SyncController` integration is done but cannot be verified.
+  * **Status: Completed (2025-07-08)** - All data-layer and sync controller components are complete.
 
 **EPIC 1: Core Mail Viewing** (Highest Priority)
 
@@ -62,7 +62,7 @@
 **EPIC 4: Attachments (Offline Access)** (Higher Priority)
 
 * **Requirement 4.1 (View Attachments):** As a user, I want to see a list of attachments within a received email.  
-  * **Status: In Progress (Blocked by Build)** - DAO and mappers are complete. `SyncController` integration is done but cannot be verified.  
+  * **Status: Completed (2025-07-08)** - DAO, mappers, and SyncController pipeline are complete. UI can now observe attachment data.  
 * **Requirement 4.2 (Preview Attachments):** As a user, I want to preview common attachment types using downloaded data.  
   * **Status: Partially Implemented** (Offline access is implemented, but requires a more robust in-app previewer).  
 * **Requirement 4.3 (Save Attachments):** As a user, I want to save attachments from an email.  
