@@ -6,6 +6,7 @@ import timber.log.Timber
 import java.time.OffsetDateTime
 import java.time.ZoneOffset
 import java.time.format.DateTimeParseException
+import java.util.UUID
 
 // net.melisma.core_data.model.Message is now the enriched domain model
 
@@ -33,7 +34,7 @@ fun Message.toEntity(accountId: String): MessageEntity {
     }
 
     return MessageEntity(
-        id = this.id,
+        id = this.id.ifEmpty { UUID.randomUUID().toString() },
         messageId = this.remoteId,
         accountId = accountId,
         threadId = this.threadId,

@@ -9,8 +9,6 @@ class DefaultSyncAccountUseCase @Inject constructor(
 ) : SyncAccountUseCase {
     override suspend operator fun invoke(accountId: String): Result<Unit> {
         Timber.d("Invoked for accountId: $accountId")
-        // return accountRepository.syncAccount(accountId) // Actual call commented out for stub
-        return Result.success(Unit)
-        // Or return Result.failure(NotImplementedError("DefaultSyncAccountUseCase not implemented"))
+        return accountRepository.syncAccount(accountId)
     }
 } 

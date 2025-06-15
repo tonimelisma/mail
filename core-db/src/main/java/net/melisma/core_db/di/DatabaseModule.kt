@@ -15,7 +15,6 @@ import net.melisma.core_db.dao.FolderDao
 import net.melisma.core_db.dao.MessageBodyDao
 import net.melisma.core_db.dao.MessageDao
 import net.melisma.core_db.dao.PendingActionDao
-import net.melisma.core_db.dao.RemoteKeyDao
 import javax.inject.Singleton
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
@@ -78,12 +77,6 @@ object DatabaseModule {
     @Singleton
     fun provideAttachmentDao(appDatabase: AppDatabase): AttachmentDao {
         return appDatabase.attachmentDao()
-    }
-
-    @Provides
-    @Singleton
-    fun provideRemoteKeyDao(appDatabase: AppDatabase): RemoteKeyDao {
-        return appDatabase.remoteKeyDao()
     }
 
     @Provides

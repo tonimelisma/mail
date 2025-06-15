@@ -17,7 +17,6 @@ class DefaultSaveDraftUseCase @Inject constructor(
         Timber.d(
             "Invoked for accountId: $accountId, messageId: $messageId, draftDetails: $draftDetails"
         )
-        // return messageRepository.updateDraftMessage(accountId, messageId, draftDetails) // Actual call commented out for stub
-        return Result.failure(NotImplementedError("DefaultSaveDraftUseCase not implemented"))
+        return messageRepository.updateDraftMessage(accountId, messageId, draftDetails)
     }
 } 

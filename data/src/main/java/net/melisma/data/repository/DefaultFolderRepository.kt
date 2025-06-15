@@ -39,8 +39,6 @@ import timber.log.Timber
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
-import kotlin.coroutines.cancellation.CancellationException
-import kotlin.collections.mutableMapOf
 
 @Singleton
 class DefaultFolderRepository @Inject constructor(
@@ -52,7 +50,6 @@ class DefaultFolderRepository @Inject constructor(
 ) : FolderRepository {
 
     private val _folderStates = MutableStateFlow<Map<String, FolderFetchState>>(emptyMap())
-    private val syncJobs = ConcurrentHashMap<String, Job>()
 
     init {
         Timber.d("Initializing DefaultFolderRepository with DB support.")
@@ -90,24 +87,8 @@ class DefaultFolderRepository @Inject constructor(
                     }
                 }
                 .distinctUntilChanged()
-                .onEach { latestDbStatesAny ->
-                    @Suppress("UNCHECKED_CAST")
-                    val latestDbStates = latestDbStatesAny as Map<String, FolderFetchState>
-                    _folderStates.update { currentApiStates ->
-                        val mergedStates = mutableMapOf<String, FolderFetchState>().apply { putAll(latestDbStates) }
-                        currentApiStates.forEach { (accountId, state) ->
-                            if (state is FolderFetchState.Loading || state is FolderFetchState.Error) {
-                                if (syncJobs[accountId]?.isActive != true && latestDbStates[accountId] is FolderFetchState.Success) {
-                                    // Keep DB success
-                                } else {
-                                    mergedStates[accountId] = state
-                                }
-                            } else if (!mergedStates.containsKey(accountId)) {
-                                mergedStates[accountId] = state
-                            }
-                        }
-                        mergedStates
-                    }
+                .onEach { latestDbStates ->
+                    _folderStates.value = latestDbStates
                 }
                 .catch { e -> Timber.e(e, "Error in observeDatabaseChanges") }
                 .launchIn(this)
@@ -123,12 +104,10 @@ class DefaultFolderRepository @Inject constructor(
             val newApiAccountIds = accounts.map { it.id }.toSet()
 
             val removedAccountIds = currentDbAccountIds - newApiAccountIds
-            removedAccountIds.forEach { accountId ->
-                Timber.i("Removing account $accountId and cancelling its syncs.")
-                syncJobs[accountId]?.cancel(CancellationException("Account removed"))
-                syncJobs.remove(accountId)
-                folderDao.deleteAllFoldersForAccount(accountId)
-                _folderStates.update { it - accountId }
+            if (removedAccountIds.isNotEmpty()) {
+                Timber.i("Removing accounts: $removedAccountIds")
+                folderDao.deleteAllFoldersForAccounts(removedAccountIds.toList())
+                _folderStates.update { currentMap -> currentMap - removedAccountIds }
             }
 
             accounts.forEach { account ->

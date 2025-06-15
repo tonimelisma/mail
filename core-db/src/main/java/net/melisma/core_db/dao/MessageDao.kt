@@ -15,7 +15,6 @@ interface MessageDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertOrUpdateMessages(messages: List<MessageEntity>)
 
-    // TODO Phase-1F: re-implement with JOIN on message_folder_junction
     @Query("""
         SELECT m.* FROM messages AS m
         INNER JOIN message_folder_junction AS j ON m.id = j.messageId
@@ -24,7 +23,6 @@ interface MessageDao {
     """)
     fun getMessagesForFolder(accountId: String, folderId: String): Flow<List<MessageEntity>>
 
-    // TODO adjust logic after schema cut-over
     @Query("""
         DELETE FROM messages WHERE id IN (
             SELECT m.id FROM messages m

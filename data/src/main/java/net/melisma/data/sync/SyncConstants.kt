@@ -2,11 +2,10 @@ package net.melisma.data.sync.workers
 
 /**
  * Legacy constants previously defined in the ActionUploadWorker.  The actual upload logic has
- * moved into SyncController, but repository code still references these keys and action names.
- * Keeping them here avoids widespread refactors while we finish the migration away from
- * WorkManager.
+ * been moved into the SyncController, but these constants are still used to define
+ * the types and payloads of pending actions stored in the database.
  */
-object ActionUploadWorker {
+object SyncConstants {
     const val KEY_ACCOUNT_ID = "ACCOUNT_ID"
     const val KEY_ENTITY_ID = "ENTITY_ID"
     const val KEY_ACTION_TYPE = "ACTION_TYPE"
@@ -18,7 +17,7 @@ object ActionUploadWorker {
     const val KEY_OLD_FOLDER_ID = "oldFolderId"
     const val KEY_NEW_FOLDER_ID = "newFolderId"
 
-    const val ACTION_MARK_AS_READ = "MARK_AS_READ"
+    const val ACTION_MARK_AS_READ = "mark_as_read"
     const val ACTION_MARK_AS_UNREAD = "MARK_AS_UNREAD"
     const val ACTION_STAR_MESSAGE = "STAR_MESSAGE"
     const val ACTION_DELETE_MESSAGE = "DELETE_MESSAGE"

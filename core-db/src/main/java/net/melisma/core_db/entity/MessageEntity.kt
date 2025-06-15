@@ -20,7 +20,14 @@ import net.melisma.core_data.model.EntitySyncStatus
     indices = [
         Index(value = ["accountId"]),
         Index(value = ["threadId"]),
-        Index(value = ["timestamp"])
+        Index(value = ["timestamp"]),
+        Index(value = ["isRead"]),
+        Index(value = ["isStarred"]),
+        Index(value = ["syncStatus"]),
+        Index(value = ["lastAccessedTimestamp"]),
+        // Composite index for unified inbox filtering
+        Index(value = ["accountId", "isRead"]),
+        Index(value = ["accountId", "isStarred"])
     ]
 )
 data class MessageEntity(

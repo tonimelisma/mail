@@ -26,10 +26,7 @@ sealed class SyncJob(open val accountId: String, val priority: Int) :
 
     // Level 2: Fulfilling User Intent - Uploading user-generated changes.
     data class UploadAction(
-        override val accountId: String,
-        val actionType: String,
-        val entityId: String,
-        val payload: Map<String, String?> = emptyMap()
+        override val accountId: String
     ) : SyncJob(accountId, 75)
 
     // Level 4: Background Freshness & Backfill - Opportunistic, battery-conscious syncing.

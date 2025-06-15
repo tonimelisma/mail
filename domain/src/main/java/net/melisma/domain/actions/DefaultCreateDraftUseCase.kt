@@ -16,7 +16,6 @@ class DefaultCreateDraftUseCase @Inject constructor(
         Timber.d(
             "Invoked for accountId: $accountId, draftDetails: $draftDetails"
         )
-        // return messageRepository.createDraftMessage(accountId, draftDetails) // Actual call commented out for stub
-        return Result.failure(NotImplementedError("DefaultCreateDraftUseCase not implemented"))
+        return messageRepository.createDraftMessage(accountId, draftDetails)
     }
 } 

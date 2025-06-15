@@ -30,7 +30,7 @@ import net.melisma.core_db.dao.MessageDao
 import net.melisma.core_db.entity.MessageEntity
 import net.melisma.data.mapper.toDomainModel
 import net.melisma.data.sync.SyncController
-import net.melisma.data.sync.workers.ActionUploadWorker
+import net.melisma.data.sync.SyncConstants
 import net.melisma.core_data.model.SyncJob
 import net.melisma.core_db.dao.PendingActionDao
 import net.melisma.core_db.entity.PendingActionEntity
@@ -72,7 +72,7 @@ class DefaultThreadRepository @Inject constructor(
 
     init {
         Timber.d(
-            "Initializing DefaultThreadRepository. Injected maps: mailApiServices keys: ${mailApiServices.keys}, errorMappers keys: ${errorMappers.keys}"
+            "Initializing DefaultThreadRepository."
         )
     }
 
@@ -82,16 +82,8 @@ class DefaultThreadRepository @Inject constructor(
         activityForRefresh: Activity?
     ) {
         Timber.d(
-            "setTargetFolderForThreads: Account=${account?.emailAddress}, Folder=${folder?.displayName}, collectionJob Active: ${collectionJob?.isActive}, networkJob Active: ${networkFetchJob?.isActive}"
+            "setTargetFolderForThreads: Account=${account?.emailAddress}, Folder=${folder?.displayName}"
         )
-
-        if (account?.id == currentTargetAccount?.id && folder?.id == currentTargetFolder?.id && _threadDataState.value !is ThreadDataState.Initial) {
-            Timber.d("setTargetFolderForThreads: Same target. If data is already loaded, not forcing reload unless refreshThreads() is called.")
-            if (_threadDataState.value is ThreadDataState.Success) {
-                ensureNetworkFetch(account!!, folder!!, isExplicitRefresh = false, isBackgroundCheck = true)
-            }
-            return
-        }
 
         collectionJob?.cancel(CancellationException("New target folder set for threads: ${folder?.displayName}"))
         networkFetchJob?.cancel(CancellationException("New target folder set for threads: ${folder?.displayName}, cancelling network job too"))
@@ -125,34 +117,13 @@ class DefaultThreadRepository @Inject constructor(
                 }
                 .collectLatest { mailThreads ->
                     Timber.i("[${currentFolder.displayName}] Successfully grouped ${mailThreads.size} MailThreads from DB. Emitting Success.")
-                    if (mailThreads.isNotEmpty() || networkFetchJob?.isActive != true) {
-                        _threadDataState.value = ThreadDataState.Success(mailThreads)
-                    } else if (_threadDataState.value !is ThreadDataState.Loading && mailThreads.isEmpty()) {
-                        _threadDataState.value = ThreadDataState.Success(mailThreads)
+                    _threadDataState.value = ThreadDataState.Success(mailThreads)
+                    // Initial data load might need a sync.
+                    if (mailThreads.isEmpty()) {
+                        syncController.submit(SyncJob.ForceRefreshFolder(currentFolder.id, currentAccount.id))
                     }
-                    // Use the local, non-null shadowed variables currentAccount and currentFolder
-                    ensureNetworkFetch(
-                        currentAccount,
-                        currentFolder,
-                        isExplicitRefresh = false,
-                        isBackgroundCheck = false
-                    )
                 }
         }
-    }
-
-    private fun ensureNetworkFetch(
-        account: Account,
-        folder: MailFolder,
-        isExplicitRefresh: Boolean,
-        isBackgroundCheck: Boolean
-    ) {
-        if (networkFetchJob?.isActive == true) {
-            Timber.d("[${folder.displayName}] Network fetch job already active. Skipping duplicate call.")
-            return
-        }
-        Timber.d("[${folder.displayName}] Ensuring network fetch. Explicit: $isExplicitRefresh, Background: $isBackgroundCheck")
-        syncController.submit(SyncJob.ForceRefreshFolder(folder.id, account.id))
     }
 
     override suspend fun refreshThreads(activity: Activity?) {
@@ -166,16 +137,6 @@ class DefaultThreadRepository @Inject constructor(
         Timber.d("refreshThreads called for folder: ${folder.displayName}, Account: ${account.emailAddress}")
 
         syncController.submit(SyncJob.ForceRefreshFolder(folder.id, account.id))
-    }
-
-    private fun launchThreadFetchJobInternal(
-        account: Account,
-        folder: MailFolder,
-        isRefresh: Boolean
-    ): Job {
-        // This entire method should be removed as its functionality is replaced by SyncEngine
-        Timber.w("[${folder.displayName}] launchThreadFetchJobInternal was called but should be DEPRECATED. Sync is handled by SyncEngine.")
-        return Job().apply { complete() } // Return a completed dummy job
     }
 
     private fun groupAndMapMessagesToMailThreads(
@@ -238,25 +199,14 @@ class DefaultThreadRepository @Inject constructor(
                 Timber.i("$TAG: Optimistically updated isRead=$isRead for ${messageIds.size} messages in thread $threadId")
             }
 
-            val actionType = if (isRead) {
-                ActionUploadWorker.ACTION_MARK_THREAD_AS_READ
-            } else {
-                ActionUploadWorker.ACTION_MARK_THREAD_AS_UNREAD
-            }
+            val actionType = if (isRead) SyncConstants.ACTION_MARK_THREAD_AS_READ else SyncConstants.ACTION_MARK_THREAD_AS_UNREAD
+            queuePendingAction(account.id, threadId, actionType, mapOf(SyncConstants.KEY_IS_READ to isRead.toString()))
+            syncController.submit(SyncJob.UploadAction(account.id))
 
-            queuePendingAction(account.id, threadId, actionType, mapOf(ActionUploadWorker.KEY_IS_READ to isRead.toString()))
-            syncController.submit(
-                SyncJob.UploadAction(
-                    accountId = account.id,
-                    actionType = actionType,
-                    entityId = threadId,
-                    payload = mapOf(ActionUploadWorker.KEY_IS_READ to isRead.toString())
-                )
-            )
-            return Result.success(Unit)
+            Result.success(Unit)
         } catch (e: Exception) {
-            Timber.e(e, "$TAG: Error in markThreadRead for threadId $threadId")
-            return Result.failure(e)
+            Timber.e(e, "Failed to mark thread $threadId as read=$isRead")
+            Result.failure(e)
         }
     }
 
@@ -265,66 +215,45 @@ class DefaultThreadRepository @Inject constructor(
         try {
             appDatabase.withTransaction {
                 val messageIds = messageDao.getMessageIdsByThreadId(threadId)
-                if (messageIds.isEmpty()) {
-                    Timber.w("$TAG: No messages found for threadId $threadId to delete.")
-                }
-                messageDao.markMessagesAsLocallyDeleted(messageIds)
-                Timber.i("$TAG: Optimistically marked ${messageIds.size} messages in thread $threadId as locally deleted.")
+                messageDao.setSyncStatusForMessages(messageIds, EntitySyncStatus.PENDING_DELETE)
+                Timber.i("$TAG: Optimistically marked ${messageIds.size} messages in thread $threadId for deletion.")
             }
 
-            queuePendingAction(account.id, threadId, ActionUploadWorker.ACTION_DELETE_THREAD, emptyMap())
-            syncController.submit(
-                SyncJob.UploadAction(
-                    accountId = account.id,
-                    actionType = ActionUploadWorker.ACTION_DELETE_THREAD,
-                    entityId = threadId,
-                    payload = emptyMap()
-                )
-            )
+            queuePendingAction(account.id, threadId, SyncConstants.ACTION_DELETE_THREAD)
+            syncController.submit(SyncJob.UploadAction(account.id))
 
-            return Result.success(Unit)
+            Result.success(Unit)
         } catch (e: Exception) {
-            Timber.e(e, "$TAG: Error deleting thread $threadId")
-            return Result.failure(e)
+            Timber.e(e, "Failed to delete thread $threadId")
+            Result.failure(e)
         }
     }
 
     override suspend fun moveThread(
         account: Account,
         threadId: String,
-        currentFolderId: String,
-        destinationFolderId: String
+        newFolderId: String,
+        currentFolderId: String
     ): Result<Unit> {
-        Timber.d("moveThread: threadId=$threadId, newFolderId=$destinationFolderId, account=${account.id}")
+        Timber.d("moveThread: threadId=$threadId, newFolderId=$newFolderId, account=${account.id}")
         try {
             appDatabase.withTransaction {
-                val messageIds = messageDao.getMessageIdsByThreadIdAndFolder(threadId, currentFolderId)
-                if (messageIds.isEmpty()) {
-                    Timber.w("$TAG: No messages found for threadId $threadId in folder $currentFolderId for account ${account.id} to move.")
-                } else {
-                    messageDao.updateFolderIdForMessages(messageIds, destinationFolderId)
-                    Timber.i("$TAG: Optimistically moved ${messageIds.size} messages in thread $threadId to folder $destinationFolderId.")
-                }
+                val messageIds = messageDao.getMessageIdsByThreadId(threadId)
+                messageDao.replaceFolderForMessages(messageIds, newFolderId)
+                Timber.i("$TAG: Optimistically moved ${messageIds.size} messages in thread $threadId to folder $newFolderId")
             }
 
-            val payloadMove = mapOf(
-                ActionUploadWorker.KEY_NEW_FOLDER_ID to destinationFolderId,
-                ActionUploadWorker.KEY_OLD_FOLDER_ID to currentFolderId
+            val payload = mapOf(
+                SyncConstants.KEY_NEW_FOLDER_ID to newFolderId,
+                SyncConstants.KEY_OLD_FOLDER_ID to currentFolderId
             )
-            queuePendingAction(account.id, threadId, ActionUploadWorker.ACTION_MOVE_THREAD, payloadMove)
-            syncController.submit(
-                SyncJob.UploadAction(
-                    accountId = account.id,
-                    actionType = ActionUploadWorker.ACTION_MOVE_THREAD,
-                    entityId = threadId,
-                    payload = payloadMove
-                )
-            )
+            queuePendingAction(account.id, threadId, SyncConstants.ACTION_MOVE_THREAD, payload)
+            syncController.submit(SyncJob.UploadAction(account.id))
 
-            return Result.success(Unit)
+            Result.success(Unit)
         } catch (e: Exception) {
-            Timber.e(e, "$TAG: Error moving thread $threadId to folder $destinationFolderId")
-            return Result.failure(e)
+            Timber.e(e, "Failed to move thread $threadId")
+            Result.failure(e)
         }
     }
 

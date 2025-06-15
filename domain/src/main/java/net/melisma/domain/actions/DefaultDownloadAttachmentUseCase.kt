@@ -3,6 +3,8 @@ package net.melisma.domain.actions
 import net.melisma.core_data.repository.MessageRepository
 import timber.log.Timber
 import javax.inject.Inject
+import kotlinx.coroutines.flow.Flow
+import net.melisma.core_data.model.Attachment
 
 class DefaultDownloadAttachmentUseCase @Inject constructor(
     private val messageRepository: MessageRepository
@@ -10,12 +12,11 @@ class DefaultDownloadAttachmentUseCase @Inject constructor(
     override suspend operator fun invoke(
         accountId: String,
         messageId: String,
-        attachmentId: String
-    ): Result<ByteArray> {
+        attachment: Attachment
+    ): Flow<String?> {
         Timber.d(
-            "Invoked for accountId: $accountId, messageId: $messageId, attachmentId: $attachmentId"
+            "Invoked for accountId: $accountId, messageId: $messageId, attachmentId: ${attachment.id}"
         )
-        // return messageRepository.downloadAttachment(accountId, messageId, attachmentId) // Actual call commented out for stub
-        return Result.failure(NotImplementedError("DefaultDownloadAttachmentUseCase not implemented"))
+        return messageRepository.downloadAttachment(accountId, messageId, attachment)
     }
 } 

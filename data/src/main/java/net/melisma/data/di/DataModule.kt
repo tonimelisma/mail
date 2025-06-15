@@ -54,8 +54,4 @@ abstract class DataModule {
     @Binds
     @Singleton
     abstract fun bindThreadRepository(impl: DefaultThreadRepository): ThreadRepository
-
-    @Binds
-    @Singleton
-    abstract fun bindMailApiServiceSelector(impl: DefaultMailApiServiceSelector): MailApiServiceSelector
 }

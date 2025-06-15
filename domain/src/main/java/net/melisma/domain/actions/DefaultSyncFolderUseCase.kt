@@ -9,8 +9,6 @@ class DefaultSyncFolderUseCase @Inject constructor(
 ) : SyncFolderUseCase {
     override suspend operator fun invoke(accountId: String, folderId: String): Result<Unit> {
         Timber.d("Invoked for accountId: $accountId, folderId: $folderId")
-        // return folderRepository.syncFolderContents(accountId, folderId) // Actual call commented out for stub
-        return Result.success(Unit)
-        // Or return Result.failure(NotImplementedError("DefaultSyncFolderUseCase not implemented"))
+        return folderRepository.syncFolderContents(accountId, folderId)
     }
 } 

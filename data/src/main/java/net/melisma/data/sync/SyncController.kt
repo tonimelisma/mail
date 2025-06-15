@@ -30,9 +30,12 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.decodeFromString
 import net.melisma.core_data.model.MessageDraft
 import net.melisma.core_db.model.PendingActionStatus
-import net.melisma.data.sync.workers.ActionUploadWorker
+import net.melisma.data.sync.SyncConstants
 import androidx.core.content.ContextCompat
 import android.content.Intent
+import net.melisma.core_data.repository.AccountRepository
+import net.melisma.core_data.repository.FolderRepository
+import net.melisma.core_data.datasource.MailApiServiceFactory
 
 @Singleton
 class SyncController @Inject constructor(
@@ -41,10 +44,12 @@ class SyncController @Inject constructor(
     private val queue: PriorityBlockingQueue<SyncJob>,
     private val networkMonitor: NetworkMonitor,
     private val userPreferencesRepository: UserPreferencesRepository,
-    private val mailApiServiceSelector: net.melisma.core_data.datasource.MailApiServiceSelector,
+    private val mailApiServiceFactory: MailApiServiceFactory,
     private val appDatabase: net.melisma.core_db.AppDatabase,
     @net.melisma.core_data.di.Dispatcher(net.melisma.core_data.di.MailDispatchers.IO)
-    private val ioDispatcher: kotlinx.coroutines.CoroutineDispatcher
+    private val ioDispatcher: kotlinx.coroutines.CoroutineDispatcher,
+    private val accountRepository: AccountRepository,
+    private val folderRepository: FolderRepository
 ) {
 
     private val _status = MutableStateFlow(SyncControllerStatus())
@@ -56,7 +61,14 @@ class SyncController @Inject constructor(
 
     private val ACTIVE_POLL_INTERVAL_MS = 5_000L
 
+    private val PASSIVE_POLL_INTERVAL_MS = 15 * 60 * 1000L // 15 minutes
+
     private val activeAccounts = ConcurrentHashMap.newKeySet<String>()
+
+    companion object {
+        private const val BASE_RETRY_DELAY_MS = 10_000L // 10 seconds
+        private const val MAX_RETRY_JITTER_MS = 2_000L // 2 seconds
+    }
 
     init {
         externalScope.launch {
@@ -158,7 +170,7 @@ class SyncController @Inject constructor(
     }
 
     private suspend fun processFetchHeaders(folderId: String, pageToken: String?, accountId: String) {
-        val service = mailApiServiceSelector.getServiceByAccountId(accountId) ?: run {
+        val service = mailApiServiceFactory.create(accountId) ?: run {
             Timber.w("MailApiService not found for account $accountId")
             return
         }
@@ -250,7 +262,7 @@ class SyncController @Inject constructor(
 
             folderDao.updateSyncStatus(job.folderId, EntitySyncStatus.PENDING_DOWNLOAD)
 
-            val service = mailApiServiceSelector.getServiceByAccountId(job.accountId) ?: run {
+            val service = mailApiServiceFactory.create(job.accountId) ?: run {
                 Timber.w("MailApiService not found for account ${job.accountId}")
                 return@withContext
             }
@@ -303,50 +315,28 @@ class SyncController @Inject constructor(
      * If already active, subsequent calls are ignored.
      */
     fun startActivePolling() {
-        if (pollingJob?.isActive == true) {
-            return
-        }
-        Timber.d("SyncController: Starting active polling interval of $ACTIVE_POLL_INTERVAL_MS ms")
-        pollingJob = externalScope.launch(ioDispatcher) {
+        stopActivePolling() // Ensure no multiple pollers
+        pollingJob = externalScope.launch {
             while (isActive) {
+                Timber.d("Active polling tick")
                 try {
-                    // Skip if device is offline
-                    if (!networkMonitor.isOnline.first()) {
-                        kotlinx.coroutines.delay(ACTIVE_POLL_INTERVAL_MS)
-                        continue
-                    }
-
-                    val accounts = appDatabase.accountDao().getAllAccounts().firstOrNull() ?: emptyList()
-                    accounts.forEach { accountEntity ->
-                        val inboxFolder = appDatabase.folderDao()
-                            .getFolderByWellKnownTypeSuspend(
-                                accountEntity.id,
-                                net.melisma.core_data.model.WellKnownFolderType.INBOX
-                            )
-                        if (inboxFolder != null) {
-                            submit(
-                                net.melisma.core_data.model.SyncJob.FetchMessageHeaders(
-                                    folderId = inboxFolder.id,
-                                    pageToken = null,
-                                    accountId = accountEntity.id
-                                )
-                            )
-                        }
+                    val accounts = accountRepository.getAccounts().first()
+                    accounts.forEach { account ->
+                        // More efficient: just trigger a folder list sync.
+                        // The controller can then decide what to do next based on delta.
+                        submit(SyncJob.SyncFolderList(account.id))
                     }
                 } catch (e: Exception) {
-                    Timber.e(e, "Error during active polling tick")
+                    Timber.e(e, "Error during active polling")
                 }
-                kotlinx.coroutines.delay(ACTIVE_POLL_INTERVAL_MS)
+                delay(ACTIVE_POLL_INTERVAL_MS)
             }
         }
     }
 
     /** Stops the foreground polling ticker, if running. */
     fun stopActivePolling() {
-        if (pollingJob?.isActive == true) {
-            Timber.d("SyncController: Stopping active polling")
-            pollingJob?.cancel()
-        }
+        pollingJob?.cancel()
         pollingJob = null
     }
 
@@ -366,7 +356,7 @@ class SyncController @Inject constructor(
                 maybeStartInitialSyncService()
             }
 
-            val service = mailApiServiceSelector.getServiceByAccountId(job.accountId) ?: run {
+            val service = mailApiServiceFactory.create(job.accountId) ?: run {
                 Timber.w("MailApiService not found for account ${job.accountId}")
                 return@withContext
             }
@@ -520,6 +510,10 @@ class SyncController @Inject constructor(
             val action = pendingActionDao.getNextActionForAccount(job.accountId)
             if (action == null) {
                 Timber.d("No pending actions for account ${job.accountId}")
+                // If this job was triggered by a failure, clear any related error state
+                if (_status.value.error?.startsWith("Failed action") == true) {
+                    _status.update { it.copy(error = null) }
+                }
                 return@withContext
             }
 
@@ -530,59 +524,64 @@ class SyncController @Inject constructor(
 
             // Helper to update retry / failed state
             suspend fun markFailure(reason: String?) {
+                val isPermanentFailure = action.attemptCount + 1 >= action.maxAttempts
+                val newStatus = if (isPermanentFailure) PendingActionStatus.FAILED else PendingActionStatus.RETRY
                 val updated = action.copy(
-                    status = if (action.attemptCount + 1 >= action.maxAttempts) PendingActionStatus.FAILED else PendingActionStatus.RETRY,
+                    status = newStatus,
                     lastAttemptAt = System.currentTimeMillis(),
                     lastError = reason,
                     attemptCount = action.attemptCount + 1
                 )
                 pendingActionDao.updateAction(updated)
+                // Surface the error to the UI
+                val errorMessage = "Failed action: ${action.actionType} for ${action.entityId}. Reason: $reason"
+                _status.update { it.copy(error = errorMessage, isSyncing = !isPermanentFailure) }
             }
 
             try {
                 val resultSuccessful: Boolean = when (action.actionType) {
-                    ActionUploadWorker.ACTION_MARK_AS_READ -> {
+                    SyncConstants.ACTION_MARK_AS_READ -> {
                         service.markMessageRead(action.entityId, true).isSuccess
                     }
 
-                    ActionUploadWorker.ACTION_MARK_AS_UNREAD -> {
+                    SyncConstants.ACTION_MARK_AS_UNREAD -> {
                         service.markMessageRead(action.entityId, false).isSuccess
                     }
 
-                    ActionUploadWorker.ACTION_STAR_MESSAGE -> {
-                        val isStarred = action.payload[ActionUploadWorker.KEY_IS_STARRED]?.toBoolean() ?: true
+                    SyncConstants.ACTION_STAR_MESSAGE -> {
+                        val isStarred = action.payload[SyncConstants.KEY_IS_STARRED]?.toBoolean() ?: true
                         service.starMessage(action.entityId, isStarred).isSuccess
                     }
 
-                    ActionUploadWorker.ACTION_DELETE_MESSAGE -> {
+                    SyncConstants.ACTION_DELETE_MESSAGE -> {
                         service.deleteMessage(action.entityId).isSuccess.also { ok ->
                             if (ok) messageDao.deleteMessageById(action.entityId)
                         }
                     }
 
-                    ActionUploadWorker.ACTION_MOVE_MESSAGE -> {
-                        val oldFolder = action.payload[ActionUploadWorker.KEY_OLD_FOLDER_ID]
-                        val newFolder = action.payload[ActionUploadWorker.KEY_NEW_FOLDER_ID]
+                    SyncConstants.ACTION_MOVE_MESSAGE -> {
+                        val oldFolder = action.payload[SyncConstants.KEY_OLD_FOLDER_ID]
+                        val newFolder = action.payload[SyncConstants.KEY_NEW_FOLDER_ID]
                         if (oldFolder == null || newFolder == null) false else service.moveMessage(action.entityId, oldFolder, newFolder).isSuccess
                     }
 
-                    ActionUploadWorker.ACTION_MARK_THREAD_AS_READ -> {
+                    SyncConstants.ACTION_MARK_THREAD_AS_READ -> {
                         service.markThreadRead(action.entityId, true).isSuccess
                     }
-                    ActionUploadWorker.ACTION_MARK_THREAD_AS_UNREAD -> {
+                    SyncConstants.ACTION_MARK_THREAD_AS_UNREAD -> {
                         service.markThreadRead(action.entityId, false).isSuccess
                     }
-                    ActionUploadWorker.ACTION_DELETE_THREAD -> {
+                    SyncConstants.ACTION_DELETE_THREAD -> {
                         service.deleteThread(action.entityId).isSuccess
                     }
-                    ActionUploadWorker.ACTION_MOVE_THREAD -> {
-                        val oldFolder = action.payload[ActionUploadWorker.KEY_OLD_FOLDER_ID]
-                        val newFolder = action.payload[ActionUploadWorker.KEY_NEW_FOLDER_ID]
+                    SyncConstants.ACTION_MOVE_THREAD -> {
+                        val oldFolder = action.payload[SyncConstants.KEY_OLD_FOLDER_ID]
+                        val newFolder = action.payload[SyncConstants.KEY_NEW_FOLDER_ID]
                         if (oldFolder == null || newFolder == null) false else service.moveThread(action.entityId, oldFolder, newFolder).isSuccess
                     }
 
-                    ActionUploadWorker.ACTION_SEND_MESSAGE -> {
-                        val draftJson = action.payload[ActionUploadWorker.KEY_DRAFT_DETAILS]
+                    SyncConstants.ACTION_SEND_MESSAGE -> {
+                        val draftJson = action.payload[SyncConstants.KEY_DRAFT_DETAILS]
                         val draft = draftJson?.let { Json.decodeFromString<MessageDraft>(it) }
                         if (draft == null) {
                             false
@@ -604,14 +603,14 @@ class SyncController @Inject constructor(
                         }
                     }
 
-                    ActionUploadWorker.ACTION_CREATE_DRAFT -> {
-                        val draftJson = action.payload[ActionUploadWorker.KEY_DRAFT_DETAILS]
+                    SyncConstants.ACTION_CREATE_DRAFT -> {
+                        val draftJson = action.payload[SyncConstants.KEY_DRAFT_DETAILS]
                         val draft = draftJson?.let { Json.decodeFromString<MessageDraft>(it) }
                         if (draft == null) false else service.createDraftMessage(draft).isSuccess
                     }
 
-                    ActionUploadWorker.ACTION_UPDATE_DRAFT -> {
-                        val draftJson = action.payload[ActionUploadWorker.KEY_DRAFT_DETAILS]
+                    SyncConstants.ACTION_UPDATE_DRAFT -> {
+                        val draftJson = action.payload[SyncConstants.KEY_DRAFT_DETAILS]
                         val draft = draftJson?.let { Json.decodeFromString<MessageDraft>(it) }
                         if (draft == null) false else service.updateDraftMessage(action.entityId, draft).isSuccess
                     }
@@ -625,6 +624,10 @@ class SyncController @Inject constructor(
                 if (resultSuccessful) {
                     pendingActionDao.deleteActionById(action.id)
                     Timber.i("Successfully processed pending action ${action.id} (${action.actionType})")
+                    // Clear any previous error message for this action type
+                    if (_status.value.error?.contains(action.actionType) == true) {
+                         _status.update { it.copy(error = null) }
+                    }
                 } else {
                     Timber.w("Processing of pending action ${action.id} failed – will retry later")
                     markFailure("API error or invalid parameters")
@@ -637,6 +640,13 @@ class SyncController @Inject constructor(
             // If more actions remain, enqueue another UploadAction job for this account
             val another = pendingActionDao.getNextActionForAccount(job.accountId)
             if (another != null) {
+                // If the action we just processed failed and is now in RETRY, apply backoff delay
+                if (another.id == action.id && another.status == PendingActionStatus.RETRY) {
+                    val delayMs = BASE_RETRY_DELAY_MS * (1L shl (another.attemptCount - 1).coerceAtMost(5)) +
+                            (Math.random() * MAX_RETRY_JITTER_MS).toLong()
+                    Timber.i("Action ${action.id} failed, backing off for ${delayMs}ms before next attempt.")
+                    delay(delayMs)
+                }
                 submit(SyncJob.UploadAction(job.accountId, another.actionType, another.entityId, another.payload))
             }
         }
@@ -755,28 +765,19 @@ class SyncController @Inject constructor(
 
     // Passive background polling coroutine
     fun startPassivePolling() {
-        if (passivePollingJob?.isActive == true) return
+        stopPassivePolling()
         passivePollingJob = externalScope.launch {
             while (isActive) {
-                delay(java.util.concurrent.TimeUnit.MINUTES.toMillis(15))
-                // For each account's Inbox submit FetchMessageHeaders and EvictFromCache
-                val accountDao = appDatabase.accountDao()
-                val folderDao = appDatabase.folderDao()
-                val accounts = accountDao.getAllAccounts().first()
-                accounts.forEach { acc ->
-                    val inboxFolder = folderDao.getFolderByWellKnownTypeSuspend(acc.id, net.melisma.core_data.model.WellKnownFolderType.INBOX)
-                    inboxFolder?.let { folder ->
-                        submit(
-                            SyncJob.FetchMessageHeaders(
-                                folderId = folder.id,
-                                pageToken = null,
-                                accountId = acc.id
-                            )
-                        )
+                Timber.d("Passive polling tick")
+                try {
+                    val accounts = accountRepository.getAccounts().first()
+                    accounts.forEach { account ->
+                         submit(SyncJob.SyncFolderList(account.id))
                     }
-                    // Always queue a cache-eviction job as part of passive housekeeping
-                    submit(SyncJob.EvictFromCache(acc.id))
+                } catch (e: Exception) {
+                    Timber.e(e, "Error during passive polling")
                 }
+                delay(PASSIVE_POLL_INTERVAL_MS)
             }
         }
     }

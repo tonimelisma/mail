@@ -37,7 +37,7 @@ fun IAccount.toDomainAccount(): Account {
         // It's usually determined by a failed token attempt (MsalUiRequiredException).
         // For now, default to false. The repository or manager should handle logic
         // to update this based on auth outcomes.
-        needsReauthentication = false // TODO: Determine this state more accurately
+        needsReauthentication = false
     )
 }
 
@@ -55,6 +55,33 @@ fun List<IAccount>.toDomainAccounts(): List<Account> {
 //         id = this.iAccount.id ?: this.iAccount.homeAccountId.identifier ?: "",
 //         username = this.displayName ?: this.iAccount.username ?: "Unknown User",
 //         providerType = Account.PROVIDER_TYPE_MS,
-//         needsReauthentication = false // TODO: Determine this
+//         needsReauthentication = false
 //     )
-// } 
+// }
+
+fun MicrosoftAccount.toEntity(): AccountEntity {
+    return AccountEntity(
+        id = this.localAccountId,
+        remoteId = this.homeAccountId.identifier,
+        emailAddress = this.username,
+        displayName = this.name,
+        accountType = "MICROSOFT",
+        idToken = null, // Not typically stored long-term
+        lastUsedTimestamp = System.currentTimeMillis(),
+        isLocalOnly = false,
+        needsReauthentication = false
+    )
+}
+
+fun MicrosoftAccount.toDomain(): Account {
+    return Account(
+        id = this.id,
+        emailAddress = this.emailAddress,
+        displayName = this.displayName,
+        accountType = this.accountType,
+        latestAuthState = AuthState.AUTHENTICATED, // If it's in the DB, it's authenticated
+        lastUsedTimestamp = this.lastUsedTimestamp,
+        isLocalOnly = this.isLocalOnly,
+        needsReauthentication = this.needsReauthentication
+    )
+} 

@@ -44,6 +44,7 @@ import net.melisma.core_data.repository.MessageRepository
 import net.melisma.core_data.repository.OverallApplicationAuthState
 import net.melisma.core_data.repository.ThreadRepository
 import net.melisma.data.repository.DefaultAccountRepository
+import net.melisma.domain.actions.SyncFolderUseCase
 import timber.log.Timber
 import javax.inject.Inject
 
@@ -105,7 +106,8 @@ class MainViewModel @Inject constructor(
     private val folderRepository: FolderRepository,
     private val messageRepository: MessageRepository,
     private val threadRepository: ThreadRepository,
-    private val userPreferencesRepository: UserPreferencesRepository
+    private val userPreferencesRepository: UserPreferencesRepository,
+    private val syncFolderUseCase: SyncFolderUseCase
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(MainScreenState())
     val uiState: StateFlow<MainScreenState> = _uiState.asStateFlow()
@@ -179,10 +181,6 @@ class MainViewModel @Inject constructor(
                     "AccountRepo Accounts list changed. New: ${newAccountList.size} (${newAccountList.joinToString { it.emailAddress }}), Previous: ${previousAccountIds.size}. Selected Acc ID: $previousSelectedAccountId. Selected Folder: ${_uiState.value.selectedFolder?.displayName}"
                 )
 
-                folderRepository.manageObservedAccounts(newAccountList) // This repository method should internally use SyncEngine to sync folder lists if they are missing/stale for any account in newAccountList.
-
-                // If the account list is empty we may want to trigger a metadata refresh in a future background job.
-
                 val newAccountIds = newAccountList.map { it.id }.toSet()
                 val removedAccountIds = previousAccountIds - newAccountIds
 
@@ -200,8 +198,6 @@ class MainViewModel @Inject constructor(
                 _uiState.update { currentState ->
                     if (shouldClearSelectedFolder) {
                         viewModelScope.launch { // Launch for repository calls
-                            messageRepository.setTargetFolder(null, null)
-                            threadRepository.setTargetFolderForThreads(null, null, null)
                             _messagesPagerFlow.value = emptyFlow()
                             Timber.d("Cleared _messagesPagerFlow due to account removal or all accounts gone.")
                         }
@@ -1011,6 +1007,39 @@ class MainViewModel @Inject constructor(
     companion object {
         /** Special pseudo-folder ID representing "All Inboxes" */
         const val UNIFIED_INBOX_ID = "UNIFIED-INBOX"
+    }
+
+    fun onRefresh() {
+        val accountId = _uiState.value.selectedFolderAccountId
+        val folderId = _uiState.value.selectedFolder?.id
+        if (accountId != null && folderId != null) {
+            viewModelScope.launch {
+                syncFolderUseCase(accountId, folderId)
+            }
+        }
+    }
+
+    fun onToastMessageShown() {
+        val selectedAccountId = _uiState.value.selectedFolderAccountId
+        val selectedFolderId = _uiState.value.selectedFolder?.id
+
+        if (selectedAccountId == account.id && selectedFolderId == folder.id) {
+            return
+        }
+
+        Timber.d("onFolderSelected: New selection: Account=${account.emailAddress}, Folder=${folder.displayName}. Current view mode: ${_uiState.value.currentViewMode}")
+
+        _uiState.update {
+            it.copy(
+                selectedFolderAccountId = account.id,
+                selectedFolder = folder
+            )
+        }
+        updatePagers()
+    }
+
+    fun onAddAccountClicked(activity: Activity) {
+        // ... existing code ...
     }
 }
 

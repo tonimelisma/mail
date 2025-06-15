@@ -1,16 +1,18 @@
-Read @SYNCVISION.md, @SYNCPLAN.md, @SYNCLOG.md, @BACKLOG.md and@ARCHITECTURE.md. What would be the next best working increment we should implement? Do we need to fix some tech debt or move forward with new functionality? Let's make it a significant amount of work. You can do large increments at once.
+Our intern attempted to implement @SYNCPLAN.md to fulfill @SYNCVISION.md. Their log is @SYNCLOG.md. For background see @BACKLOG.md and @ARCHITECTURE.md 
 
-1. Define a REALLY LARGE increment of work to do next. Should you tackle tech debt or implement new functionality to move towards the vision, or maybe a mix of both? Explain clearly the body of work you seek to accomplish and the outcomes.
+Your job is to top up their work and fix all the remaining bugs. You need to complete the refactoring. You need to implement @FIX.md.
+
+1. Explain all of the work that needs to happen to successfully accomplish the FIX.md plan. Explain clearly the body of work you seek to accomplish and the outcomes.
 2. Don't trust the markdown documents. Read the code as it is today on disk to understand its state and reason about it.
 3. Create a detailed plan, step by step on changes needed. Show it to me.
 4. Where are the soft spots in your analysis? Enumerate them to me.
 5. Read the rest of the files on disk required to harden the soft spots. Ensure you know each and every API that will be affected by your changes and have read the actual files on disk and know them before moving to the next step.
 6. Implement the required changes.
 7. Build and fix any build errors.
-8. What do SYNCLOG.md, SYNCPLAN.md, SYNCVISION.md, ARCHITECTURE.md and BACKLOG.md each do? Explain out loud their roles. Then update all the relevant files. Ensure all current details are retained unless obsolete. Use SYNCLOG.md as your main file for updates on progress, any tech debt you encountered, deviations from plan, new ideas and unfinished work.
+8. What ARCHITECTURE.md and BACKLOG.md each do? Explain out loud their roles. Then update all the relevant files. Ensure all current details are retained unless obsolete. Use FIXLOG.md as your main file for updates on progress, any tech debt you encountered, deviations from plan, new ideas and unfinished work.
 9. Check to make sure you didn't introduce any placeholders in the documents such as parts that say "this section is just like before".
-10. Use your tools to do a git commit of everything changed. Ensure the comment is a one-liner.
+10. Use your tools to do a git commit of everything changed. Ensure the comment is a one-liner. Then git push.
 
 If you skip any step, you will be chastised. For instance, if you try to provide a plan before reading the code, a puppy dies.
 
-In the beginning of your first message, repeat these numbered steps and follow them to the letter. In the beginning of each and every message, repeat "I will not make changes in files before reading all relevant files first to understand their current state and APIs".
+In the beginning of your first message, repeat these numbered steps and then follow them to the letter.

@@ -18,11 +18,11 @@ interface AttachmentDao {
     @Query("SELECT * FROM attachments WHERE messageId = :messageId ORDER BY fileName ASC")
     suspend fun getAttachmentsForMessageSuspend(messageId: String): List<AttachmentEntity>
 
-    @Query("SELECT * FROM attachments WHERE attachmentId = :attachmentId")
-    fun getAttachmentById(attachmentId: String): Flow<AttachmentEntity?>
+    @Query("SELECT * FROM attachments WHERE id = :id")
+    fun getAttachmentById(id: Long): Flow<AttachmentEntity?>
 
-    @Query("SELECT * FROM attachments WHERE attachmentId = :attachmentId")
-    suspend fun getAttachmentByIdSuspend(attachmentId: String): AttachmentEntity?
+    @Query("SELECT * FROM attachments WHERE id = :id")
+    suspend fun getAttachmentByIdSuspend(id: Long): AttachmentEntity?
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAttachment(attachment: AttachmentEntity)
@@ -33,8 +33,8 @@ interface AttachmentDao {
     @Update
     suspend fun updateAttachment(attachment: AttachmentEntity)
 
-    @Query("UPDATE attachments SET syncStatus = :syncStatus, lastSyncError = :error WHERE attachmentId = :attachmentId")
-    suspend fun updateSyncStatus(attachmentId: String, syncStatus: EntitySyncStatus, error: String?)
+    @Query("UPDATE attachments SET syncStatus = :syncStatus, lastSyncError = :error WHERE id = :id")
+    suspend fun updateSyncStatus(id: Long, syncStatus: EntitySyncStatus, error: String?)
 
     @Query("""
         UPDATE attachments 
@@ -43,15 +43,15 @@ interface AttachmentDao {
             downloadTimestamp = :downloadTimestamp,
             syncStatus = 'SYNCED',
             lastSyncError = NULL
-        WHERE attachmentId = :attachmentId
+        WHERE id = :id
     """)
-    suspend fun updateDownloadSuccess(attachmentId: String, localPath: String, downloadTimestamp: Long)
+    suspend fun updateDownloadSuccess(id: Long, localPath: String, downloadTimestamp: Long)
 
     @Query("DELETE FROM attachments WHERE messageId = :messageId")
     suspend fun deleteAttachmentsForMessage(messageId: String)
 
-    @Query("DELETE FROM attachments WHERE attachmentId = :attachmentId")
-    suspend fun deleteAttachment(attachmentId: String)
+    @Query("DELETE FROM attachments WHERE id = :id")
+    suspend fun deleteAttachment(id: Long)
 
     @Query("SELECT COUNT(*) FROM attachments WHERE messageId = :messageId")
     suspend fun getAttachmentCountForMessage(messageId: String): Int
@@ -62,6 +62,6 @@ interface AttachmentDao {
     @Query("SELECT * FROM attachments WHERE messageId = :messageId AND isDownloaded = 1 AND localFilePath IS NOT NULL")
     suspend fun getDownloadedAttachmentsForMessage(messageId: String): List<AttachmentEntity>
 
-    @Query("UPDATE attachments SET isDownloaded = 0, localFilePath = NULL, downloadTimestamp = NULL, syncStatus = :newSyncStatus, lastSyncError = NULL WHERE attachmentId = :attachmentId")
-    suspend fun resetDownloadStatus(attachmentId: String, newSyncStatus: EntitySyncStatus)
+    @Query("UPDATE attachments SET isDownloaded = 0, localFilePath = NULL, downloadTimestamp = NULL, syncStatus = :newSyncStatus, lastSyncError = NULL WHERE id = :id")
+    suspend fun resetDownloadStatus(id: Long, newSyncStatus: EntitySyncStatus)
 }
