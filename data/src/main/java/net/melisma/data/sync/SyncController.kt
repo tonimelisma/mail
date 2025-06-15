@@ -800,7 +800,8 @@ class SyncController @Inject constructor(
                 try {
                     val accounts = accountRepository.getAccounts().first()
                     accounts.forEach { account ->
-                         submit(SyncJob.SyncFolderList(account.id))
+                         // More efficient: just trigger a lightweight check for changes.
+                         submit(SyncJob.CheckForNewMail(account.id))
                     }
                 } catch (e: Exception) {
                     Timber.e(e, "Error during passive polling")
@@ -848,19 +849,26 @@ class SyncController @Inject constructor(
             val junctionDao = appDatabase.messageFolderJunctionDao()
 
             appDatabase.withTransaction {
+                // Ensure local folders exist for all remote labels before we process messages.
+                val allRemoteLabelIds = messages.flatMap { it.remoteLabelIds ?: emptyList() }.distinct()
+                ensureLocalFoldersForRemoteIds(job.accountId, allRemoteLabelIds)
+
                 // Upsert messages
                 val entities = messages.map { it.toEntity(job.accountId) }
                 messageDao.insertOrUpdateMessages(entities)
 
-                // Link messages to folders when we can resolve the local folder ID
-                entities.forEachIndexed { index, entity ->
-                    val domainMsg = messages[index]
-                    val remoteFolderId = job.folderId ?: domainMsg.folderId
-                    if (!remoteFolderId.isNullOrBlank()) {
-                        val localFolder = folderDao.getFolderByAccountIdAndRemoteId(job.accountId, remoteFolderId)
-                        if (localFolder != null) {
-                            junctionDao.insertAll(listOf(MessageFolderJunction(entity.id, localFolder.id)))
-                        }
+                val folderMapByRemote = folderDao.getFoldersForAccount(job.accountId)
+                    .first()
+                    .associateBy { it.remoteId }
+
+                // Link messages to folders based on the labels returned by the search
+                messages.forEach { msg ->
+                    val remoteLabels = msg.remoteLabelIds ?: emptyList()
+                    val localFolderIds = remoteLabels.mapNotNull { remoteId ->
+                        folderMapByRemote[remoteId]?.id
+                    }.distinct()
+                    if (localFolderIds.isNotEmpty()) {
+                        junctionDao.replaceFoldersForMessage(msg.id, localFolderIds)
                     }
                 }
             }
@@ -885,56 +893,64 @@ class SyncController @Inject constructor(
     }
 
     private suspend fun handleCheckForNewMail(job: SyncJob.CheckForNewMail) {
-        withContext(ioDispatcher) {
-            if (!networkMonitor.isOnline.first()) {
-                Timber.i("Offline – skipping CheckForNewMail for ${job.accountId}")
-                return@withContext
-            }
+        if (!networkMonitor.isOnline.first()) {
+            Timber.i("Offline – skipping CheckForNewMail for ${job.accountId}")
+            return
+        }
 
-            val accountDao = appDatabase.accountDao()
-            val service = mailApiServiceFactory.getService(job.accountId) ?: run {
-                Timber.w("MailApiService not found for account ${job.accountId}")
-                return@withContext
-            }
+        val service = mailApiServiceFactory.getService(job.accountId) ?: run {
+            Timber.w("MailApiService not found for account ${job.accountId}")
+            return
+        }
+        val accountDao = appDatabase.accountDao()
+        val currentToken = accountDao.getAccountByIdSuspend(job.accountId)?.latestDeltaToken
 
-            val currentToken = accountDao.getLatestDeltaToken(job.accountId)
-            val result = service.hasChangesSince(job.accountId, currentToken)
+        val result = service.hasChangesSince(job.accountId, currentToken)
 
-            if (result.isFailure) {
-                Timber.e(result.exceptionOrNull(), "CheckForNewMail failed for account ${job.accountId}")
-                // Optionally surface this as a non-critical error
-                return@withContext
-            }
-
+        if (result.isSuccess) {
             val (hasChanges, nextToken) = result.getOrThrow()
-            if (nextToken != null) {
-                accountDao.updateLatestDeltaToken(job.accountId, nextToken)
-            }
-
+            accountDao.updateLatestDeltaToken(job.accountId, nextToken)
             if (hasChanges) {
-                Timber.i("Changes detected for account ${job.accountId}. Triggering full sync.")
-                // Changes were found, trigger a more comprehensive sync
+                Timber.i("Changes detected for account ${job.accountId}, queueing full sync.")
                 submit(SyncJob.SyncFolderList(job.accountId))
-                // Also immediately refresh high-priority folders like the Inbox
-                val inbox = appDatabase.folderDao().getFolderByWellKnownTypeSuspend(job.accountId, WellKnownFolderType.INBOX)
-                // getFolderByWellKnownTypeSuspend returns a single entity or null.
-                inbox?.let {
-                    submit(SyncJob.FetchMessageHeaders(it.id, null, job.accountId))
-                }
             } else {
-                Timber.d("No new changes detected for account ${job.accountId}")
+                Timber.d("No changes detected for account ${job.accountId}.")
             }
+        } else {
+            Timber.e(result.exceptionOrNull(), "CheckForNewMail failed for account ${job.accountId}")
         }
     }
 
-    private suspend fun ensureLocalFoldersForRemoteIds(accountId: String, remoteIds: List<String>, names: Map<String, String?> = emptyMap()) {
+    /**
+     * Given a list of remote folder/label IDs, this ensures a corresponding local FolderEntity
+     * exists for each one. If a local folder for a given remote ID doesn't exist, a placeholder
+     * record is created.
+     *
+     * This must be called within a database transaction.
+     *
+     * @param accountId The account to which these folders belong.
+     * @param remoteIds The list of remote folder/label IDs from the server.
+     * @param nameHintMap An optional map of [remoteId] to [displayName] to create more useful
+     * placeholder names when a folder is first discovered via a message label.
+     */
+    private suspend fun ensureLocalFoldersForRemoteIds(
+        accountId: String,
+        remoteIds: List<String>,
+        nameHintMap: Map<String, String?> = emptyMap()
+    ) {
         if (remoteIds.isEmpty()) return
         val folderDao = appDatabase.folderDao()
-        appDatabase.withTransaction {
-            remoteIds.forEach { remoteId ->
-                // Use the provided name or default to the remoteId if not available
-                folderDao.insertPlaceholderIfAbsent(accountId, remoteId, names[remoteId] ?: remoteId)
+        val existingFolders = folderDao.getFoldersForAccount(accountId).first()
+        val existingRemoteIds = existingFolders.mapNotNull { it.remoteId }.toSet()
+
+        val missingRemoteIds = remoteIds.filter { it !in existingRemoteIds }
+
+        if (missingRemoteIds.isNotEmpty()) {
+            Timber.d("Found ${missingRemoteIds.size} new remote folder IDs. Creating placeholders...")
+            missingRemoteIds.forEach { remoteId ->
+                val placeholderName = nameHintMap[remoteId] ?: remoteId
+                folderDao.insertPlaceholderIfAbsent(accountId, remoteId, placeholderName)
             }
         }
     }
-} 
+}

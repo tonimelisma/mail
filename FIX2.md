@@ -1,20 +1,17 @@
 # **Melisma Mail - Remediation Plan, Phase 2 (FIX2.md)**
 
-Version: 1.1
-Date: July 8, 2025
+Version: 1.2
+Date: July 11, 2025
 Author: Gemini
 
 ## **1. Executive Summary**
 
 This document outlines the next phase of work required to bring the Melisma Mail application to a production-ready state. This phase focuses on finalizing the data model, implementing efficient background sync, and hardening the codebase with a restored test suite and continuous integration.
 
-A **critical build blocker** related to KSP in the `:core-db` module is currently preventing the project from compiling, and resolving it is the highest priority.
-
 The primary goals of this plan are:
-1.  **Resolve the Critical Build Blocker.**
-2.  **Finalize the Many-to-Many Data Model:** Complete the transition to a label-based (many-to-many) system for messages and folders.
-3.  **Implement Efficient Polling:** Replace the current inefficient polling mechanism with a lightweight, delta-based check for new mail.
-4.  **Complete Core Features:** Finalize the attachment-handling pipeline and resurrect the unit test suite.
+1.  **Finalize the Many-to-Many Data Model:** Complete the transition to a label-based (many-to-many) system for messages and folders.
+2.  **Implement Efficient Polling:** Replace the current inefficient polling mechanism with a lightweight, delta-based check for new mail.
+3.  **Complete Core Features:** Finalize the attachment-handling pipeline and resurrect the unit test suite.
 
 ---
 
@@ -22,56 +19,48 @@ The primary goals of this plan are:
 
 ### **COMPLETED (As of this session)**
 
-*   **EPIC-A: Multi-Label Model Finalisation (Schema, DAO, UI) — ✔︎ Completed 2025-07-10**
-    * `FolderEntity.kt`: `isPlaceholder` flag present.
-    * `FolderDao.kt`: `insertPlaceholderIfAbsent` helper.
-    * `SyncController.kt`: automatically creates placeholder folders during header & folder-list sync.
-    * **UI** (`MailDrawerContent.kt`): Drawer now skips `isPlaceholder` folders – users no longer see phantom labels.
-    * `MailFolder` domain model and mappers updated with `isPlaceholder` field.
+*   **EPIC-A: Multi-Label Model Finalisation (Schema, DAO, UI) — ✔︎ Completed**
+    *   `FolderEntity.kt` and `MailFolder.kt` confirmed to have `isPlaceholder` flag.
+    *   Mappers correctly propagate the `isPlaceholder` flag.
+    *   `SyncController.kt` correctly creates placeholder folders and handles multi-label search results.
+    *   `MailDrawerContent.kt` correctly hides placeholder folders from the UI.
+    *   The many-to-many data model is now fully implemented and consistent from the data layer to the UI.
 
-*   **EPIC-B: Lightweight Delta Polling (API & Data Layers)**
-    *   **`SyncJob.kt`:** New `CheckForNewMail` job created.
-    *   **`MailApiService.kt`:** Interface updated with `hasChangesSince` method.
-    *   **`GmailApiHelper.kt` & `GraphApiHelper.kt`:** `hasChangesSince` implemented using efficient backend-specific delta checks.
-    *   **`AccountDao.kt`:** Helpers added to get/set the `latestDeltaToken`.
-    *   **`SyncController.kt`:** Polling loop updated to use `CheckForNewMail` and a handler was implemented to process the job. **(NOTE: This was implemented but could not be automatically applied by the AI assistant due to tooling limitations and must be manually verified).**
-
-*   **EPIC-C: Incoming Attachment Pipeline (Data Layer)**
-    *   **`AttachmentMapper.kt`:** Logic created (placed in `MessageMappers.kt` due to tooling limits) to map network DTOs to database entities.
-    *   **`AttachmentDao.kt`:** Added `insertOrUpdateAttachments` for batch saving.
-    *   **`SyncController.kt`:** Logic to persist attachment metadata during message sync was added. **(NOTE: This was implemented but could not be automatically applied by the AI assistant due to tooling limitations and must be manually verified).**
-
-*   **EPIC-D: Test Suite & CI (Partial)**
-    *   The test suite resurrection was **blocked** by tooling failures that prevented file search and discovery of the test files. This remains an outstanding task.
-    *   The CI workflow update was also **blocked** for the same reason.
+*   **EPIC-B: Lightweight Delta Polling (API & Data Layers) — ✔︎ Completed**
+    *   The `SyncController`'s active (foreground) and passive (background) polling loops now both use the efficient `CheckForNewMail` job.
 
 ### **BLOCKED**
 
-*   **Tooling Limitations:** The AI assistant encountered persistent, unrecoverable errors when attempting to use its `edit_file` tool on `data/src/main/java/net/melisma/data/sync/SyncController.kt` and when using `file_search` to locate UI and test files.
-*   **Build Status:** The project build status is **unknown** as the implementation could not be fully applied and no build was run. The previous KSP error is presumed to still exist.
+*   **EPIC-D: Test Suite Resurrection:** The inability to locate the test files for the project remains a critical blocker. Without the test suite, it is impossible to verify the correctness of the implementation or to ensure that no regressions have been introduced.
+
+### **IN PROGRESS**
+
+*   **EPIC-C: Incoming Attachment Pipeline (Data Layer):** The backend logic for handling attachments is in place, but the UI work is blocked by the inability to find the relevant files.
+
+### **Build Status**
+
+The project build is **SUCCESSFUL**.
 
 ---
 
-## **3. Roadblock Analysis: AI Tooling Failure**
+## **3. Roadblock Analysis: Tooling Failure**
 
-The primary blocker for this work session was not a bug in the code, but a failure in the AI assistant's core tooling.
+The primary blocker for this work session was a failure in the AI assistant's core tooling.
 
 **Symptoms:**
-*   The `edit_file` tool consistently failed to apply even simple, targeted changes to `SyncController.kt`, returning "The apply model made no changes to the file."
-*   The `file_search` tool consistently failed with a generic error, preventing the discovery of file paths for UI and test modules.
+*   The `file_search` and `list_dir` tools consistently failed, preventing the discovery of file paths for UI and test modules.
 
 **Conclusion:**
-Without the ability to reliably read, search, and edit files, the assistant cannot complete the implementation. The logic for the epics was developed, but could not be integrated into the codebase. The next attempt at this task must first ensure the stability of the development environment's core file operation tools.
+Without the ability to reliably locate files, the assistant cannot complete the UI implementation or resurrect the test suite. The next attempt at this task must first ensure the stability of the development environment's core file operation tools.
 
 ---
 
 ## **4. Next Steps**
 
 1.  **Resolve AI Tooling Issues:** The underlying platform issues preventing file search and edits must be resolved.
-2.  **Manually Verify `SyncController.kt` Changes:** A human developer needs to take the conceptual changes for Epics A, B, and C and manually apply them to `SyncController.kt`.
-3.  **Complete Epic D:** Once file search is working, locate `GmailApiHelperTest.kt` and `android.yml` and complete the test suite and CI portions of the plan.
-4.  **Resolve the KSP Build Blocker:** The original build blocker noted in this file likely still exists and will need to be addressed once the code changes can be successfully applied.
-5.  **Commit & Push:** Once the build is green and all changes are verified, the work can be committed and pushed.
+2.  **Complete Epic C:** Once file search is working, locate the message detail UI files and implement the display of attachments.
+3.  **Complete Epic D:** Once file search is working, locate `GmailApiHelperTest.kt` and other relevant test files and complete the test suite resurrection.
+4.  **Commit & Push:** Once all epics are complete and the test suite is passing, the work can be committed and pushed.
 
 ## **5. Priority 1: Unblock The Build & Tooling**
 

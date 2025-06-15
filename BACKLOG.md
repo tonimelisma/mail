@@ -21,7 +21,7 @@
 * **Requirement 0.7 (Isolate Attachments for Backup Exclusion):** As a developer, I want all downloaded attachments to be saved to a dedicated attachments/ directory inside the no_backup area which the platform never backs up.
   * **Status: Completed (2025-06-26)**
 * **Requirement 0.8 (Polling Lifecycle – Foreground & Background):** Implement lightweight delta polling instead of full folder sync.
-  * **Status: Completed (2025-07-08)** - All data-layer and sync controller components are complete.
+  * **Status: Completed** - All data-layer and sync controller components are complete.
 
 **EPIC 1: Core Mail Viewing** (Highest Priority)
 
@@ -84,7 +84,7 @@
 * **Requirement 5.6 (Data Caching & Eviction):** The app must cache data locally with a multi-tiered eviction strategy.  
   * **Status: Implemented**  
 * **Requirement 5.7 (Background Sync):** The app must periodically check for new emails and sync changes.  
-  * **Status: In Progress (Blocked by Build)** - Functionality is being migrated from WorkManager to the SyncController.  
+  * **Status: Completed**
 * **Requirement 5.Z (Delayed Send Notification):** Notify user if an email fails to send after retries.  
   * **Status: Planned**
 
