@@ -36,6 +36,7 @@ import android.content.Intent
 import net.melisma.core_data.repository.AccountRepository
 import net.melisma.core_data.datasource.MailApiServiceFactory
 import kotlinx.coroutines.flow.update
+import net.melisma.core_data.model.WellKnownFolderType
 
 @Singleton
 class SyncController @Inject constructor(
@@ -399,7 +400,9 @@ class SyncController @Inject constructor(
             appDatabase.withTransaction {
                 // Ensure placeholders exist before we try to diff.
                 val remoteFolderDtos = serverFolders.map { it.id to it.displayName }
-                ensureLocalFoldersForRemoteIds(job.accountId, remoteFolderDtos.map { it.first }, remoteFolderDtos.associate { it })
+                // Create a Map<remoteId, name?> for placeholder helper
+                val nameMap = remoteFolderDtos.associate { (id, name) -> id to name }
+                ensureLocalFoldersForRemoteIds(job.accountId, remoteFolderDtos.map { it.first }, nameMap)
 
                 val localFolders = folderDao.getFoldersForAccount(job.accountId).first()
                 val localFolderMap = localFolders.associateBy { it.remoteId }
@@ -913,7 +916,8 @@ class SyncController @Inject constructor(
                 // Changes were found, trigger a more comprehensive sync
                 submit(SyncJob.SyncFolderList(job.accountId))
                 // Also immediately refresh high-priority folders like the Inbox
-                val inbox = appDatabase.folderDao().getWellKnownFolder(job.accountId, WellKnownFolderType.INBOX).firstOrNull()
+                val inbox = appDatabase.folderDao().getFolderByWellKnownTypeSuspend(job.accountId, WellKnownFolderType.INBOX)
+                // getFolderByWellKnownTypeSuspend returns a single entity or null.
                 inbox?.let {
                     submit(SyncJob.FetchMessageHeaders(it.id, null, job.accountId))
                 }

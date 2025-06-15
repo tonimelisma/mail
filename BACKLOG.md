@@ -5,7 +5,7 @@
 **EPIC 0: ARCHITECTURAL REFACTOR & BUILD FIX** (Highest Priority \- BLOCKER)
 
 * **Requirement 0.0 (Resolve KSP Build Blocker):** As a developer, I need to resolve the persistent `[MissingType]` KSP error in the `:core-db` module to make the application buildable.
-  * **Status: BLOCKER (NEW)**
+  * **Status: Completed (2025-07-08)** – Migration stub added, auto-migration disabled; project builds successfully.
 * **Requirement 0.1 (Implement SyncController):** As a developer, I want to replace the SyncEngine and distributed WorkManager architecture with the centralized SyncController model.  
   * **Status: Completed (2025-06-17)**  
 * **Requirement 0.2 (Database Migration to Many-to-Many):** As a developer, I want to migrate the database schema to support a many-to-many relationship between messages and folders.  

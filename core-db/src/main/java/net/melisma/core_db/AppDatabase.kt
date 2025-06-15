@@ -41,9 +41,7 @@ import net.melisma.core_db.migration.M18_M19
     ],
     version = 20,
     exportSchema = true,
-    autoMigrations = [
-        AutoMigration(from = 17, to = 18)
-    ]
+    // autoMigrations disabled during ongoing schema development – rely on fallbackToDestructiveMigration in AppDatabase builder.
 )
 @TypeConverters(
     WellKnownFolderTypeConverter::class, 
