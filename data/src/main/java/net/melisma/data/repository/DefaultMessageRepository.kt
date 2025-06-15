@@ -43,7 +43,7 @@ import net.melisma.data.mapper.toDomainModel
 import net.melisma.data.mapper.toEntity
 import net.melisma.data.sync.SyncConstants
 import net.melisma.data.sync.SyncController
-import net.melisma.data.sync.workers.ActionUploadWorker
+import net.melisma.core_db.entity.MessageFolderJunction
 import timber.log.Timber
 import java.util.UUID
 import javax.inject.Inject
@@ -207,7 +207,12 @@ class DefaultMessageRepository @Inject constructor(
             val currentFolders = messageFolderJunctionDao.getFoldersForMessage(messageId)
             val oldFolderId = currentFolders.firstOrNull() ?: ""
 
-            messageFolderJunctionDao.replaceFoldersForMessage(messageId, listOf(newFolderId))
+            // Remove old label link (if any) and add new label link
+            if (oldFolderId.isNotBlank()) {
+                messageFolderJunctionDao.removeLabel(messageId, oldFolderId)
+            }
+            messageFolderJunctionDao.addLabel(messageId, newFolderId)
+
             val payload = mapOf(
                 SyncConstants.KEY_NEW_FOLDER_ID to newFolderId,
                 SyncConstants.KEY_OLD_FOLDER_ID to oldFolderId
@@ -336,13 +341,9 @@ class DefaultMessageRepository @Inject constructor(
         externalScope.launch {
             syncController.submit(SyncJob.SearchOnline(query, folderId, accountId))
         }
-        return if (folderId != null) {
-            messageDao.searchMessagesInFolder(accountId, folderId, query)
-                .map { entities -> entities.map { it.toDomainModel(folderId) } }
-        } else {
-            messageDao.searchMessagesInAccount(accountId, query)
-                .map { entities -> entities.map { it.toDomainModel() } }
-        }
+        val pattern = "%${query}%"
+        return messageDao.searchMessages(pattern, accountId, folderId)
+            .map { list -> list.map { it.toDomainModel(folderId ?: "") } }
     }
 
     override suspend fun getMessageAttachments(
@@ -361,7 +362,7 @@ class DefaultMessageRepository @Inject constructor(
         send(null) // Initially, no path is available
         syncController.submit(
             SyncJob.DownloadAttachment(
-                attachmentId = attachment.id,
+                attachmentId = attachment.id.toLong(),
                 messageId = messageId,
                 accountId = accountId
             )

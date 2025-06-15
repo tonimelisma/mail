@@ -43,6 +43,7 @@ import java.util.TimeZone
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.cancellation.CancellationException
+import net.melisma.core_db.dao.MessageFolderJunctionDao
 
 @Singleton
 class DefaultThreadRepository @Inject constructor(
@@ -52,6 +53,7 @@ class DefaultThreadRepository @Inject constructor(
     private val errorMappers: Map<String, @JvmSuppressWildcards ErrorMapperService>,
     private val accountRepository: AccountRepository,
     private val messageDao: MessageDao,
+    private val messageFolderJunctionDao: MessageFolderJunctionDao,
     private val appDatabase: AppDatabase,
     private val pendingActionDao: PendingActionDao,
     private val syncController: SyncController
@@ -189,7 +191,7 @@ class DefaultThreadRepository @Inject constructor(
 
     override suspend fun markThreadRead(account: Account, threadId: String, isRead: Boolean): Result<Unit> {
         Timber.d("markThreadRead: threadId=$threadId, isRead=$isRead, account=${account.id}")
-        try {
+        return try {
             appDatabase.withTransaction {
                 val messageIds = messageDao.getMessageIdsByThreadId(threadId)
                 if (messageIds.isEmpty()) {
@@ -212,9 +214,10 @@ class DefaultThreadRepository @Inject constructor(
 
     override suspend fun deleteThread(account: Account, threadId: String): Result<Unit> {
         Timber.d("deleteThread: threadId=$threadId, account=${account.id}")
-        try {
+        return try {
             appDatabase.withTransaction {
                 val messageIds = messageDao.getMessageIdsByThreadId(threadId)
+                // Mark messages as pending delete via syncStatus update helper (legacy).
                 messageDao.setSyncStatusForMessages(messageIds, EntitySyncStatus.PENDING_DELETE)
                 Timber.i("$TAG: Optimistically marked ${messageIds.size} messages in thread $threadId for deletion.")
             }
@@ -236,10 +239,15 @@ class DefaultThreadRepository @Inject constructor(
         currentFolderId: String
     ): Result<Unit> {
         Timber.d("moveThread: threadId=$threadId, newFolderId=$newFolderId, account=${account.id}")
-        try {
+        return try {
             appDatabase.withTransaction {
                 val messageIds = messageDao.getMessageIdsByThreadId(threadId)
-                messageDao.replaceFolderForMessages(messageIds, newFolderId)
+                messageIds.forEach { mid ->
+                    if (currentFolderId.isNotBlank()) {
+                        messageFolderJunctionDao.removeLabel(mid, currentFolderId)
+                    }
+                    messageFolderJunctionDao.addLabel(mid, newFolderId)
+                }
                 Timber.i("$TAG: Optimistically moved ${messageIds.size} messages in thread $threadId to folder $newFolderId")
             }
 
