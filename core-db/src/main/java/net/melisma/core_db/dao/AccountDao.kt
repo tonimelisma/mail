@@ -52,4 +52,7 @@ interface AccountDao {
 
     @Query("UPDATE accounts SET latestDeltaToken = :token WHERE id = :accountId")
     suspend fun updateLatestDeltaToken(accountId: String, token: String?)
+
+    @Query("DELETE FROM accounts WHERE providerType = 'MS'")
+    suspend fun deleteAllMicrosoftAccounts()
 } 

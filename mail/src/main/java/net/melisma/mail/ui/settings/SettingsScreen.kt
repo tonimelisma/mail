@@ -363,6 +363,26 @@ fun SettingsScreen(
                 }
             }
 
+            // DEBUG SECTION
+            item {
+                SettingsDivider()
+                SectionTitle("DEBUG")
+            }
+
+            item {
+                 Button(
+                    onClick = { viewModel.signOutAllMicrosoftAccounts() },
+                    enabled = !state.isLoadingAccountAction,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                ) {
+                    if (state.isLoadingAccountAction) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text("Clear All Microsoft Accounts (Cache)")
+                }
+            }
+
             // Spacer for FAB
             item {
                 Spacer(modifier = Modifier.height(80.dp))

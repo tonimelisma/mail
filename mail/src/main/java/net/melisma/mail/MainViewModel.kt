@@ -51,6 +51,7 @@ import net.melisma.core_data.repository.OverallApplicationAuthState
 import net.melisma.core_data.repository.ThreadRepository
 import net.melisma.data.repository.DefaultAccountRepository
 import net.melisma.domain.actions.SyncFolderUseCase
+import net.melisma.domain.account.SignOutAllMicrosoftAccountsUseCase
 import timber.log.Timber
 import javax.inject.Inject
 
@@ -114,7 +115,8 @@ class MainViewModel @Inject constructor(
     private val messageRepository: MessageRepository,
     private val threadRepository: ThreadRepository,
     private val userPreferencesRepository: UserPreferencesRepository,
-    private val syncFolderUseCase: SyncFolderUseCase
+    private val syncFolderUseCase: SyncFolderUseCase,
+    private val signOutAllMicrosoftAccountsUseCase: SignOutAllMicrosoftAccountsUseCase
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(MainScreenState())
     val uiState: StateFlow<MainScreenState> = _uiState.asStateFlow()
@@ -1075,6 +1077,40 @@ class MainViewModel @Inject constructor(
     fun updateSignature(signature: String) {
         viewModelScope.launch {
             userPreferencesRepository.updateSignature(signature)
+        }
+    }
+
+    fun signOutAllMicrosoftAccounts() {
+        Timber.d("signOutAllMicrosoftAccounts called from ViewModel")
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoadingAccountAction = true) }
+            signOutAllMicrosoftAccountsUseCase().collect { result ->
+                _uiState.update { currentState ->
+                    when (result) {
+                        is GenericSignOutAllResult.Success -> {
+                            Timber.d("Sign-out all successful. Removed: ${result.removedCount}, Failed: ${result.failedCount}")
+                            currentState.copy(
+                                isLoadingAccountAction = false,
+                                toastMessage = "Cleared ${result.removedCount} Microsoft account(s)."
+                            )
+                        }
+                        is GenericSignOutAllResult.Error -> {
+                            Timber.w(result.cause, "Sign-out all error: ${result.message}")
+                            currentState.copy(
+                                isLoadingAccountAction = false,
+                                toastMessage = "Error clearing accounts: ${result.message}"
+                            )
+                        }
+                        is GenericSignOutAllResult.NotInitialized -> {
+                            Timber.w("Sign-out all error: MSAL not initialized.")
+                            currentState.copy(
+                                isLoadingAccountAction = false,
+                                toastMessage = "Error: MSAL not initialized."
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }

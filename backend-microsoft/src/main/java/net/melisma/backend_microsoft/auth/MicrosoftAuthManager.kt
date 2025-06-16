@@ -111,6 +111,12 @@ sealed class SignOutResultWrapper {
     data class Error(val exception: MsalException) : SignOutResultWrapper()
 }
 
+sealed class SignOutAllResultWrapper {
+    data class Success(val removedCount: Int, val failedCount: Int) : SignOutAllResultWrapper()
+    data class Error(val exception: MsalException, val details: String) : SignOutAllResultWrapper()
+    object NotInitialized : SignOutAllResultWrapper()
+}
+
 
 @Singleton
 class MicrosoftAuthManager @Inject constructor(
@@ -648,44 +654,37 @@ class MicrosoftAuthManager @Inject constructor(
 
     // Helper for local cleanup, to be called within a coroutine context (e.g., on ioDispatcher)
     private suspend fun performLocalSignOutCleanup(accountIdToClear: String, reason: String) {
-        Timber.tag(TAG)
-            .i("performLocalSignOutCleanup: Attempting for account $accountIdToClear due to $reason.")
-        try {
-            // This call is intended to clear data from persistence.
-            // The removeAccountFromManager = true flag *should* ideally trigger necessary updates
-            // in MicrosoftTokenPersistenceService if it's designed to manage lists or notify manager.
-            // However, to be absolutely sure MicrosoftAuthManager's own state is clean,
-            // we update _msalAccounts and activeMicrosoftAccountHolder explicitly here.
-            tokenPersistenceService.clearAccountData(
-                accountIdToClear,
-                removeAccountFromManager = true
-            )
-
-            _msalAccounts.value = _msalAccounts.value.filterNot { it.id == accountIdToClear }
-            if (activeMicrosoftAccountHolder.getActiveMicrosoftAccountIdValue() == accountIdToClear) {
-                activeMicrosoftAccountHolder.setActiveMicrosoftAccountId(null)
-                Timber.tag(TAG)
-                    .i("performLocalSignOutCleanup: Cleared active account holder for $accountIdToClear.")
-            }
+        withContext(ioDispatcher) {
             Timber.tag(TAG)
-                .i("performLocalSignOutCleanup: Completed for account $accountIdToClear.")
+                .i("performLocalSignOutCleanup: Attempting for account $accountIdToClear due to $reason.")
+            try {
+                accountDao.deleteAccount(accountIdToClear)
+                Timber.tag(TAG)
+                    .i("performLocalSignOutCleanup: Deleted account $accountIdToClear from DAO.")
 
-        } catch (e: Exception) {
-            Timber.tag(TAG).e(
-                e,
-                "performLocalSignOutCleanup: Failed for account $accountIdToClear during $reason cleanup."
-            )
-            // Log this specific cleanup failure, but don't rethrow,
-            // as the SignOutResultWrapper will carry the primary sign-out error.
+                if (activeMicrosoftAccountHolder.getActiveMicrosoftAccountIdValue() == accountIdToClear) {
+                    activeMicrosoftAccountHolder.setActiveMicrosoftAccountId(null)
+                    Timber.tag(TAG)
+                        .i("performLocalSignOutCleanup: Cleared active account holder for $accountIdToClear.")
+                }
+                Timber.tag(TAG).i("performLocalSignOutCleanup: Completed for account $accountIdToClear.")
+            } catch (e: Exception) {
+                Timber.tag(TAG)
+                    .e(
+                        e,
+                        "performLocalSignOutCleanup: Failed for account $accountIdToClear during $reason cleanup."
+                    )
+                // This function is best-effort and should not throw, just log. The caller (e.g., signOut)
+                // as the SignOutResultWrapper will carry the primary sign-out error.
+            }
         }
     }
 
     // Updated signOut method - making it more robust as per CACHE2.md item.
     suspend fun signOut(accountId: String): SignOutResultWrapper = withContext(ioDispatcher) {
         Timber.tag(TAG).d("signOut: Robust sign-out called for accountId: ${accountId.take(5)}...")
-
-        val currentApp = mMultipleAccountApp
-        if (currentApp == null || !_isMsalInitialized.value) {
+        val msalApp = mMultipleAccountApp
+        if (msalApp == null) {
             Timber.tag(TAG)
                 .w("signOut: MSAL client not initialized. Performing local cleanup only for $accountId.")
             externalScope.launch { // Launch coroutine for suspend function
@@ -717,7 +716,7 @@ class MicrosoftAuthManager @Inject constructor(
         val deferred = CompletableDeferred<SignOutResultWrapper>()
 
         try {
-            currentApp.removeAccount(
+            msalApp.removeAccount(
                 accountToRemove,
                 object : IMultipleAccountPublicClientApplication.RemoveAccountCallback {
                     override fun onRemoved() {
@@ -1033,5 +1032,109 @@ class MicrosoftAuthManager @Inject constructor(
 
     override suspend fun getActiveAccountId(): String? {
         return activeMicrosoftAccountHolder.activeMicrosoftAccountId.value
+    }
+
+    /**
+     * Removes all Microsoft accounts from the MSAL cache and local database.
+     * This is a destructive operation intended for debugging or full cache reset.
+     */
+    suspend fun signOutAll(): SignOutAllResultWrapper = withContext(ioDispatcher) {
+        Timber.tag(TAG).d("signOutAll: Attempting to clear all MSAL accounts.")
+        val msalApp = mMultipleAccountApp
+        if (msalApp == null) {
+            Timber.tag(TAG).w("signOutAll: MSAL client not initialized.")
+            return@withContext SignOutAllResultWrapper.Error(
+                MsalClientException(MsalClientException.NOT_INITIALIZED, "MSAL not initialized."),
+                "MSAL client was null during signOutAll."
+            )
+        }
+
+        val deferredAccounts = CompletableDeferred<List<IAccount>>()
+        msalApp.getAccounts(object : IPublicClientApplication.LoadAccountsCallback {
+            override fun onTaskCompleted(result: MutableList<IAccount>?) {
+                Timber.tag(TAG).i("signOutAll: getAccounts callback completed.")
+                deferredAccounts.complete(result ?: emptyList())
+            }
+
+            override fun onError(exception: MsalException) {
+                Timber.tag(TAG).e(exception, "signOutAll: Failed to get accounts from MSAL.")
+                deferredAccounts.completeExceptionally(exception)
+            }
+        })
+
+        val accountsToRemove = try {
+            deferredAccounts.await()
+        } catch (e: Exception) {
+            Timber.tag(TAG).e(e, "signOutAll: Exception while awaiting getAccounts.")
+            val msalEx = if (e is MsalException) e else MsalClientException(
+                "GET_ACCOUNTS_AWAIT_FAILED",
+                "Awaiting getAccounts failed",
+                e
+            )
+            return@withContext SignOutAllResultWrapper.Error(
+                msalEx,
+                "Failed to retrieve accounts for removal."
+            )
+        }
+
+        if (accountsToRemove.isEmpty()) {
+            Timber.tag(TAG).i("signOutAll: No accounts found in MSAL cache to remove.")
+            // Also ensure our local DB is clear of any orphaned MS accounts
+            accountDao.deleteAllMicrosoftAccounts()
+            Timber.tag(TAG).i("signOutAll: Ensured no orphaned Microsoft accounts exist in the DB.")
+            if (activeMicrosoftAccountHolder.getActiveMicrosoftAccountIdValue() != null) {
+                activeMicrosoftAccountHolder.setActiveMicrosoftAccountId(null)
+                Timber.tag(TAG).i("signOutAll: Cleared active Microsoft account holder as a precaution.")
+            }
+            return@withContext SignOutAllResultWrapper.Success(0, 0)
+        }
+
+        Timber.tag(TAG).i("signOutAll: Found ${accountsToRemove.size} accounts in MSAL cache to remove.")
+
+        val removalResults = mutableListOf<Result<IAccount>>()
+        val completable = CompletableDeferred<Unit>()
+        var remaining = accountsToRemove.size
+
+        accountsToRemove.forEach { account ->
+            Timber.tag(TAG).i("signOutAll: Removing account: ${account.username}")
+            msalApp.removeAccount(
+                account,
+                object : IMultipleAccountPublicClientApplication.RemoveAccountCallback {
+                    override fun onRemoved() {
+                        Timber.tag(TAG).i("signOutAll: Successfully removed account: ${account.username}")
+                        removalResults.add(Result.success(account))
+                        remaining--
+                        if (remaining == 0) completable.complete(Unit)
+                    }
+
+                    override fun onError(exception: MsalException) {
+                        Timber.tag(TAG).e(exception, "signOutAll: Failed to remove account: ${account.username}")
+                        removalResults.add(Result.failure(exception))
+                        remaining--
+                        if (remaining == 0) completable.complete(Unit)
+                    }
+                })
+        }
+
+        completable.await() // Wait for all callbacks to fire
+
+        // After all MSAL removals are attempted, clean up the local database
+        accountDao.deleteAllMicrosoftAccounts()
+        Timber.tag(TAG).i("signOutAll: Deleted all Microsoft account entries from the local database.")
+        if (activeMicrosoftAccountHolder.getActiveMicrosoftAccountIdValue() != null) {
+            activeMicrosoftAccountHolder.setActiveMicrosoftAccountId(null)
+            Timber.tag(TAG).i("signOutAll: Cleared the active Microsoft account holder.")
+        }
+
+        val successCount = removalResults.count { it.isSuccess }
+        val failedCount = removalResults.count { it.isFailure }
+
+        Timber.tag(TAG)
+            .i("signOutAll: Finished. Success: $successCount, Failures: $failedCount")
+
+        return@withContext SignOutAllResultWrapper.Success(
+            removedCount = successCount,
+            failedCount = failedCount
+        )
     }
 }

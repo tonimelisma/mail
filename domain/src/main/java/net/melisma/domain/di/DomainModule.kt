@@ -14,6 +14,7 @@ import net.melisma.domain.account.GetAccountsUseCase
 import net.melisma.domain.account.ObserveAuthStateUseCase
 import net.melisma.domain.account.SignInUseCase
 import net.melisma.domain.account.SignOutUseCase
+import net.melisma.domain.account.SignOutAllMicrosoftAccountsUseCase
 
 // Existing Use Case Class Imports (Actions)
 import net.melisma.domain.actions.DeleteMessageUseCase
@@ -82,6 +83,12 @@ object DomainModule {
     @Singleton
     fun provideSignOutUseCase(accountRepository: AccountRepository): SignOutUseCase {
         return SignOutUseCase(accountRepository)
+    }
+
+    @Provides
+    @Singleton
+    fun provideSignOutAllMicrosoftAccountsUseCase(accountRepository: AccountRepository): SignOutAllMicrosoftAccountsUseCase {
+        return SignOutAllMicrosoftAccountsUseCase(accountRepository)
     }
 
     // Existing Data UseCases (provide the class directly)

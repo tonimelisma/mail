@@ -25,6 +25,7 @@ import net.melisma.backend_microsoft.auth.AcquireTokenResult
 import net.melisma.backend_microsoft.auth.AuthenticationResultWrapper
 import net.melisma.backend_microsoft.auth.MicrosoftAuthManager
 import net.melisma.backend_microsoft.auth.SignOutResultWrapper
+import net.melisma.backend_microsoft.auth.SignOutAllResultWrapper
 import net.melisma.backend_microsoft.mapper.toDomainAccount
 import net.melisma.core_data.di.ApplicationScope
 import net.melisma.core_data.di.Dispatcher
@@ -33,7 +34,9 @@ import net.melisma.core_data.model.Account
 import net.melisma.core_data.model.ErrorDetails
 import net.melisma.core_data.model.GenericAuthResult
 import net.melisma.core_data.model.GenericSignOutResult
+import net.melisma.core_data.model.GenericSignOutAllResult
 import net.melisma.core_data.repository.AccountRepository
+import net.melisma.core_data.repository.GenericSignOutAllResult
 import net.melisma.core_data.repository.OverallApplicationAuthState
 import net.melisma.core_db.dao.AccountDao
 import timber.log.Timber
@@ -290,6 +293,31 @@ class MicrosoftAccountRepository @Inject constructor(
             Timber.tag(TAG)
                 .e(e, "signOut: Exception during Microsoft sign-out for ${account.emailAddress}")
             emit(GenericSignOutResult.Error(ErrorDetails(message = "Sign out failed: ${e.message}")))
+        }
+    }.flowOn(ioDispatcher)
+
+    override fun signOutAllMicrosoftAccounts(): Flow<GenericSignOutAllResult> = flow {
+        Timber.tag(TAG).i("signOutAllMicrosoftAccounts called.")
+        try {
+            val resultWrapper = microsoftAuthManager.signOutAll()
+            Timber.tag(TAG).d("signOutAllMicrosoftAccounts: AuthManager returned: $resultWrapper")
+            when (resultWrapper) {
+                is SignOutAllResultWrapper.Success -> {
+                    emit(GenericSignOutAllResult.Success(resultWrapper.removedCount, resultWrapper.failedCount))
+                }
+                is SignOutAllResultWrapper.Error -> {
+                    emit(GenericSignOutAllResult.Error(
+                        message = resultWrapper.details,
+                        cause = resultWrapper.exception
+                    ))
+                }
+                is SignOutAllResultWrapper.NotInitialized -> {
+                    emit(GenericSignOutAllResult.NotInitialized)
+                }
+            }
+        } catch (e: Exception) {
+            Timber.tag(TAG).e(e, "signOutAllMicrosoftAccounts: Exception during sign-out all process.")
+            emit(GenericSignOutAllResult.Error("Sign out all failed: ${e.message}", e))
         }
     }.flowOn(ioDispatcher)
 

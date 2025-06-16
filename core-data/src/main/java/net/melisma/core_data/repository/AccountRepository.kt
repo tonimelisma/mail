@@ -8,6 +8,12 @@ import net.melisma.core_data.model.Account
 import net.melisma.core_data.model.GenericAuthResult // New import
 import net.melisma.core_data.model.GenericSignOutResult // New import
 
+sealed class GenericSignOutAllResult {
+    data class Success(val removedCount: Int, val failedCount: Int) : GenericSignOutAllResult()
+    data class Error(val message: String, val cause: Throwable? = null) : GenericSignOutAllResult()
+    object NotInitialized : GenericSignOutAllResult()
+}
+
 interface AccountRepository {
     fun getAccounts(): Flow<List<Account>>
     fun getAccountById(accountId: String): Flow<Account?>
@@ -59,6 +65,8 @@ interface AccountRepository {
     // Removed activity from handleAuthenticationResult as DefaultAccountRepository can hold context if needed or get it passed down.
 
     fun signOut(account: Account): Flow<GenericSignOutResult>
+
+    fun signOutAllMicrosoftAccounts(): Flow<GenericSignOutAllResult>
 
     fun observeActionMessages(): Flow<String?>
     fun clearActionMessage()

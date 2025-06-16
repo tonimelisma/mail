@@ -470,6 +470,23 @@ class DefaultAccountRepository @Inject constructor(
         }
     }
 
+    override fun signOutAllMicrosoftAccounts(): Flow<GenericSignOutAllResult> {
+        Timber.tag(TAG).i("signOutAllMicrosoftAccounts called in DefaultAccountRepository.")
+        return microsoftAccountRepository.signOutAllMicrosoftAccounts().onEach { result ->
+            when (result) {
+                is GenericSignOutAllResult.Success -> {
+                    _accountActionMessage.tryEmit("Cleared ${result.removedCount} Microsoft account(s).")
+                }
+                is GenericSignOutAllResult.Error -> {
+                    _accountActionMessage.tryEmit("Failed to clear all Microsoft accounts: ${result.message}")
+                }
+                is GenericSignOutAllResult.NotInitialized -> {
+                    _accountActionMessage.tryEmit("Failed to clear all Microsoft accounts: Not Initialized")
+                }
+            }
+        }
+    }
+
     override suspend fun handleAuthenticationResult(
         providerType: String,
         resultCode: Int, // Unused for new Google flow, AppAuth handles it. Kept for interface.
