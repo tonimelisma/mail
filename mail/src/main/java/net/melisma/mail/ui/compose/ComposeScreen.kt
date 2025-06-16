@@ -11,10 +11,20 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavHostController
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AssistChip
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Add
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -23,6 +33,13 @@ fun ComposeScreen(
     viewModel: ComposeViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
+    val context = LocalContext.current
+    val attachLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            context.contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            viewModel.addAttachment(uri, context)
+        }
+    }
 
     LaunchedEffect(Unit) {
         viewModel.sendEvent.collect {
@@ -40,6 +57,9 @@ fun ComposeScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { attachLauncher.launch(arrayOf("*/*")) }) {
+                        Icon(Icons.Filled.Add, contentDescription = "Attach")
+                    }
                     Button(
                         onClick = viewModel::send,
                         enabled = !uiState.isSending
@@ -76,6 +96,22 @@ fun ComposeScreen(
                     .fillMaxWidth()
                     .weight(1f)
             )
+            if (uiState.draft.attachments.isNotEmpty()) {
+                LazyRow(modifier = Modifier.fillMaxWidth()) {
+                    items(uiState.draft.attachments) { att ->
+                        AssistChip(
+                            onClick = { /* maybe preview */ },
+                            label = { Text(att.fileName, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                            trailingIcon = {
+                                IconButton(onClick = { viewModel.removeAttachment(att) }) {
+                                    Icon(Icons.Filled.Close, contentDescription = "Remove attachment")
+                                }
+                            },
+                            modifier = Modifier.padding(end = 4.dp)
+                        )
+                    }
+                }
+            }
         }
     }
 } 

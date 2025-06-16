@@ -38,7 +38,11 @@ graph TD
 
 ### UI Layer
 
-*   **Compose Screen:** Provides email authoring experience. Works with ComposeViewModel to build MessageDrafts, handles reply/forward pre-population, and writes signatures.
+*   **Compose Screen:** Provides email authoring experience. Now includes:
+    *   SAF document picker for attachments (persistable URI permission).
+    *   AssistChip row to preview & remove attachments.
+    *   Debounced auto-save (3 s) which creates or updates drafts offline via use-cases.
+    *   "Send" button emits `ACTION_SEND_MESSAGE`; message enters Outbox until SyncController uploads.
 *   **Compose Screens:** Declarative UI components built with Jetpack Compose. They are responsible for displaying data and forwarding user events to ViewModels. They are stateless wherever possible.
 *   **ViewModels:** Hold UI state and expose it to the Composables as `StateFlow`. They handle user events, call into the domain layer (Repositories), and are responsible for UI-specific business logic.
 
@@ -58,6 +62,14 @@ graph TD
 *   **Room Database (`AppDatabase.kt`):** The implementation of the local SQLite database. It defines the tables (entities) and provides instances of the DAOs. The schema is built on a **many-to-many** relationship between Messages and Folders, facilitated by the `MessageFolderJunction` table. When the sync layer encounters a remote label that does not yet exist locally it **creates a placeholder `FolderEntity`** (`isPlaceholder = true`). These placeholders are hidden from the navigation drawer until a subsequent folder-list delta-sync replaces them with the full server representation.
 *   **Mail API Services:** A set of interfaces (`MailApiService.kt`) and their implementations (`GmailApiHelper.kt`, `GraphApiHelper.kt`) that abstract the details of communicating with different email provider APIs (Google, Microsoft).
 *   **Network (Ktor):** The HTTP client used to make network requests to the email provider APIs.
+
+## Data Flow Example: Composing & Sending with Attachments (Offline-First)
+
+1.  User taps "Attach" and selects a file via SAF.
+2.  ComposeViewModel extracts filename/mime/size, adds `Attachment` with localUri and updates UI state.
+3.  After 3 s of inactivity or on navigation away, ViewModel invokes `CreateDraftUseCase` (first save) then `SaveDraftUseCase` for edits. `DefaultMessageRepository` persists the draft message and attachment rows with `PENDING_UPLOAD` status and queues `ACTION_CREATE_DRAFT` / `ACTION_UPDATE_DRAFT`.
+4.  SyncController processes pending actions immediately (foreground) or later (offline). Provider helper uploads metadata and any small attachments (<5 MB Gmail, <4 MB Graph) inline; large files stream through chunk-upload sessions (Graph) or RFC-2822 multipart (Gmail).
+5.  On success, SyncController marks message & attachments `SYNCED` and removes them from Outbox list. UI re-composes.
 
 ## Data Flow Example: Refreshing the Inbox
 

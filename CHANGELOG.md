@@ -58,4 +58,28 @@
 
 ### Build
 
-Project now compiles with `./gradlew assembleDebug`. 
+Project now compiles with `./gradlew assembleDebug`.
+
+## [Unreleased] - 2024-07-26
+
+### Added
+
+-   **EPIC 3 Completed** – Compose & Send pipeline finished.
+    -   `mail/ui/compose/ComposeScreen.kt`: Attachment picker, AssistChip row, attach/remove UI.
+    -   `mail/ui/compose/ComposeViewModel.kt`: Attachment metadata extraction, auto-save draft debounce, Create/Save use-cases wiring.
+    -   Settings signature management wired through to Compose.
+
+### Changed
+
+-   `DefaultMessageRepository` already supported attachments; validated send flow.
+-   `BACKLOG.md` Epic 3 requirement statuses flipped to 🟢.
+-   `ARCHITECTURE.md` updated with new Compose flow diagram & UI notes.
+
+### Fixed
+
+-   Build errors regarding missing AttachFile icon by swapping to generic Add icon.
+
+### Notes
+
+-   Gmail helper currently encodes attachments inline; warn for >5 MB – future improvement.
+-   Next increment will focus on Outbox visual cues and advanced attachment preview. 

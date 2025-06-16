@@ -1,5 +1,7 @@
 package net.melisma.mail.ui.compose
 
+import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -12,6 +14,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import net.melisma.core_data.model.DraftType
 import net.melisma.core_data.model.EmailAddress
 import net.melisma.core_data.model.Message
@@ -20,6 +24,9 @@ import net.melisma.core_data.preferences.UserPreferencesRepository
 import net.melisma.core_data.repository.AccountRepository
 import net.melisma.core_data.repository.MessageRepository
 import net.melisma.mail.navigation.AppRoutes
+import net.melisma.domain.actions.CreateDraftUseCase
+import net.melisma.domain.actions.SaveDraftUseCase
+import android.provider.OpenableColumns
 import javax.inject.Inject
 
 data class ComposeScreenState(
@@ -33,7 +40,9 @@ class ComposeViewModel @Inject constructor(
     private val messageRepository: MessageRepository,
     private val userPreferencesRepository: UserPreferencesRepository,
     private val accountRepository: AccountRepository,
-    private val savedStateHandle: SavedStateHandle
+    private val savedStateHandle: SavedStateHandle,
+    private val createDraftUseCase: CreateDraftUseCase,
+    private val saveDraftUseCase: SaveDraftUseCase
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ComposeScreenState())
@@ -41,6 +50,9 @@ class ComposeViewModel @Inject constructor(
 
     private val _sendEvent = MutableSharedFlow<Unit>()
     val sendEvent = _sendEvent.asSharedFlow()
+
+    private val autoSaveDelayMs = 3000L // 3-second debounce
+    private var autoSaveJob: Job? = null
 
     init {
         viewModelScope.launch {
@@ -122,18 +134,21 @@ class ComposeViewModel @Inject constructor(
         _uiState.value = _uiState.value.copy(
             draft = _uiState.value.draft.copy(to = addresses)
         )
+        scheduleAutoSave()
     }
 
     fun onSubjectChanged(subject: String) {
         _uiState.value = _uiState.value.copy(
             draft = _uiState.value.draft.copy(subject = subject)
         )
+        scheduleAutoSave()
     }
 
     fun onBodyChanged(body: String) {
         _uiState.value = _uiState.value.copy(
             draft = _uiState.value.draft.copy(body = body)
         )
+        scheduleAutoSave()
     }
 
     fun send() {
@@ -150,6 +165,70 @@ class ComposeViewModel @Inject constructor(
             } finally {
                 _uiState.update { it.copy(isSending = false) }
             }
+        }
+    }
+
+    fun addAttachment(uri: Uri, context: Context) {
+        val cr = context.contentResolver
+        val cursor = cr.query(uri, null, null, null, null)
+        var fileName = "attachment"
+        var size: Long = 0
+        var mime: String = cr.getType(uri) ?: "application/octet-stream"
+        cursor?.use {
+            if (it.moveToFirst()) {
+                val nameIdx = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (nameIdx >= 0) fileName = it.getString(nameIdx) ?: fileName
+                val sizeIdx = it.getColumnIndex(OpenableColumns.SIZE)
+                if (sizeIdx >= 0) size = it.getLong(sizeIdx)
+            }
+        }
+        val newAtt = net.melisma.core_data.model.Attachment(
+            id = java.util.UUID.randomUUID().toString(),
+            messageId = uiState.value.draft.existingMessageId ?: "", // temp
+            accountId = "", // filled by repo when saving
+            fileName = fileName,
+            contentType = mime,
+            size = size,
+            isInline = false,
+            contentId = null,
+            localUri = uri.toString(),
+            remoteId = null,
+            downloadStatus = "DOWNLOADED",
+            lastSyncError = null
+        )
+        _uiState.update { st ->
+            st.copy(draft = st.draft.copy(attachments = st.draft.attachments + newAtt))
+        }
+        scheduleAutoSave()
+    }
+
+    fun removeAttachment(att: net.melisma.core_data.model.Attachment) {
+        _uiState.update { st ->
+            st.copy(draft = st.draft.copy(attachments = st.draft.attachments - att))
+        }
+        scheduleAutoSave()
+    }
+
+    private fun scheduleAutoSave() {
+        autoSaveJob?.cancel()
+        autoSaveJob = viewModelScope.launch {
+            delay(autoSaveDelayMs)
+            autoSave()
+        }
+    }
+
+    private suspend fun autoSave() {
+        val accountId = savedStateHandle.get<String>(AppRoutes.ARG_ACCOUNT_ID) ?: return
+        val account = accountRepository.getAccountByIdSuspend(accountId) ?: return
+        val currentDraft = uiState.value.draft
+        if (currentDraft.existingMessageId == null) {
+            // First save creates draft
+            val res = createDraftUseCase(account, currentDraft)
+            res.getOrNull()?.let { createdMsg ->
+                _uiState.update { it.copy(draft = currentDraft.copy(existingMessageId = createdMsg.id)) }
+            }
+        } else {
+            saveDraftUseCase(account, currentDraft.existingMessageId!!, currentDraft)
         }
     }
 } 
