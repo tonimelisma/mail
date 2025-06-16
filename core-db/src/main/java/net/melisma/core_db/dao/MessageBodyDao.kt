@@ -66,6 +66,12 @@ interface MessageBodyDao {
         newLastSyncAttemptTimestamp: Long
     )
 
+    @Query("SELECT SUM(size_in_bytes) FROM message_bodies mb JOIN messages m ON mb.message_id = m.id WHERE m.accountId = :accountId")
+    suspend fun getTotalBodiesSizeForAccount(accountId: String): Long?
+
+    @Query("SELECT SUM(size_in_bytes) FROM message_bodies")
+    suspend fun getTotalBodiesSize(): Long?
+
     // You might add queries to get bodies that haven't been fetched recently, etc.
     // For now, basic CRUD operations.
 } 

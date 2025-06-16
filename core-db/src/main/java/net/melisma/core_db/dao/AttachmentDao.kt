@@ -67,4 +67,10 @@ interface AttachmentDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertOrUpdateAttachments(attachments: List<AttachmentEntity>)
+
+    @Query("SELECT SUM(size) FROM attachments WHERE accountId = :accountId AND isDownloaded = 1")
+    suspend fun getTotalDownloadedSizeForAccount(accountId: String): Long?
+
+    @Query("SELECT SUM(size) FROM attachments WHERE isDownloaded = 1")
+    suspend fun getTotalDownloadedSize(): Long?
 }

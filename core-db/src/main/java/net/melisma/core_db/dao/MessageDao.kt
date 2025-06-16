@@ -107,9 +107,19 @@ interface MessageDao {
     @Query("UPDATE messages SET body = :body WHERE id = :messageId")
     suspend fun updateMessageBody(messageId: String, body: String)
 
-    // Returns messages eligible for cache eviction based on policy. Simplified for now.
-    @Query("SELECT * FROM messages WHERE (lastAccessedTimestamp IS NULL OR lastAccessedTimestamp < :maxLastAccessedTimestampMillis) AND syncStatus NOT IN (:excludedSyncStates) AND isDraft = 0 AND isOutbox = 0")
-    suspend fun getCacheEvictionCandidates(maxLastAccessedTimestampMillis: Long, excludedSyncStates: List<String>): List<MessageEntity>
+    // Returns messages eligible for cache eviction based on policy.
+    @Query("""
+        SELECT * FROM messages 
+        WHERE (lastAccessedTimestamp IS NULL OR lastAccessedTimestamp < :maxLastAccessedTimestampMillis) 
+        AND (timestamp < :maxSentTimestampMillis)
+        AND syncStatus NOT IN (:excludedSyncStates) 
+        AND isDraft = 0 AND isOutbox = 0
+    """)
+    suspend fun getCacheEvictionCandidates(
+        maxLastAccessedTimestampMillis: Long,
+        maxSentTimestampMillis: Long,
+        excludedSyncStates: List<String>
+    ): List<MessageEntity>
 
     // --- Legacy helper queries kept temporarily ---
 
@@ -129,4 +139,11 @@ interface MessageDao {
 
     // Legacy one-to-many helpers removed 2025-07-??.  Thread operations now rely solely on
     // junction-table aware helpers (getMessageIdsByThreadId & DAO label ops).
+
+    @Query("""
+        SELECT MIN(timestamp) FROM messages m
+        INNER JOIN message_folder_junction j ON m.id = j.messageId
+        WHERE j.folderId = :folderId
+    """)
+    suspend fun getOldestMessageTimestamp(folderId: String): Long?
 } 

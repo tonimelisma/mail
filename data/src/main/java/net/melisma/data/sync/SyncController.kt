@@ -37,6 +37,9 @@ import net.melisma.core_data.repository.AccountRepository
 import net.melisma.core_data.datasource.MailApiServiceFactory
 import kotlinx.coroutines.flow.update
 import net.melisma.core_data.model.WellKnownFolderType
+import net.melisma.data.sync.JobProducer
+import net.melisma.data.sync.gate.Gatekeeper
+import kotlin.jvm.JvmSuppressWildcards
 
 @Singleton
 class SyncController @Inject constructor(
@@ -49,11 +52,16 @@ class SyncController @Inject constructor(
     private val appDatabase: net.melisma.core_db.AppDatabase,
     @net.melisma.core_data.di.Dispatcher(net.melisma.core_data.di.MailDispatchers.IO)
     private val ioDispatcher: kotlinx.coroutines.CoroutineDispatcher,
-    private val accountRepository: AccountRepository
+    private val accountRepository: AccountRepository,
+    private val producers: @JvmSuppressWildcards List<JobProducer>,
+    private val gatekeepers: @JvmSuppressWildcards Set<Gatekeeper>
 ) {
 
     private val _status = MutableStateFlow(SyncControllerStatus())
     val status = _status.asStateFlow()
+
+    private val _totalWorkScore = MutableStateFlow(0)
+    val totalWorkScore = _totalWorkScore.asStateFlow()
 
     private var pollingJob: kotlinx.coroutines.Job? = null
 
@@ -73,28 +81,45 @@ class SyncController @Inject constructor(
     init {
         externalScope.launch {
             networkMonitor.isOnline.collect { isOnline ->
-                _status.value = _status.value.copy(networkAvailable = isOnline)
+                _status.update { it.copy(networkAvailable = isOnline) }
+            }
+        }
+
+        // Observe total work score to derive isSyncing status for backward compatibility
+        externalScope.launch {
+            totalWorkScore.collect { score ->
+                _status.update { it.copy(isSyncing = score > 0) }
             }
         }
 
         // Observe user preference for initial sync duration
         externalScope.launch {
             userPreferencesRepository.userPreferencesFlow.collect { prefs ->
-                _status.value = _status.value.copy(initialSyncDurationDays = prefs.initialSyncDurationDays)
+                _status.update { it.copy(initialSyncDurationDays = prefs.initialSyncDurationDays) }
                 initialSyncDurationDays = prefs.initialSyncDurationDays
             }
         }
         externalScope.launch { run() }
+        externalScope.launch { producerLoop() }
         Timber.d("SyncController initialized and running.")
     }
 
     fun submit(job: SyncJob) {
-        if (queue.contains(job)) {
-            Timber.d("Ignoring duplicate job: $job")
-            return
+        externalScope.launch {
+            val isAllowed = gatekeepers.all { it.isAllowed(job) }
+            if (!isAllowed) {
+                Timber.d("Job vetoed by a gatekeeper: $job")
+                return@launch
+            }
+
+            if (queue.contains(job)) {
+                Timber.d("Ignoring duplicate job: $job")
+                return@launch
+            }
+            Timber.d("Submitting new job: $job with score ${job.workScore}")
+            _totalWorkScore.update { it + job.workScore }
+            queue.put(job)
         }
-        Timber.d("Submitting new job: $job")
-        queue.put(job)
     }
 
     private suspend fun run() {
@@ -109,7 +134,8 @@ class SyncController @Inject constructor(
                 continue
             }
             activeAccounts.add(job.accountId)
-            _status.value = _status.value.copy(isSyncing = true, currentJob = job.toString())
+            // isSyncing is now derived from totalWorkScore, so we only update the currentJob
+            _status.update { it.copy(currentJob = job.toString()) }
             Timber.i("Processing job: $job")
 
             try {
@@ -133,14 +159,20 @@ class SyncController @Inject constructor(
                     is SyncJob.SearchOnline -> handleSearchOnline(job)
                     is SyncJob.EvictFromCache -> runCacheEviction(job.accountId)
                     is SyncJob.CheckForNewMail -> handleCheckForNewMail(job)
+                    is SyncJob.FullAccountBootstrap -> handleFullAccountBootstrap(job)
                 }
-                _status.value = _status.value.copy(error = null)
+                _status.update { it.copy(error = null) }
             } catch (e: Exception) {
                 Timber.e(e, "Error processing job: $job")
-                _status.value = _status.value.copy(error = e.message)
+                // Emit detailed device diagnostics on network-related failures.
+                if (e is java.net.UnknownHostException || e is java.net.SocketTimeoutException) {
+                    net.melisma.core_data.util.DiagnosticUtils.logDeviceState(appContext, "jobError ${job::class.simpleName}")
+                }
+                _status.update { it.copy(error = e.message) }
             } finally {
                 activeAccounts.remove(job.accountId)
-                _status.value = _status.value.copy(isSyncing = false, currentJob = null)
+                _totalWorkScore.update { (it - job.workScore).coerceAtLeast(0) }
+                _status.update { it.copy(currentJob = null) }
             }
         }
     }
@@ -699,110 +731,94 @@ class SyncController @Inject constructor(
         withContext(ioDispatcher) {
             val prefs = userPreferencesRepository.userPreferencesFlow.first()
             val cacheLimitBytes = prefs.cacheSizeLimitBytes
+            // Target 80% of cache size after eviction to create a buffer.
             val targetBytesAfterEvict = (cacheLimitBytes * 0.8).toLong()
 
             val attachmentDao = appDatabase.attachmentDao()
             val messageDao = appDatabase.messageDao()
             val messageBodyDao = appDatabase.messageBodyDao()
 
-            // Gather current cache usage
-            val downloadedAttachments = attachmentDao.getAllDownloadedAttachments()
-                .filter { it.accountId == accountId }
-            var attachmentsBytes = downloadedAttachments.sumOf { it.size }
-
-            val messageBodies = messageBodyDao.getAllMessageBodies()
-                .filter { body ->
-                    val parent = messageDao.getMessageByIdSuspend(body.messageId)
-                    parent?.accountId == accountId
-                }
-            var bodiesBytes = messageBodies.sumOf { it.sizeInBytes }
-
+            // Calculate current cache usage for the specific account
+            val attachmentsBytes = attachmentDao.getTotalDownloadedSizeForAccount(accountId) ?: 0L
+            val bodiesBytes = messageBodyDao.getTotalBodiesSizeForAccount(accountId) ?: 0L
             var totalUsageBytes = attachmentsBytes + bodiesBytes
-            Timber.d("Cache usage for account $accountId: ${totalUsageBytes / 1024 / 1024} MB (limit ${cacheLimitBytes / 1024 / 1024} MB)")
-            if (totalUsageBytes <= cacheLimitBytes) return@withContext // under hard limit, no action
-            val bytesToFree = totalUsageBytes - targetBytesAfterEvict
-            if (bytesToFree <= 0) return@withContext // at or below soft target, nothing
 
-            val evictionCutoffTs = System.currentTimeMillis() - java.util.concurrent.TimeUnit.DAYS.toMillis(90)
+            Timber.d("Cache eviction check for account $accountId: " +
+                    "Usage: ${totalUsageBytes / 1024 / 1024}MB, " +
+                    "Limit: ${cacheLimitBytes / 1024 / 1024}MB")
+
+            // The producer already checks the 98% threshold, but we re-check here
+            // to handle direct calls or race conditions. We proceed if over the 80% target.
+            if (totalUsageBytes <= targetBytesAfterEvict) {
+                Timber.d("Cache usage is below target. No eviction needed for account $accountId.")
+                return@withContext
+            }
+
+            val bytesToFree = totalUsageBytes - targetBytesAfterEvict
             var bytesFreed = 0L
 
+            val now = System.currentTimeMillis()
+            val evictionAccessCutoffTs = now - java.util.concurrent.TimeUnit.HOURS.toMillis(24)
+            val evictionAgeCutoffTs = now - java.util.concurrent.TimeUnit.DAYS.toMillis(90)
+
             appDatabase.withTransaction {
-                // 1. Evict attachments (least recently accessed messages first)
-                val candidateAttachments = downloadedAttachments
-                    .filter { attachment ->
-                        val msg = messageDao.getMessageByIdSuspend(attachment.messageId) ?: return@filter false
-                        // Exclude recent or protected messages
-                        val lastAccess = msg.lastAccessedTimestamp ?: 0L
-                        val protect = lastAccess >= evictionCutoffTs || msg.isDraft || msg.isOutbox
-                        !protect
-                    }
+                // 1. Evict attachments from messages that qualify for eviction
+                val candidateMessagesForAttachmentEviction = messageDao.getCacheEvictionCandidates(
+                    maxLastAccessedTimestampMillis = evictionAccessCutoffTs,
+                    maxSentTimestampMillis = evictionAgeCutoffTs,
+                    excludedSyncStates = listOf(
+                        EntitySyncStatus.PENDING_UPLOAD.name,
+                        EntitySyncStatus.ERROR.name,
+                        EntitySyncStatus.PENDING_DELETE.name
+                    )
+                ).filter { it.accountId == accountId }
+
+                val candidateMessageIds = candidateMessagesForAttachmentEviction.map { it.id }.toSet()
+
+                val attachmentsToEvict = attachmentDao.getAllDownloadedAttachments()
+                    .filter { it.accountId == accountId && it.messageId in candidateMessageIds }
                     .sortedBy { it.downloadTimestamp ?: 0L }
 
-                for (att in candidateAttachments) {
+                for (att in attachmentsToEvict) {
                     if (bytesFreed >= bytesToFree) break
-                    // Delete file from disk
                     att.localFilePath?.let { path ->
                         try { java.io.File(path).delete() } catch (e: Exception) { Timber.w(e, "Failed to delete attachment file $path") }
                     }
-                    // Reset DB flags so it can be redownloaded on demand
                     attachmentDao.resetDownloadStatus(att.id, EntitySyncStatus.PENDING_DOWNLOAD)
                     bytesFreed += att.size
                 }
 
-                // Refresh counters after attachment purge
-                attachmentsBytes -= bytesFreed.coerceAtMost(attachmentsBytes)
-                totalUsageBytes = attachmentsBytes + bodiesBytes
                 if (bytesFreed >= bytesToFree) return@withTransaction
 
-                // 2. Evict message bodies (oldest fetched first)
-                val excludedStates = listOf(
-                    EntitySyncStatus.PENDING_UPLOAD.name,
-                    EntitySyncStatus.ERROR.name,
-                    EntitySyncStatus.PENDING_DELETE.name,
-                    EntitySyncStatus.PENDING_DOWNLOAD.name
-                )
-                val candidateBodies = messageBodies
-                    .filter { body ->
-                        val parent = messageDao.getMessageByIdSuspend(body.messageId) ?: return@filter false
-                        val lastAccess = parent.lastAccessedTimestamp ?: 0L
-                        val protect = lastAccess >= evictionCutoffTs || parent.isDraft || parent.isOutbox
-                        !protect
+                // 2. Evict message bodies from the same candidate messages
+                val candidateBodyIds = candidateMessagesForAttachmentEviction.map { it.id }
+                candidateBodyIds.forEach { msgId ->
+                    if (bytesFreed >= bytesToFree) return@forEach
+                    val body = messageBodyDao.getBodyForMessage(msgId)
+                    if (body != null) {
+                        messageBodyDao.deleteMessageBody(msgId)
+                        bytesFreed += body.sizeInBytes
                     }
-                    .sortedBy { it.lastFetchedTimestamp }
-
-                for (body in candidateBodies) {
-                    if (bytesFreed >= bytesToFree) break
-                    val size = body.sizeInBytes
-                    messageBodyDao.deleteMessageBody(body.messageId)
-                    bytesFreed += size
-                    bodiesBytes -= size
                 }
 
-                totalUsageBytes = attachmentsBytes + bodiesBytes
                 if (bytesFreed >= bytesToFree) return@withTransaction
 
-                // 3. Evict entire message headers (least recently accessed)
-                val candidateMessages = messageDao.getCacheEvictionCandidates(evictionCutoffTs, excludedStates)
-                    .filter { it.accountId == accountId }
-                    .sortedBy { it.lastAccessedTimestamp ?: 0L }
+                // 3. Evict entire message headers (only if still over budget)
+                val finalCandidateMessages = messageDao.getCacheEvictionCandidates(
+                     maxLastAccessedTimestampMillis = evictionAccessCutoffTs,
+                     maxSentTimestampMillis = evictionAgeCutoffTs,
+                     excludedSyncStates = listOf(EntitySyncStatus.PENDING_UPLOAD.name)
+                ).filter { it.accountId == accountId }
+                 .sortedBy { it.timestamp }
 
-                for (msg in candidateMessages) {
+                for (msg in finalCandidateMessages) {
                     if (bytesFreed >= bytesToFree) break
-                    // Delete associated attachments files (if any)
-                    val atts = attachmentDao.getDownloadedAttachmentsForMessage(msg.id)
-                    atts.forEach { a ->
-                        a.localFilePath?.let { path ->
-                            try { java.io.File(path).delete() } catch (e: Exception) { Timber.w(e, "Failed to delete attachment file $path") }
-                        }
-                    }
-                    // Cascading delete will remove bodies via FK
                     messageDao.deleteMessageById(msg.id)
-                    // Body + header size approximated as 0.2KB to avoid costly recalculation; continue until limit
-                    bytesFreed += 200L
+                    bytesFreed += 500 // Approximate size for header and junctions
                 }
             }
 
-            Timber.i("Cache eviction freed ${bytesFreed / 1024 / 1024} MB, new usage ${(totalUsageBytes - bytesFreed) / 1024 / 1024} MB")
+            Timber.i("Cache eviction for $accountId freed ${bytesFreed / 1024 / 1024} MB.")
         }
     }
 
@@ -936,6 +952,23 @@ class SyncController @Inject constructor(
         }
     }
 
+    private suspend fun handleFullAccountBootstrap(job: SyncJob.FullAccountBootstrap) {
+        kotlinx.coroutines.withContext(ioDispatcher) {
+            Timber.i("FullAccountBootstrap: Enumerating folders for account ${job.accountId}")
+
+            // Ensure we have an up-to-date folder list first.
+            submit(SyncJob.SyncFolderList(job.accountId))
+
+            val folders = appDatabase.folderDao().getFoldersForAccount(job.accountId).firstOrNull()
+                ?: emptyList()
+
+            Timber.i("FullAccountBootstrap: Queuing ForceRefresh for ${folders.size} folders")
+            folders.forEach { folder ->
+                submit(SyncJob.ForceRefreshFolder(job.accountId, folder.id))
+            }
+        }
+    }
+
     /**
      * Given a list of remote folder/label IDs, this ensures a corresponding local FolderEntity
      * exists for each one. If a local folder for a given remote ID doesn't exist, a placeholder
@@ -966,6 +999,20 @@ class SyncController @Inject constructor(
                 val placeholderName = nameHintMap[remoteId] ?: remoteId
                 folderDao.insertPlaceholderIfAbsent(accountId, remoteId, placeholderName)
             }
+        }
+    }
+
+    private suspend fun producerLoop() {
+        while (true) {
+            producers.forEach { producer ->
+                try {
+                    val jobs = producer.produce()
+                    jobs.forEach { submit(it) }
+                } catch (e: Exception) {
+                    Timber.e(e, "Producer ${producer::class.simpleName} failed")
+                }
+            }
+            kotlinx.coroutines.delay(30_000L) // 30-second cadence – adjustable later via prefs
         }
     }
 }

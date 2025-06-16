@@ -16,6 +16,8 @@ import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import net.melisma.core_data.model.SyncControllerStatus
 import net.melisma.data.sync.SyncController
@@ -28,8 +30,11 @@ import javax.inject.Inject
  *
  * The service stops itself automatically once [SyncController.status] reports that the controller
  * is no longer syncing **and** [SyncControllerStatus.initialSyncDurationDays] is honoured for at
- * least one folder (i.e. first page fetched). For a first iteration we simply monitor the global
- * isSyncing flag and stop when it turns false for 5 consecutive seconds.
+ * least one folder (i.e. first page fetched).
+ *
+ * This new implementation uses the [SyncController.totalWorkScore] as the primary signal.
+ * The service starts when the score is above a threshold and stops when it drops to zero
+ * for a few seconds (debounced) to avoid flickering.
  */
 @AndroidEntryPoint
 class InitialSyncForegroundService : Service() {
@@ -37,35 +42,47 @@ class InitialSyncForegroundService : Service() {
     @Inject lateinit var syncController: SyncController
     private val serviceScope = CoroutineScope(Dispatchers.Main)
     private var watchJob: Job? = null
+    private val WORK_SCORE_THRESHOLD = 10
 
     override fun onCreate() {
         super.onCreate()
+        isRunning = true
         Timber.d("InitialSyncForegroundService: onCreate - Service is being created.")
         startInForeground()
         watchJob = serviceScope.launch {
-            var idleTicks = 0
-            syncController.status.collect { status ->
-                updateNotification(status)
-                if (!status.isSyncing) {
-                    idleTicks++
-                    if (idleTicks >= 5) {
-                        Timber.d("InitialSyncForegroundService: Sync idle, stopping service")
-                        stopSelf()
+            syncController.totalWorkScore
+                .collect { score ->
+                    if (score > 0) {
+                        updateNotification("Syncing mail… Current work score: $score")
+                    } else {
+                        // Debounce is better applied before stopping
+                        delay(5000)
+                        if (syncController.totalWorkScore.value == 0) {
+                            Timber.d("InitialSyncForegroundService: Work score is zero, stopping service.")
+                            stopSelf()
+                        }
                     }
-                } else {
-                    idleTicks = 0
                 }
-            }
         }
     }
 
     override fun onDestroy() {
+        isRunning = false
+        Timber.d("InitialSyncForegroundService: onDestroy - isRunning set to false")
         watchJob?.cancel()
         super.onDestroy()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // Nothing to do – logic handled in onCreate.
+        // We now also check the work score here. If a start command comes in but there's
+        // no work, we can stop immediately. This handles cases where the service is
+        // started manually or restarted by the system.
+        serviceScope.launch {
+            if (syncController.totalWorkScore.value < WORK_SCORE_THRESHOLD) {
+                Timber.d("Service started with work score below threshold. Stopping.")
+                stopSelf()
+            }
+        }
         return START_STICKY
     }
 
@@ -74,19 +91,14 @@ class InitialSyncForegroundService : Service() {
     @android.annotation.SuppressLint("MissingPermission", "NotificationPermission")
     private fun startInForeground() {
         val channelId = ensureChannel()
-        val notification = buildNotification(channelId, "Initial mail sync in progress…")
-        Timber.d("InitialSyncForegroundService: startInForeground - Attempting to call startForeground().")
+        val notification = buildNotification(channelId, "Preparing to sync mail…")
+        Timber.d("InitialSyncForegroundService: startInForeground - Calling startForeground().")
         startForeground(NOTIFICATION_ID, notification)
     }
 
     @android.annotation.SuppressLint("MissingPermission", "NotificationPermission")
-    private fun updateNotification(status: SyncControllerStatus) {
+    private fun updateNotification(text: String) {
         val channelId = DEFAULT_CHANNEL_ID
-        val text = if (status.isSyncing) {
-            "Syncing mail…"
-        } else {
-            "Finishing up…"
-        }
         val updated = buildNotification(channelId, text)
         if (Build.VERSION.SDK_INT < 33 ||
             ContextCompat.checkSelfPermission(
@@ -118,7 +130,7 @@ class InitialSyncForegroundService : Service() {
     private fun buildNotification(channelId: String, text: String): Notification {
         return NotificationCompat.Builder(this, channelId)
             .setSmallIcon(android.R.drawable.stat_notify_sync)
-            .setContentTitle("Mail is syncing")
+            .setContentTitle("Mail Sync")
             .setContentText(text)
             .setOngoing(true)
             .build()
@@ -127,5 +139,7 @@ class InitialSyncForegroundService : Service() {
     companion object {
         private const val DEFAULT_CHANNEL_ID = "mail_sync"
         private const val NOTIFICATION_ID = 1001
+        @Volatile
+        var isRunning: Boolean = false
     }
 } 
