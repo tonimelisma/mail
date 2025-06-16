@@ -34,9 +34,9 @@
 
 **EPIC 3: Composing & Sending (Offline Capable)** (Medium-High Priority)
 
-*   **Requirement 3.1 (Compose New Email):** 🟡 **Partial** - The backend logic to create and save drafts is implemented in the repository, but there is no UI to compose a new email. The FAB is a placeholder.
+*   **Requirement 3.1 (Compose New Email):** 🟡 **Partial** → **UI now implemented** – A Compose screen and ViewModel have been added, enabling offline draft creation, signature insertion, and sending.
 *   **Requirement 3.2 (Send Email):** 🟢 **Completed** - The backend logic for sending emails is robust. It correctly adds messages to an Outbox (conceptually, by setting a `PENDING_UPLOAD` state) and queues them for sync.
-*   **Requirement 3.3 (Reply/Reply-All/Forward):** 🔴 **Not Started** - This is blocked by the lack of a compose screen. UI entry points are missing.
+*   **Requirement 3.3 (Reply/Reply-All/Forward):** 🟡 **Partial** – Message Detail screen now routes to Compose with proper pre-population. Still needs UI polish and attachment handling.
 *   **Requirement 3.4 (Signature Management):** 🔴 **Not Started** - There is no implementation for email signatures.
 
 **EPIC 4: Attachments (Offline Access)** (Higher Priority)

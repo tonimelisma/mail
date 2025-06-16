@@ -38,6 +38,7 @@ graph TD
 
 ### UI Layer
 
+*   **Compose Screen:** Provides email authoring experience. Works with ComposeViewModel to build MessageDrafts, handles reply/forward pre-population, and writes signatures.
 *   **Compose Screens:** Declarative UI components built with Jetpack Compose. They are responsible for displaying data and forwarding user events to ViewModels. They are stateless wherever possible.
 *   **ViewModels:** Hold UI state and expose it to the Composables as `StateFlow`. They handle user events, call into the domain layer (Repositories), and are responsible for UI-specific business logic.
 
