@@ -13,6 +13,6 @@ class DefaultSendMessageUseCase @Inject constructor(
         Timber.d(
             "Invoked for accountId: ${account.id}, draft: $draft"
         )
-        return messageRepository.sendMessage(draft, account)
+        return messageRepository.sendMessage(account, draft)
     }
 } 

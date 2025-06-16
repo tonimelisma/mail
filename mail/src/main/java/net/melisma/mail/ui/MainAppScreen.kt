@@ -14,7 +14,10 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -33,6 +36,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import androidx.paging.compose.collectAsLazyPagingItems
@@ -42,11 +46,17 @@ import net.melisma.mail.MainViewModel
 import net.melisma.mail.R
 import net.melisma.mail.ViewMode
 import net.melisma.mail.navigation.AppRoutes
-import timber.log.Timber
-import androidx.hilt.navigation.compose.hiltViewModel
+import net.melisma.mail.ui.sync.SyncErrorSnackbar
 import net.melisma.mail.ui.sync.SyncStatusBar
 import net.melisma.mail.ui.sync.SyncStatusViewModel
-import net.melisma.mail.ui.sync.SyncErrorSnackbar
+import net.melisma.mail.ui.theme.MailTheme
+import timber.log.Timber
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Edit
+import net.melisma.core_data.model.FolderFetchState
+import net.melisma.core_data.model.ThreadDataState
+import net.melisma.mail.ui.inbox.MessageListScreen
+import net.melisma.mail.ui.inbox.UnifiedInboxScreen
 
 // Helper functions that were originally in MainActivity or might be needed
 // (Consider moving to a Util file if they become more general)
@@ -97,32 +107,35 @@ fun MainAppScreen(
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
-            MailDrawerContent(
-                state = state,
-                onFolderSelected = { folder, account ->
-                    scope.launch { drawerState.close() }
-                    mainViewModel.selectFolder(folder, account)
-                },
-                onUnifiedInboxSelected = {
-                    scope.launch { drawerState.close() }
-                    mainViewModel.selectUnifiedInbox()
-                },
-                onSettingsClicked = {
-                    scope.launch { drawerState.close() }
-                    navController.navigate(AppRoutes.SETTINGS)
-                },
-                onRefreshFolders = { accountId ->
-                    mainViewModel.refreshFoldersForAccount(
-                        accountId,
-                        context as? Activity
-                    )
-                }
-            )
+            ModalDrawerSheet {
+                MailDrawerContent(
+                    state = state,
+                    onFolderSelected = { folder, account ->
+                        scope.launch { drawerState.close() }
+                        mainViewModel.selectFolder(folder, account)
+                    },
+                    onUnifiedInboxSelected = {
+                        scope.launch { drawerState.close() }
+                        mainViewModel.selectUnifiedInbox()
+                    },
+                    onSettingsClicked = {
+                        scope.launch { drawerState.close() }
+                        navController.navigate(AppRoutes.SETTINGS)
+                    },
+                    onRefreshFolders = { accountId ->
+                        mainViewModel.refreshFoldersForAccount(
+                            accountId,
+                            context as? Activity
+                        )
+                    }
+                )
+            }
         }
     ) {
         Scaffold(
             topBar = {
-                val title = state.selectedFolder?.displayName ?: stringResource(R.string.app_name)
+                val title =
+                    state.selectedFolder?.displayName ?: stringResource(R.string.app_name)
                 MailTopAppBar(
                     title = title,
                     onNavigationClick = { scope.launch { drawerState.open() } },
@@ -131,11 +144,24 @@ fun MainAppScreen(
                     }
                 )
             },
-            floatingActionButton = { /* Placeholder for FAB */ },
+            floatingActionButton = {
+                FloatingActionButton(
+                    onClick = {
+                        state.selectedFolderAccountId?.let { accountId ->
+                            navController.navigate(AppRoutes.newComposePath(accountId))
+                        }
+                    }
+                ) {
+                    Icon(
+                        Icons.Filled.Edit,
+                        contentDescription = stringResource(R.string.cd_compose)
+                    )
+                }
+            },
             bottomBar = {
                 val syncStatusViewModel: SyncStatusViewModel = hiltViewModel()
                 val syncStatus by syncStatusViewModel.status.collectAsStateWithLifecycle()
-                androidx.compose.foundation.layout.Column {
+                Column {
                     SyncStatusBar(status = syncStatus)
                     SyncErrorSnackbar(status = syncStatus)
                 }
@@ -217,128 +243,72 @@ fun MainAppScreen(
                         } else if (state.selectedFolder != null) {
                             val selectedAccount = mainViewModel.getSelectedAccount()
                             val isViewModelRefreshing = when (state.currentViewMode) {
-                                ViewMode.MESSAGES -> lazyMessageItems.loadState.refresh is androidx.paging.LoadState.Loading
-                                ViewMode.THREADS -> state.threadDataState is net.melisma.core_data.model.ThreadDataState.Loading
+                                ViewMode.MESSAGES, ViewMode.UNIFIED_INBOX ->
+                                    lazyMessageItems.loadState.refresh is androidx.paging.LoadState.Loading
+                                else -> false // THREAD view doesn't use pager
                             }
 
-                            val showPullToRefreshSpinner =
-                                isViewModelRefreshing && (userPulledToRefresh || (state.currentViewMode == ViewMode.MESSAGES && lazyMessageItems.itemCount == 0) || (state.currentViewMode == ViewMode.THREADS && state.threads?.isEmpty() != false))
+                            val isSyncingFromServer = state.selectedFolderAccountId?.let { accId ->
+                                state.foldersByAccountId[accId] is FolderFetchState.Loading
+                            } ?: false
 
-                            LaunchedEffect(isViewModelRefreshing) {
-                                if (!isViewModelRefreshing && userPulledToRefresh) {
-                                    userPulledToRefresh = false
-                                }
-                            }
+                            val isRefreshing = (isViewModelRefreshing && userPulledToRefresh) || isSyncingFromServer
 
                             PullToRefreshBox(
-                                isRefreshing = showPullToRefreshSpinner,
+                                isRefreshing = isRefreshing,
                                 onRefresh = {
-                                    if (!isViewModelRefreshing) {
-                                        when (state.currentViewMode) {
-                                            ViewMode.MESSAGES -> {
-                                                userPulledToRefresh = true
-                                                lazyMessageItems.refresh()
-                                            }
-
-                                            ViewMode.THREADS -> {
-                                                userPulledToRefresh = true
-                                                mainViewModel.retryFetchThreadsForCurrentFolder()
-                                            }
-                                        }
-                                    }
+                                    userPulledToRefresh = true
+                                    mainViewModel.onRefresh()
                                 }
                             ) {
                                 when (state.currentViewMode) {
                                     ViewMode.MESSAGES -> {
-                                        Timber.d(
-                                            "MainAppScreen: MESSAGES view. lazyMessageItems.loadState: Refresh=${lazyMessageItems.loadState.refresh}, Append=${lazyMessageItems.loadState.append}, Prepend=${lazyMessageItems.loadState.prepend}. ItemCount: ${lazyMessageItems.itemCount}"
-                                        )
-                                        MessageListContent(
-                                            messages = lazyMessageItems,
-                                            accounts = state.accounts,
-                                            accountContext = selectedAccount,
-                                            isUnifiedInbox = state.selectedFolder?.id == MainViewModel.UNIFIED_INBOX_ID,
-                                            isUnreadFilterActive = state.isUnreadFilterActive,
-                                            isStarredFilterActive = state.isStarredFilterActive,
-                                            onUnreadFilterToggle = { mainViewModel.toggleUnreadFilter() },
-                                            onStarredFilterToggle = { mainViewModel.toggleStarredFilter() },
-                                            onMessageClick = { messageId ->
-                                                Timber.d(
-                                                    "MessageListContent clicked. Message ID: $messageId, Account ID: ${selectedAccount?.id}"
+                                        MessageListScreen(
+                                            lazyMessageItems = lazyMessageItems,
+                                            onMessageClick = { message ->
+                                                navController.navigate(
+                                                    AppRoutes.messageDetailPath(
+                                                        message.id,
+                                                        message.accountId
+                                                    )
                                                 )
-                                                val accountIdToUse = selectedAccount?.id
-                                                if (accountIdToUse != null && accountIdToUse.isNotBlank()) {
-                                                    navController.navigate(
-                                                        AppRoutes.messageDetailPath(
-                                                            accountId = accountIdToUse,
-                                                            messageId = messageId
-                                                        )
-                                                    )
-                                                } else {
-                                                    Timber.e(
-                                                        "Clicked message's accountId is blank or selectedAccount is null. Cannot navigate to message detail."
-                                                    )
-                                                    showToast(
-                                                        context,
-                                                        "Error: Account context missing for message."
-                                                    )
-                                                }
                                             },
-                                            onRetry = {
-                                                Timber.i(
-                                                    "MessageListContent onRetry called. Calling lazyMessageItems.retry()"
-                                                )
-                                                lazyMessageItems.retry()
-                                            },
-                                            onRefresh = {
-                                                Timber.i(
-                                                    "MessageListContent onRefresh called. Calling lazyMessageItems.refresh()"
-                                                )
-                                                userPulledToRefresh = true
-                                                lazyMessageItems.refresh()
-                                            }
+                                            state = state,
+                                            mainViewModel = mainViewModel,
                                         )
                                     }
 
-                                    ViewMode.THREADS -> {
-                                        Timber.d(
-                                            "MainAppScreen: THREADS view. threadDataState: ${state.threadDataState::class.simpleName}"
+                                    ViewMode.UNIFIED_INBOX -> {
+                                        UnifiedInboxScreen(
+                                            lazyMessageItems = lazyMessageItems,
+                                            onMessageClick = { message ->
+                                                navController.navigate(
+                                                    AppRoutes.messageDetailPath(
+                                                        message.id,
+                                                        message.accountId
+                                                    )
+                                                )
+                                            },
+                                            state = state,
+                                            mainViewModel = mainViewModel,
                                         )
-                                        ThreadListContent(
-                                            threadDataState = state.threadDataState,
-                                            accountContext = selectedAccount,
-                                            onThreadClick = { threadId ->
-                                                val accountIdToUse = state.selectedFolderAccountId
-                                                if (accountIdToUse != null) {
-                                                    Timber.d(
-                                                        "Thread clicked: $threadId from account $accountIdToUse. Navigating..."
-                                                    )
-                                                    navController.navigate(
-                                                        AppRoutes.threadDetailPath(
-                                                            accountId = accountIdToUse,
-                                                            threadId = threadId
-                                                        )
-                                                    )
-                                                } else {
-                                                    Timber.e(
-                                                        "selectedFolderAccountId is null, cannot handle thread click."
-                                                    )
-                                                }
+                                    }
+
+                                    ViewMode.THREAD, ViewMode.THREADS -> {
+                                        when (val threadState = state.threadDataState) {
+                                            is ThreadDataState.Loading -> LoadingIndicator("Loading thread…")
+                                            is ThreadDataState.Error -> Text(threadState.error ?: "Error loading thread")
+                                            is ThreadDataState.Success -> {
+                                                // TODO: Proper thread UI; placeholder for now
+                                                Text("Thread view under construction (${threadState.threads.size} messages)")
                                             }
-                                        )
+                                            ThreadDataState.Initial -> Text("Select a message to view the thread.")
+                                        }
                                     }
                                 }
                             }
-                        } else if (state.isAnyFolderLoading || state.isLoadingAccountAction) {
-                            LoadingIndicator(statusText = if (state.isLoadingAccountAction) "Loading accounts..." else "Loading folders...")
                         } else {
-                            Text(
-                                "No folder selected or content available.",
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(16.dp)
-                            )
+                            LoadingIndicator(statusText = "Loading...")
                         }
                     }
                 }

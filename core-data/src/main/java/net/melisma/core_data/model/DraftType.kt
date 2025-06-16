@@ -6,5 +6,6 @@ import kotlinx.serialization.Serializable
 enum class DraftType {
     NEW,
     REPLY,
+    REPLY_ALL,
     FORWARD
 } 

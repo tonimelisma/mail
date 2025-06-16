@@ -23,6 +23,11 @@ object AppRoutes {
     const val ARG_THREAD_ID = "threadId" // Argument name for thread ID
     const val THREAD_DETAIL = "$THREAD_DETAIL_ROUTE/{$ARG_ACCOUNT_ID}/{$ARG_THREAD_ID}"
 
+    const val COMPOSE = "compose"
+
+    // Argument keys
+    const val ARG_ACTION = "action"
+
     /**
      * Helper function to construct the navigation path for the message detail screen
      * with actual argument values.
@@ -45,5 +50,13 @@ object AppRoutes {
      */
     fun threadDetailPath(accountId: String, threadId: String): String {
         return "$THREAD_DETAIL_ROUTE/$accountId/$threadId"
+    }
+
+    fun composePath(action: String, accountId: String, messageId: String?): String {
+        return "compose?action=$action&accountId=$accountId&messageId=$messageId"
+    }
+
+    fun newComposePath(accountId: String): String {
+        return "compose?action=new&accountId=$accountId"
     }
 } 

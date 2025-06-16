@@ -1,5 +1,6 @@
 package net.melisma.domain.actions
 
+import net.melisma.core_data.model.Account
 import net.melisma.core_data.model.Message
 import net.melisma.core_data.model.MessageDraft
 import net.melisma.core_data.repository.MessageRepository
@@ -10,12 +11,12 @@ class DefaultCreateDraftUseCase @Inject constructor(
     private val messageRepository: MessageRepository
 ) : CreateDraftUseCase {
     override suspend operator fun invoke(
-        accountId: String,
+        account: Account,
         draftDetails: MessageDraft
     ): Result<Message> {
         Timber.d(
-            "Invoked for accountId: $accountId, draftDetails: $draftDetails"
+            "Invoked for accountId: ${account.id}, draftDetails: $draftDetails"
         )
-        return messageRepository.createDraftMessage(accountId, draftDetails)
+        return messageRepository.createDraftMessage(account, draftDetails)
     }
 } 

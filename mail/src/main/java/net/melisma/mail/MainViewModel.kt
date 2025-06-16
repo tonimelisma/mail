@@ -72,7 +72,8 @@ data class MainScreenState(
     val availableDownloadPreferences: List<DownloadPreference> = DownloadPreference.entries.toList(),
     val toastMessage: String? = null,
     val isUnreadFilterActive: Boolean = false,
-    val isStarredFilterActive: Boolean = false
+    val isStarredFilterActive: Boolean = false,
+    val signature: String = ""
 ) {
     val isAnyFolderLoading: Boolean
         get() = foldersByAccountId.values.any { it is FolderFetchState.Loading }
@@ -310,14 +311,17 @@ class MainViewModel @Inject constructor(
 
     private fun observeUserPreferences() {
         userPreferencesRepository.userPreferencesFlow
-            .onEach { preferences ->
+            .onEach { prefs ->
                 _uiState.update {
                     it.copy(
-                        currentViewMode = preferences.mailViewMode,
-                        currentCacheSizePreference = CacheSizePreference.fromBytes(preferences.cacheSizeLimitBytes),
-                        currentInitialSyncDurationPreference = InitialSyncDurationPreference.fromDays(preferences.initialSyncDurationDays),
-                        currentBodyDownloadPreference = preferences.bodyDownloadPreference,
-                        currentAttachmentDownloadPreference = preferences.attachmentDownloadPreference
+                        currentViewMode = prefs.mailViewMode,
+                        currentCacheSizePreference = CacheSizePreference.fromBytes(prefs.cacheSizeLimitBytes),
+                        currentInitialSyncDurationPreference = InitialSyncDurationPreference.fromDays(
+                            prefs.initialSyncDurationDays
+                        ),
+                        currentBodyDownloadPreference = prefs.bodyDownloadPreference,
+                        currentAttachmentDownloadPreference = prefs.attachmentDownloadPreference,
+                        signature = prefs.signature
                     )
                 }
             }.launchIn(viewModelScope)
@@ -1021,6 +1025,12 @@ class MainViewModel @Inject constructor(
 
     fun onAddAccountClicked(activity: Activity) {
         // ... existing code ...
+    }
+
+    fun updateSignature(signature: String) {
+        viewModelScope.launch {
+            userPreferencesRepository.updateSignature(signature)
+        }
     }
 }
 

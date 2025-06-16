@@ -21,7 +21,10 @@ import javax.inject.Singleton
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "user_settings")
 
 enum class MailViewModePreference {
-    THREADS, MESSAGES
+    THREADS,
+    MESSAGES,
+    THREAD,
+    UNIFIED_INBOX
 }
 
 enum class CacheSizePreference(val bytes: Long) {
@@ -71,7 +74,8 @@ data class UserPreferences(
     val cacheSizeLimitBytes: Long,
     val initialSyncDurationDays: Long,
     val bodyDownloadPreference: DownloadPreference,
-    val attachmentDownloadPreference: DownloadPreference
+    val attachmentDownloadPreference: DownloadPreference,
+    val signature: String
 )
 
 interface UserPreferencesRepository {
@@ -81,6 +85,7 @@ interface UserPreferencesRepository {
     suspend fun updateInitialSyncDuration(durationPreference: InitialSyncDurationPreference)
     suspend fun updateBodyDownloadPreference(preference: DownloadPreference)
     suspend fun updateAttachmentDownloadPreference(preference: DownloadPreference)
+    suspend fun updateSignature(signature: String)
 }
 
 @Singleton
@@ -95,6 +100,7 @@ class DefaultUserPreferencesRepository @Inject constructor(
         val INITIAL_SYNC_DURATION_DAYS = longPreferencesKey("initial_sync_duration_days")
         val BODY_DOWNLOAD_PREFERENCE = stringPreferencesKey("body_download_preference")
         val ATTACHMENT_DOWNLOAD_PREFERENCE = stringPreferencesKey("attachment_download_preference")
+        val SIGNATURE = stringPreferencesKey("signature")
     }
 
     override val userPreferencesFlow: Flow<UserPreferences> = context.dataStore.data
@@ -124,12 +130,15 @@ class DefaultUserPreferencesRepository @Inject constructor(
             val attachmentPrefString = preferences[PreferencesKeys.ATTACHMENT_DOWNLOAD_PREFERENCE]
             val attachmentDownloadPreference = DownloadPreference.fromString(attachmentPrefString, DownloadPreference.ON_WIFI)
 
+            val signature = preferences[PreferencesKeys.SIGNATURE] ?: ""
+
             UserPreferences(
                 mailViewMode,
                 cacheLimit,
                 initialSyncDays,
                 bodyDownloadPreference,
-                attachmentDownloadPreference
+                attachmentDownloadPreference,
+                signature
             )
         }
 
@@ -161,6 +170,12 @@ class DefaultUserPreferencesRepository @Inject constructor(
     override suspend fun updateAttachmentDownloadPreference(preference: DownloadPreference) {
         context.dataStore.edit { preferences ->
             preferences[PreferencesKeys.ATTACHMENT_DOWNLOAD_PREFERENCE] = preference.name
+        }
+    }
+
+    override suspend fun updateSignature(signature: String) {
+        context.dataStore.edit { preferences ->
+            preferences[PreferencesKeys.SIGNATURE] = signature
         }
     }
 } 

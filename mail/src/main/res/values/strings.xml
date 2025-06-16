@@ -203,4 +203,11 @@
     <string name="all_inboxes">All Inboxes</string>
     <string name="cd_all_inboxes">All inboxes icon</string>
 
+    <string name="settings_section_composing">Composing</string>
+    <string name="settings_signature_label">Signature</string>
+    <string name="settings_signature_placeholder">Sent from Melisma Mail</string>
+    <string name="save">Save</string>
+
+    <string name="cd_compose">Compose</string>
+
 </resources>

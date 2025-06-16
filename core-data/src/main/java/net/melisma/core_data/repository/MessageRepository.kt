@@ -118,14 +118,14 @@ interface MessageRepository {
     ): Flow<Message?>
 
     // New methods for draft and message sending
-    suspend fun createDraftMessage(accountId: String, draftDetails: MessageDraft): Result<Message>
+    suspend fun createDraftMessage(account: Account, draftDetails: MessageDraft): Result<Message>
     suspend fun updateDraftMessage(
-        accountId: String,
+        account: Account,
         messageId: String,
         draftDetails: MessageDraft
     ): Result<Message>
 
-    suspend fun sendMessage(draft: MessageDraft, account: Account): Result<String>
+    suspend fun sendMessage(account: Account, draft: MessageDraft): Result<String>
 
     // New method for searching messages
     fun searchMessages(
@@ -143,4 +143,6 @@ interface MessageRepository {
     ): Flow<String?>
 
     fun observeMessageAttachments(messageId: String): Flow<List<Attachment>>
+
+    suspend fun getMessageById(messageId: String): Flow<Message?>
 }

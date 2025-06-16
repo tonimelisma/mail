@@ -31,6 +31,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -79,6 +80,7 @@ fun SettingsScreen(
     var showInitialSyncDurationDialog by remember { mutableStateOf(false) } // New state
     var showBodyDownloadPreferenceDialog by remember { mutableStateOf(false) }
     var showAttachmentDownloadPreferenceDialog by remember { mutableStateOf(false) }
+    var signature by remember(state.signature) { mutableStateOf(state.signature) }
 
     // Observe toast message changes (remains the same)
     LaunchedEffect(state.toastMessage) {
@@ -331,6 +333,36 @@ fun SettingsScreen(
                 )
             }
 
+            item {
+                SettingsDivider()
+            }
+
+            item {
+                SectionTitle(stringResource(R.string.settings_section_composing))
+            }
+            item {
+                Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                    OutlinedTextField(
+                        value = signature,
+                        onValueChange = { signature = it },
+                        label = { Text(stringResource(R.string.settings_signature_label)) },
+                        placeholder = { Text(stringResource(R.string.settings_signature_placeholder)) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(120.dp),
+                        maxLines = 5
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Button(
+                        onClick = { viewModel.updateSignature(signature) },
+                        enabled = signature != state.signature,
+                        modifier = Modifier.align(Alignment.End)
+                    ) {
+                        Text(stringResource(R.string.save))
+                    }
+                }
+            }
+
             // Spacer for FAB
             item {
                 Spacer(modifier = Modifier.height(80.dp))
@@ -562,5 +594,19 @@ fun DownloadPreferenceSelectionDialog(
                 }
             }
         }
+    )
+}
+
+@Composable
+fun SettingsDivider() {
+    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+}
+
+@Composable
+fun SectionTitle(text: String) {
+    Text(
+        text = text,
+        style = MaterialTheme.typography.titleSmall,
+        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
     )
 }

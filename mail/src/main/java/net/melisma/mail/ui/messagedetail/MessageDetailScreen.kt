@@ -41,6 +41,8 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.BottomAppBar
+import androidx.compose.material3.Button
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -56,9 +58,11 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
+import androidx.navigation.NavController
 import net.melisma.core_data.model.Attachment
 import net.melisma.core_data.model.EntitySyncStatus
 import net.melisma.mail.R
+import net.melisma.mail.navigation.AppRoutes
 import timber.log.Timber
 import java.time.OffsetDateTime
 import java.time.format.DateTimeFormatter
@@ -113,6 +117,41 @@ fun MessageDetailScreen(
                     }
                 }
             )
+        },
+        bottomBar = {
+            BottomAppBar {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceAround
+                ) {
+                    Button(onClick = {
+                        (screenState.messageOverallState as? MessageDetailUIState.Success)?.message?.let {
+                            navController.navigate(
+                                AppRoutes.composePath(
+                                    action = "reply",
+                                    accountId = it.accountId,
+                                    messageId = it.id
+                                )
+                            )
+                        }
+                    }) {
+                        Text("Reply")
+                    }
+                    Button(onClick = {
+                        (screenState.messageOverallState as? MessageDetailUIState.Success)?.message?.let {
+                            navController.navigate(
+                                AppRoutes.composePath(
+                                    action = "forward",
+                                    accountId = it.accountId,
+                                    messageId = it.id
+                                )
+                            )
+                        }
+                    }) {
+                        Text("Forward")
+                    }
+                }
+            }
         }
     ) { paddingValues ->
         Box(
@@ -184,7 +223,7 @@ fun MessageDetailScreen(
                             when (targetBodyState) {
                                 ContentDisplayState.DOWNLOADED -> {
                                     val htmlBody = currentMessage.body
-                                    if (!htmlBody.isNullOrEmpty()) {
+                                    if (htmlBody?.isNotEmpty() == true) {
                                         AndroidView(
                                             factory = { factoryContext ->
                                                 WebView(factoryContext).apply {

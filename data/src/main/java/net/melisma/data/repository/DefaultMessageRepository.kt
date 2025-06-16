@@ -155,6 +155,12 @@ class DefaultMessageRepository @Inject constructor(
         }
     }
 
+    override suspend fun getMessageById(messageId: String): Flow<Message?> {
+        return messageDao.getMessageById(messageId).map { entity ->
+            entity?.toDomainModel("")
+        }
+    }
+
     override suspend fun markMessageRead(account: Account, messageId: String, isRead: Boolean): Result<Unit> = withContext(ioDispatcher) {
         try {
             messageDao.updateReadStatus(messageId, isRead)
@@ -228,15 +234,14 @@ class DefaultMessageRepository @Inject constructor(
         }
     }
 
-    override suspend fun sendMessage(draft: MessageDraft, account: Account): Result<String> = withContext(ioDispatcher) {
+    override suspend fun sendMessage(account: Account, draft: MessageDraft): Result<String> = withContext(ioDispatcher) {
         try {
-            val sentFolder = folderDao.getFolderByWellKnownTypeSuspend(account.id, WellKnownFolderType.SENT_ITEMS)
-                ?: return@withContext Result.failure(IllegalStateException("Sent Items folder not found"))
-
             val tempId = draft.existingMessageId ?: "local-sent-${UUID.randomUUID()}"
             val messageEntity = draft.toEntity(
                 id = tempId,
                 accountId = account.id,
+                senderName = account.displayName,
+                senderAddress = account.emailAddress,
                 isRead = true,
                 syncStatus = EntitySyncStatus.PENDING_UPLOAD
             )
@@ -246,51 +251,62 @@ class DefaultMessageRepository @Inject constructor(
 
             appDatabase.withTransaction {
                 messageDao.insertOrUpdateMessages(listOf(messageEntity))
-                if (attachmentEntities.isNotEmpty()) {
-                    attachmentDao.insertAttachments(attachmentEntities)
-                }
-                messageFolderJunctionDao.insertAll(listOf(MessageFolderJunction(tempId, sentFolder.id)))
+                attachmentDao.insertAttachments(attachmentEntities)
             }
-            Timber.d("Saved message $tempId to local db for sending.")
 
-            val payload = mapOf(SyncConstants.KEY_DRAFT_DETAILS to Json.encodeToString(draft))
+            val payload = mapOf(
+                SyncConstants.KEY_DRAFT_DETAILS to Json.encodeToString(MessageDraft.serializer(), draft)
+            )
 
-            queuePendingAction(account.id, tempId, SyncConstants.ACTION_SEND_MESSAGE, payload)
+            queuePendingAction(
+                accountId = account.id,
+                entityId = tempId,
+                actionType = SyncConstants.ACTION_SEND_MESSAGE,
+                payload = payload
+            )
 
             syncController.submit(SyncJob.UploadAction(account.id))
             Result.success(tempId)
         } catch (e: Exception) {
-            Timber.e(e, "Error sending message")
+            Timber.e(e, "Failed to send message for draft: ${draft.existingMessageId}")
             Result.failure(e)
         }
     }
 
-    override suspend fun createDraftMessage(accountId: String, draftDetails: MessageDraft): Result<Message> = withContext(ioDispatcher) {
+    override suspend fun createDraftMessage(account: Account, draftDetails: MessageDraft): Result<Message> = withContext(ioDispatcher) {
         try {
             val tempId = "local-draft-${UUID.randomUUID()}"
-            val draftFolder = folderDao.getFolderByWellKnownTypeSuspend(accountId, WellKnownFolderType.DRAFTS)
-                ?: return@withContext Result.failure(IllegalStateException("Drafts folder not found"))
 
             val messageEntity = draftDetails.toEntity(
                 id = tempId,
-                accountId = accountId,
+                accountId = account.id,
+                senderName = account.displayName,
+                senderAddress = account.emailAddress,
                 isRead = true,
                 syncStatus = EntitySyncStatus.PENDING_UPLOAD
             )
-            val localAttachments = draftDetails.attachments.map { it.toEntity(messageDbId = tempId, accountId = accountId) }
+            val localAttachments = draftDetails.attachments.map { it.toEntity(messageDbId = tempId, accountId = account.id) }
 
             appDatabase.withTransaction {
                 messageDao.insertOrUpdateMessages(listOf(messageEntity))
                 attachmentDao.insertAttachments(localAttachments)
-                messageFolderJunctionDao.insertAll(listOf(MessageFolderJunction(tempId, draftFolder.id)))
+                val draftFolder = folderDao.getFolderByWellKnownTypeSuspend(account.id, WellKnownFolderType.DRAFTS)
+                if (draftFolder != null) {
+                    messageFolderJunctionDao.addLabel(tempId, draftFolder.id)
+                }
             }
             Timber.d("Saved new draft $tempId locally.")
 
-            val payload = mapOf(SyncConstants.KEY_DRAFT_DETAILS to Json.encodeToString(draftDetails))
+            val payload = mapOf(SyncConstants.KEY_DRAFT_DETAILS to Json.encodeToString(MessageDraft.serializer(), draftDetails))
 
-            queuePendingAction(accountId, tempId, SyncConstants.ACTION_CREATE_DRAFT, payload)
+            queuePendingAction(
+                accountId = account.id,
+                entityId = tempId,
+                actionType = SyncConstants.ACTION_CREATE_DRAFT,
+                payload = payload
+            )
 
-            syncController.submit(SyncJob.UploadAction(accountId))
+            syncController.submit(SyncJob.UploadAction(account.id))
             Result.success(messageEntity.toDomainModel())
         } catch (e: Exception) {
             Timber.e(e, "Error creating draft")
@@ -298,37 +314,42 @@ class DefaultMessageRepository @Inject constructor(
         }
     }
 
-    override suspend fun updateDraftMessage(accountId: String, messageId: String, draftDetails: MessageDraft): Result<Message> = withContext(ioDispatcher) {
+    override suspend fun updateDraftMessage(
+        account: Account,
+        messageId: String,
+        draftDetails: MessageDraft
+    ): Result<Message> = withContext(ioDispatcher) {
         try {
-            val draftFolder = folderDao.getFolderByWellKnownTypeSuspend(accountId, WellKnownFolderType.DRAFTS)
-                ?: return@withContext Result.failure(IllegalStateException("Drafts folder not found"))
-
             val messageEntity = draftDetails.toEntity(
                 id = messageId,
-                accountId = accountId,
+                accountId = account.id,
+                senderName = account.displayName,
+                senderAddress = account.emailAddress,
                 isRead = true,
                 syncStatus = EntitySyncStatus.PENDING_UPLOAD
             )
-            val newAttachments = draftDetails.attachments.map { it.toEntity(messageDbId = messageId, accountId = accountId) }
+            val localAttachments = draftDetails.attachments.map { it.toEntity(messageDbId = messageId, accountId = account.id) }
 
             appDatabase.withTransaction {
                 messageDao.insertOrUpdateMessages(listOf(messageEntity))
                 attachmentDao.deleteAttachmentsForMessage(messageId)
-                if (newAttachments.isNotEmpty()) {
-                    attachmentDao.insertAttachments(newAttachments)
-                }
-                messageFolderJunctionDao.replaceFoldersForMessage(messageId, listOf(draftFolder.id))
+                attachmentDao.insertAttachments(localAttachments)
             }
             Timber.d("Updated draft $messageId locally.")
 
-            val payload = mapOf(SyncConstants.KEY_DRAFT_DETAILS to Json.encodeToString(draftDetails))
+            val payload = mapOf(SyncConstants.KEY_DRAFT_DETAILS to Json.encodeToString(MessageDraft.serializer(), draftDetails))
 
-            queuePendingAction(accountId, messageId, SyncConstants.ACTION_UPDATE_DRAFT, payload)
+            queuePendingAction(
+                accountId = account.id,
+                entityId = messageId,
+                actionType = SyncConstants.ACTION_UPDATE_DRAFT,
+                payload = payload
+            )
 
-            syncController.submit(SyncJob.UploadAction(accountId))
+            syncController.submit(SyncJob.UploadAction(account.id))
             Result.success(messageEntity.toDomainModel())
         } catch (e: Exception) {
-            Timber.e(e, "Error updating draft")
+            Timber.e(e, "Error updating draft $messageId")
             Result.failure(e)
         }
     }
