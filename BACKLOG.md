@@ -49,7 +49,7 @@
 
 **EPIC 5: Account & App Foundation (Offline-First Core)**
 
-*   **Requirement 5.1 (Authentication):** 🟢 **Completed** - Secure sign-in/out for Google and Microsoft accounts is implemented.
+*   **Requirement 5.1 (Authentication):** 🟢 **Completed** - Secure sign-in/out for Google and Microsoft accounts is implemented. The flow now correctly handles runtime permissions for `POST_NOTIFICATIONS` on Android 13+ to support the initial sync foreground service. The underlying `FOREGROUND_SERVICE` permission crash has been resolved.
 *   **Requirement 5.X (Transparent Sync Status):** 🟢 **Completed** - A global status bar clearly indicates syncing, offline, and error states.
 *   **Requirement 5.Y (Configurable Sync & Cache):** 🟢 **Completed** - The settings screen allows configuration of cache size and initial sync duration.
 *   **Requirement 5.6 (Data Caching & Eviction):** 🟢 **Completed** - An eviction strategy is implemented in the `SyncController` to manage cache size based on usage and limits.

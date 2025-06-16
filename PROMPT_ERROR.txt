@@ -1,9 +1,12 @@
-Read @BACKLOG.md and @ARCHITECTURE.md. Help me debug the following errors.
+@ARCHITECTURE.md @BACKLOG.md @CHANGELOG.md 
+
+Help me debug the following errors.
 
 1. Don't trust the markdown documents. Read the code as it is today on disk to understand its state and reason about it. Start by doing code searches and reading any relevant files to undertand how the app works and where the errors are.
 3. Create a detailed plan, step by step on changes needed. Show it to me.
 4. Where are the soft spots in your analysis? Enumerate them to me.
 5. Read the rest of the files on disk required to harden the soft spots. Ensure you know each and every API that will be affected by your changes and have read the actual files on disk and know them before moving to the next step.
+5b. Where can you add debug logging to have better visibility into the issue?
 6. Implement the required fixes.
 7. Build and fix any build errors.
 8. Update ARCHITECTURE.md and BACKLOG.md. Ensure all current details are retained unless obsolete.

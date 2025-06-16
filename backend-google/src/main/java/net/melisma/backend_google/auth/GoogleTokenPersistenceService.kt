@@ -150,6 +150,17 @@ class GoogleTokenPersistenceService @Inject constructor(
 
             try {
                 val deserializedAuthState = AuthState.jsonDeserialize(authStateJson)
+
+                // ******** DEBUG LOGGING - REFRESH TOKEN ********
+                val username = accountManager.getUserData(account, KEY_USER_EMAIL) ?: "N/A"
+                val refreshToken = deserializedAuthState.refreshToken
+                Timber.tag("TOKEN_LOG").d(
+                    "Account: Google (%s), Refresh Token: %s",
+                    username,
+                    refreshToken
+                )
+                // ************************************************
+
                 Timber.tag(TAG).d(
                     "getAuthState - AccountID: %s - Deserialized AuthState ID: %s",
                     accountId,
@@ -175,7 +186,7 @@ class GoogleTokenPersistenceService @Inject constructor(
                 return@withContext PersistenceResult.Success(deserializedAuthState)
             } catch (jsonEx: org.json.JSONException) {
                 Timber.tag(TAG)
-                    .e(jsonEx, "Failed to deserialize AuthState JSON for ID: %s", accountId)
+                    .e(jsonEx, "Failed to deserialize AuthState JSON for ID: %s. JSON was: %s", accountId, authStateJson)
                 return@withContext PersistenceResult.Failure<GooglePersistenceErrorType>(
                     GooglePersistenceErrorType.AUTH_STATE_DESERIALIZATION_FAILED,
                     "Failed to deserialize AuthState for ID: $accountId",
@@ -433,4 +444,57 @@ class GoogleTokenPersistenceService @Inject constructor(
         val displayName: String?,
         val photoUrl: String?
     )
+
+    /**
+     * !!! THIS IS FOR ANDROID_TESTS ONLY !!!
+     * Bypasses the complex AuthState creation and saves a raw refresh token.
+     * The production code can still deserialize this minimal JSON to get the token.
+     */
+    internal suspend fun saveRawRefreshTokenForTest(
+        accountId: String,
+        email: String,
+        refreshToken: String
+    ): PersistenceResult<Unit> = withContext(Dispatchers.IO) {
+        Timber.tag(TAG).w("!!! USING TEST-ONLY METHOD saveRawRefreshTokenForTest !!!")
+        try {
+            // Create a minimal fake AuthState JSON that only contains the refresh token
+            val fakeAuthStateJson = """
+                {
+                    "refreshToken": "$refreshToken"
+                }
+            """.trimIndent()
+
+            val encryptedAuthStateJson = secureEncryptionService.encrypt(fakeAuthStateJson)
+            if (encryptedAuthStateJson == null) {
+                Timber.tag(TAG).e("Failed to encrypt fake AuthState for test account: $accountId")
+                return@withContext PersistenceResult.Failure(
+                    GooglePersistenceErrorType.ENCRYPTION_FAILED,
+                    "Failed to encrypt fake AuthState for test account"
+                )
+            }
+
+            val androidAccount = AndroidAccount(accountId, ACCOUNT_TYPE_GOOGLE)
+            val userData = bundleOf(
+                KEY_AUTH_STATE_JSON to encryptedAuthStateJson,
+                KEY_USER_EMAIL to email
+            )
+
+            // Ensure no old account exists
+            removeAccountFromManagerInternal(accountId, clearOnlyUserData = false, calledDuringSave = true)
+
+            if (accountManager.addAccountExplicitly(androidAccount, null, userData)) {
+                Timber.tag(TAG).i("Successfully saved RAW refresh token for test account: $accountId")
+                PersistenceResult.Success(Unit)
+            } else {
+                Timber.tag(TAG).e("Failed to add test account explicitly.")
+                PersistenceResult.Failure(
+                    GooglePersistenceErrorType.STORAGE_FAILED,
+                    "Failed to add test account"
+                )
+            }
+        } catch (e: Exception) {
+            Timber.tag(TAG).e(e, "Error in saveRawRefreshTokenForTest")
+            PersistenceResult.Failure(GooglePersistenceErrorType.UNKNOWN_ERROR, e.message, e)
+        }
+    }
 } 

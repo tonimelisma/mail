@@ -138,6 +138,14 @@ class MicrosoftTokenPersistenceService @Inject constructor(
                 val displayName = accountManager.getUserData(account, KEY_DISPLAY_NAME)
                 val tenantId = accountManager.getUserData(account, KEY_TENANT_ID)
 
+                // ******** DEBUG LOGGING - MSAL ACCOUNT ID ********
+                Timber.tag("TOKEN_LOG").d(
+                    "Account: Microsoft (%s), MSAL Account ID: %s",
+                    username ?: "N/A",
+                    msalAccountId
+                )
+                // **************************************************
+
                 return@withContext PersistenceResult.Success(
                     PersistedMicrosoftAccount(
                         accountManagerName = account.name,

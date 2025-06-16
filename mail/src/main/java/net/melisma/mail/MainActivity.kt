@@ -1,7 +1,9 @@
 // File: app/src/main/java/net/melisma/mail/MainActivity.kt
 package net.melisma.mail
 
+import android.Manifest
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -26,12 +28,30 @@ class MainActivity : ComponentActivity() {
     private val TAG = "MainActivity_AppAuth"
 
     private lateinit var appAuthLauncher: ActivityResultLauncher<Intent>
+    private lateinit var requestPermissionLauncher: ActivityResultLauncher<String>
 
     override fun onCreate(savedInstanceState: Bundle?) {
         Timber.d("onCreate() called")
         super.onCreate(savedInstanceState)
 
-        Timber.d("Setting up appAuthLauncher for AppAuth (Google) Intent results")
+        setupActivityLaunchers()
+
+        observeViewModelEvents()
+
+        Timber.d("Setting up UI with enableEdgeToEdge and content")
+        enableEdgeToEdge()
+        setContent {
+            Timber.d("Content composition started with Jetpack Navigation")
+            MailTheme {
+                val navController = rememberNavController()
+                MailAppNavigationGraph(navController = navController, mainViewModel = viewModel)
+            }
+        }
+    }
+
+    private fun setupActivityLaunchers() {
+        Timber.d("Setting up activity result launchers")
+
         appAuthLauncher = registerForActivityResult(
             ActivityResultContracts.StartActivityForResult()
         ) { result ->
@@ -45,7 +65,17 @@ class MainActivity : ComponentActivity() {
             )
         }
 
-        Timber.d("Setting up observation of pendingAuthIntent flow from ViewModel")
+        requestPermissionLauncher = registerForActivityResult(
+            ActivityResultContracts.RequestPermission()
+        ) { isGranted: Boolean ->
+            Timber.d("Notification permission result received: isGranted = $isGranted")
+            viewModel.onNotificationsPermissionResult(isGranted, this)
+        }
+    }
+
+    private fun observeViewModelEvents() {
+        Timber.d("Setting up observation of ViewModel events")
+
         lifecycleScope.launch {
             viewModel.pendingAuthIntent.collect { intent ->
                 intent?.let {
@@ -55,7 +85,6 @@ class MainActivity : ComponentActivity() {
                     try {
                         Timber.d("Launching pending Intent with appAuthLauncher.")
                         appAuthLauncher.launch(it)
-                        viewModel.consumePendingAuthIntent()
                     } catch (e: Exception) {
                         Timber.e(e, "Error launching pending Intent via appAuthLauncher")
                         val errorPrefix = getString(R.string.error_google_signin_failed_generic)
@@ -64,19 +93,19 @@ class MainActivity : ComponentActivity() {
                             "$errorPrefix: ${e.localizedMessage}",
                             Toast.LENGTH_LONG
                         ).show()
+                    } finally {
                         viewModel.consumePendingAuthIntent()
                     }
                 }
             }
         }
 
-        Timber.d("Setting up UI with enableEdgeToEdge and content")
-        enableEdgeToEdge()
-        setContent {
-            Timber.d("Content composition started with Jetpack Navigation")
-            MailTheme {
-                val navController = rememberNavController()
-                MailAppNavigationGraph(navController = navController, mainViewModel = viewModel)
+        lifecycleScope.launch {
+            viewModel.requestPostNotificationsPermission.collect {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    Timber.d("Received request from ViewModel to ask for POST_NOTIFICATIONS permission.")
+                    requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
             }
         }
     }

@@ -1,5 +1,14 @@
 // File: app/build.gradle.kts
 
+import java.util.Properties
+import java.io.FileInputStream
+
+val localProperties = Properties()
+val localPropertiesFile = rootProject.file("local.properties")
+if (localPropertiesFile.exists()) {
+    localProperties.load(FileInputStream(localPropertiesFile))
+}
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -22,10 +31,33 @@ android {
         // Add AppAuth redirect scheme for Google OAuth
         manifestPlaceholders["appAuthRedirectScheme"] = "net.melisma.mail"
 
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner = "net.melisma.mail.HiltTestRunner"
         vectorDrawables {
             useSupportLibrary = true
         }
+
+        // Expose a field for each property. For fields that might not exist,
+        // provide a default "null" value.
+        buildConfigField(
+            "String",
+            "TEST_GMAIL_REFRESH_TOKEN",
+            "\"${localProperties.getProperty("TEST_GMAIL_REFRESH_TOKEN", "null")}\""
+        )
+        buildConfigField(
+            "String",
+            "TEST_GMAIL_EMAIL",
+            "\"${localProperties.getProperty("TEST_GMAIL_EMAIL", "null")}\""
+        )
+        buildConfigField(
+            "String",
+            "TEST_MS_ACCOUNT_ID",
+            "\"${localProperties.getProperty("TEST_MS_ACCOUNT_ID", "null")}\""
+        )
+        buildConfigField(
+            "String",
+            "TEST_MS_EMAIL",
+            "\"${localProperties.getProperty("TEST_MS_EMAIL", "null")}\""
+        )
     }
 
     buildTypes {
@@ -153,4 +185,14 @@ dependencies {
     implementation(libs.androidx.hilt.navigation.compose)
 
     implementation(libs.androidx.lifecycle.process)
+
+    // Hilt testing
+    androidTestImplementation("com.google.dagger:hilt-android-testing:2.51.1")
+    kspAndroidTest("com.google.dagger:hilt-compiler:2.51.1")
+
+    // For assertions
+    androidTestImplementation("com.google.truth:truth:1.4.2")
+
+    // For coroutines testing
+    androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.0")
 }

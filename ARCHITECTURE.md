@@ -44,7 +44,7 @@ graph TD
     *   Debounced auto-save (3 s) which creates or updates drafts offline via use-cases.
     *   "Send" button emits `ACTION_SEND_MESSAGE`; message enters Outbox until SyncController uploads.
 *   **Compose Screens:** Declarative UI components built with Jetpack Compose. They are responsible for displaying data and forwarding user events to ViewModels. They are stateless wherever possible.
-*   **ViewModels:** Hold UI state and expose it to the Composables as `StateFlow`. They handle user events, call into the domain layer (Repositories), and are responsible for UI-specific business logic.
+*   **ViewModels:** Hold UI state and expose it to the Composables as `StateFlow`. They handle user events, call into the domain layer (Repositories), and are responsible for UI-specific business logic, including orchestrating permission requests before initiating authentication flows.
 
 ### Domain Layer
 
@@ -82,6 +82,16 @@ graph TD
 7.  The Room database notifies its observers of the change.
 8.  The ViewModel, which is observing a `Flow` from the `MessageDao`, receives the new list of messages and updates its UI state.
 9.  The Compose UI automatically recomposes to display the new messages.
+
+## Data Flow Example: Authentication Flow with Permissions
+
+1.  **UI Trigger:** User clicks "Add Account" in `SettingsScreen`.
+2.  **Permission Check (`MainViewModel`):** The `signIn` function is called. It checks if `POST_NOTIFICATIONS` permission is required (Android 13+) and if it has been granted.
+3.  **Permission Request:** If permission is needed, the ViewModel emits an event. `MainActivity` observes this event and uses an `ActivityResultLauncher` to show the system permission dialog.
+4.  **Auth Intent Request:** Once permission is handled, the ViewModel calls `accountRepository.signIn()`.
+5.  **Flow Emission (`DefaultAccountRepository`):** The repository's `signIn` method calls the appropriate auth manager (e.g., `GoogleAuthManager`), which builds an `Intent` for the OAuth flow. The repository emits this as a `GenericAuthResult.UiActionRequired(intent)`.
+6.  **Launch Auth Activity (`MainViewModel` & `MainActivity`):** The ViewModel collects the `UiActionRequired` result and forwards the `Intent` to the `MainActivity` via a `StateFlow`. The `MainActivity` launches the intent, taking the user to the Google/Microsoft sign-in screen.
+7.  **Token Exchange & Persistence:** After user consent, the result is returned to the `MainActivity`'s launcher, which calls `viewModel.handleAuthenticationResult()`. This triggers the token exchange and secure persistence of the `AuthState` using the Android `AccountManager`, as detailed in the original architecture. The final `Success` or `Error` result is emitted to the ViewModel, which updates the UI.
 
 ## Data Flow Example: Lightweight Background Sync
 

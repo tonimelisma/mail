@@ -1,12 +1,16 @@
 // File: app/src/main/java/net/melisma/mail/MainViewModel.kt
 package net.melisma.mail
 
+import android.Manifest
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.os.Build
 import androidx.compose.runtime.Immutable
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.paging.PagingConfig
@@ -16,8 +20,10 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.launchIn
@@ -115,6 +121,13 @@ class MainViewModel @Inject constructor(
 
     private val _pendingAuthIntent = MutableStateFlow<Intent?>(null)
     val pendingAuthIntent: StateFlow<Intent?> = _pendingAuthIntent.asStateFlow()
+
+    private val _requestPostNotificationsPermission = MutableSharedFlow<Unit>()
+    val requestPostNotificationsPermission = _requestPostNotificationsPermission.asSharedFlow()
+
+    private var pendingSignInProvider: String? = null
+    private var pendingLoginHint: String? = null
+    private var signInJob: Job? = null
 
     // Flow for PagingData<Message>
     private val _messagesPagerFlow = MutableStateFlow<Flow<PagingData<Message>>>(emptyFlow())
@@ -327,61 +340,103 @@ class MainViewModel @Inject constructor(
             }.launchIn(viewModelScope)
     }
 
-    fun signIn(activity: Activity, providerType: String, loginHint: String? = null) {
-        Timber.d("signIn called for provider: $providerType")
-        if (!isOnline()) {
-            _uiState.update { it.copy(toastMessage = "No network connection available.") }
-            return
-        }
+    fun onNotificationsPermissionResult(granted: Boolean, activity: Activity) {
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoadingAccountAction = true) } // Set true at start of action
-            defaultAccountRepository.signIn(activity, loginHint, providerType)
-                .collect { result -> // GenericAuthResult
-                    _uiState.update { currentState ->
-                        when (result) {
-                            is GenericAuthResult.Loading -> {
-                                Timber.d("Sign-in process loading...")
-                                currentState.copy(isLoadingAccountAction = true) // Remain true
-                            }
-
-                            is GenericAuthResult.Success -> {
-                                Timber.d("Sign-in successful: ${result.account.emailAddress}")
-                                currentState.copy(
-                                    isLoadingAccountAction = false, // Set false on terminal success
-                                    toastMessage = "Signed in as ${result.account.displayName ?: result.account.emailAddress}"
-                                )
-                            }
-
-                            is GenericAuthResult.Error -> {
-                                Timber.w(
-                                    result.details.cause,
-                                    "Sign-in error: ${result.details.message} (Code: ${result.details.code})"
-                                )
-                                currentState.copy(
-                                    isLoadingAccountAction = false, // Set false on terminal error
-                                    toastMessage = "Sign-in error: ${result.details.message}"
-                                )
-                            }
-
-                            is GenericAuthResult.UiActionRequired -> {
-                                Timber.d("Sign-in UI Action Required. Emitting intent.")
-                                _pendingAuthIntent.value = result.intent
-                                // isLoadingAccountAction remains true as we are waiting for UI
-                                currentState.copy(isLoadingAccountAction = true) // Remain true
-                            }
-                            // No Cancelled state here as it should be an Error with details
-                        }
-                    }
+            if (granted) {
+                Timber.d("POST_NOTIFICATIONS permission granted by user.")
+                pendingSignInProvider?.let { provider ->
+                    doSignIn(activity, provider, pendingLoginHint)
                 }
+            } else {
+                Timber.w("POST_NOTIFICATIONS permission denied by user. Initial sync notification will not be shown, but proceeding.")
+                pendingSignInProvider?.let { provider ->
+                    doSignIn(activity, provider, pendingLoginHint)
+                }
+            }
+            pendingSignInProvider = null
+            pendingLoginHint = null
         }
     }
 
-    fun completeSignIn() {
+    fun signIn(activity: Activity, providerType: String, loginHint: String? = null) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val hasPermission = ContextCompat.checkSelfPermission(
+                applicationContext,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+
+            if (hasPermission) {
+                Timber.d("POST_NOTIFICATIONS permission already granted. Proceeding with sign-in.")
+                doSignIn(activity, providerType, loginHint)
+            } else {
+                Timber.d("POST_NOTIFICATIONS permission not yet granted. Requesting it.")
+                pendingSignInProvider = providerType
+                pendingLoginHint = loginHint
+                viewModelScope.launch {
+                    _requestPostNotificationsPermission.emit(Unit)
+                }
+            }
+        } else {
+            Timber.d("OS version is below Android 13. No notification permission needed. Proceeding with sign-in.")
+            doSignIn(activity, providerType, loginHint)
+        }
+    }
+
+    private fun doSignIn(activity: Activity, providerType: String, loginHint: String?) {
+        signInJob?.cancel()
+        signInJob = viewModelScope.launch {
+            Timber.d("doSignIn called for provider: $providerType")
+            if (!isOnline()) {
+                _uiState.update { it.copy(toastMessage = "No network connection available.") }
+                return@launch
+            }
+
+            _uiState.update { it.copy(isLoadingAccountAction = true) }
+
+            defaultAccountRepository.signIn(activity, loginHint, providerType)
+                .onEach { result ->
+                    _uiState.update { currentState ->
+                        when (result) {
+                            is GenericAuthResult.Success -> {
+                                Timber.i("Sign-in success for ${result.account.emailAddress}")
+                                currentState.copy(
+                                    isLoadingAccountAction = false,
+                                    toastMessage = "Successfully signed in as ${result.account.emailAddress}"
+                                )
+                            }
+                            is GenericAuthResult.Error -> {
+                                Timber.e(result.details.cause, "Sign-in failure: ${result.details.message}")
+                                currentState.copy(
+                                    isLoadingAccountAction = false,
+                                    toastMessage = "Sign-in failed: ${result.details.message}"
+                                )
+                            }
+                            is GenericAuthResult.UiActionRequired -> {
+                                Timber.d("Sign-in UI Action Required. Emitting intent.")
+                                _pendingAuthIntent.value = result.intent
+                                currentState.copy(isLoadingAccountAction = true)
+                            }
+                            is GenericAuthResult.Loading -> {
+                                Timber.d("Sign-in process loading...")
+                                currentState.copy(isLoadingAccountAction = true)
+                            }
+                        }
+                    }
+                }.launchIn(viewModelScope)
+        }
+    }
+
+    fun handleAuthenticationResult(providerType: String, resultCode: Int, data: Intent?) {
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoadingAccountAction = true) }
+            Timber.d("Handling auth result for $providerType. ResultCode: $resultCode. Data is null: ${data == null}")
+            defaultAccountRepository.handleAuthenticationResult(providerType, resultCode, data)
+            // The result will be collected by the flow in doSignIn
+        }
+    }
+
+    fun consumePendingAuthIntent() {
         _pendingAuthIntent.value = null
-        // isLoadingAccountAction will be set to false once the actual sign-in result (Success/Error)
-        // is processed from the channel by the signIn flow in DefaultAccountRepository
-        // and then collected by the signIn() method above.
-        Timber.d("completeSignIn called, cleared pending intent. isLoadingAccountAction will be handled by signIn flow.")
     }
 
     fun signOut(account: Account) {
@@ -418,19 +473,6 @@ class MainViewModel @Inject constructor(
                         }
                     }
                 }
-        }
-    }
-
-    fun handleAuthenticationResult(providerType: String, resultCode: Int, data: Intent?) {
-        Timber.d("handleAuthenticationResult in ViewModel. Provider: $providerType, ResultCode: $resultCode, Data: ${data != null}")
-        // Set loading state. This will be cleared when the signIn flow (that initially emitted UiActionRequired)
-        // receives the final result (Success/Error) from the GoogleAuthResultChannel and updates the state.
-        // _uiState.update { it.copy(isLoadingAccountAction = true) } // Let the collecting signIn flow manage this.
-
-        viewModelScope.launch {
-            defaultAccountRepository.handleAuthenticationResult(providerType, resultCode, data)
-            // After this call, changes to account status will be picked up by
-            // the collect block in signIn() for Google, which then updates isLoadingAccountAction.
         }
     }
 
@@ -610,11 +652,18 @@ class MainViewModel @Inject constructor(
     private fun isOnline(): Boolean {
         val connectivityManager =
             applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val network = connectivityManager.activeNetwork ?: return false
-        val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return false
-        return capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ||
-                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ||
-                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)
+        val capabilities =
+            connectivityManager.getNetworkCapabilities(connectivityManager.activeNetwork)
+        if (capabilities != null) {
+            if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) {
+                return true
+            } else if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+                return true
+            } else if (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET)) {
+                return true
+            }
+        }
+        return false
     }
 
     fun setViewModePreference(viewMode: MailViewModePreference) {
@@ -832,10 +881,6 @@ class MainViewModel @Inject constructor(
                 }
             }
         }
-    }
-
-    fun consumePendingAuthIntent() {
-        _pendingAuthIntent.value = null
     }
 
     fun retryFetchMessagesForCurrentFolder() {

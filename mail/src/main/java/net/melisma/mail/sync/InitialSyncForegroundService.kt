@@ -40,6 +40,7 @@ class InitialSyncForegroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        Timber.d("InitialSyncForegroundService: onCreate - Service is being created.")
         startInForeground()
         watchJob = serviceScope.launch {
             var idleTicks = 0
@@ -74,6 +75,7 @@ class InitialSyncForegroundService : Service() {
     private fun startInForeground() {
         val channelId = ensureChannel()
         val notification = buildNotification(channelId, "Initial mail sync in progress…")
+        Timber.d("InitialSyncForegroundService: startInForeground - Attempting to call startForeground().")
         startForeground(NOTIFICATION_ID, notification)
     }
 

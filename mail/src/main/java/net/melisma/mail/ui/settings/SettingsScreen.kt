@@ -110,7 +110,7 @@ fun SettingsScreen(
                 // Microsoft account button
                 Button(
                     // Trigger add Microsoft account action in ViewModel
-                    onClick = { viewModel.initiateSignIn(Account.PROVIDER_TYPE_MS, activity) },
+                    onClick = { viewModel.signIn(activity, Account.PROVIDER_TYPE_MS) },
                     // Use isLoadingAccountAction from the updated state
                     enabled = !state.isLoadingAccountAction,
                     modifier = Modifier.padding(bottom = 8.dp) // Add some spacing between buttons
@@ -136,9 +136,9 @@ fun SettingsScreen(
                 Button(
                     // Trigger add Google account action in ViewModel
                     onClick = {
-                        viewModel.initiateSignIn(
-                            Account.PROVIDER_TYPE_GOOGLE,
-                            activity
+                        viewModel.signIn(
+                            activity,
+                            Account.PROVIDER_TYPE_GOOGLE
                         )
                     },
                     // Use isLoadingAccountAction from the updated state
