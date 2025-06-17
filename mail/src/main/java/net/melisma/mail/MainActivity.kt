@@ -37,6 +37,7 @@ class MainActivity : ComponentActivity() {
         setupActivityLaunchers()
 
         observeViewModelEvents()
+        viewModel.onAppStart()
 
         Timber.d("Setting up UI with enableEdgeToEdge and content")
         enableEdgeToEdge()

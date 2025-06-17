@@ -40,6 +40,7 @@ import net.melisma.core_data.model.WellKnownFolderType
 import net.melisma.data.sync.JobProducer
 import net.melisma.data.sync.gate.Gatekeeper
 import kotlin.jvm.JvmSuppressWildcards
+import net.melisma.core_data.connectivity.ConnectivityHealthTracker
 
 @Singleton
 class SyncController @Inject constructor(
@@ -47,7 +48,7 @@ class SyncController @Inject constructor(
     @ApplicationScope private val externalScope: CoroutineScope,
     private val queue: PriorityBlockingQueue<SyncJob>,
     private val networkMonitor: NetworkMonitor,
-    private val connectivityHealthTracker: net.melisma.core_data.connectivity.ConnectivityHealthTracker,
+    private val connectivityHealthTracker: ConnectivityHealthTracker,
     private val userPreferencesRepository: UserPreferencesRepository,
     private val mailApiServiceFactory: MailApiServiceFactory,
     private val appDatabase: net.melisma.core_db.AppDatabase,
@@ -148,6 +149,13 @@ class SyncController @Inject constructor(
         while (true) {
             val job = queue.take()
 
+            if (connectivityHealthTracker.isBlocked()) {
+                Timber.tag("Throttle").w("Connectivity is BLOCKED. Re-queuing job and pausing for 30s.")
+                queue.put(job)
+                delay(30_000)
+                continue
+            }
+
             // Per-account concurrency guard: Skip if another job for the same account is already running.
             if (activeAccounts.contains(job.accountId)) {
                 // Requeue and yield to avoid busy loop
@@ -195,6 +203,10 @@ class SyncController @Inject constructor(
                 if (e is java.net.UnknownHostException || e is java.net.SocketTimeoutException) {
                     connectivityHealthTracker.recordFailure()
                     net.melisma.core_data.util.DiagnosticUtils.logDeviceState(appContext, "jobError ${job::class.simpleName}")
+                    if (connectivityHealthTracker.state.value == ConnectivityHealthTracker.ThrottleState.DEGRADED) {
+                        Timber.tag("Throttle").d("Connectivity DEGRADED, adding 10s backoff delay.")
+                        delay(10_000)
+                    }
                 }
                 _status.update { it.copy(error = e.message) }
             } finally {
@@ -1072,6 +1084,11 @@ class SyncController @Inject constructor(
 
     private suspend fun producerLoop() {
         while (true) {
+            if (connectivityHealthTracker.isBlocked()) {
+                Timber.tag("Throttle").w("Connectivity is BLOCKED. Pausing producer loop for 30s.")
+                delay(30_000)
+                continue
+            }
             producers.forEach { producer ->
                 try {
                     Timber.d("Running producer: ${producer::class.simpleName}")

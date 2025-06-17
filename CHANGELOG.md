@@ -1,20 +1,27 @@
 # Changelog
 
-## [Unreleased]
+## [YYYY-MM-DD] - Connectivity & Reliability Enhancements
 
-### Added
-- **Sync Engine v2.1**: A more intelligent and resource-aware synchronization engine.
-  - **Gatekeeper Infrastructure**: A system to conditionally block sync jobs based on system state (e.g., cache pressure, network availability).
-  - **WorkScore Metric**: Each sync job now has a `workScore` to represent its cost, allowing for more granular control over background processing.
-  - **Heuristic-Based Foreground Service**: The foreground service for sync is now started and stopped based on the total `workScore` of pending jobs, improving battery efficiency.
-  - **Smarter Cache Eviction**: The cache eviction logic has been updated to remove items older than 90 days, but only if they haven't been accessed in the last 24 hours. The eviction process is now triggered at 98% cache usage or every 24 hours.
-  - **Cache-Aware Backfill**: The historical message back-fill process now automatically pauses when cache pressure is high, preventing inefficient download/eviction cycles.
-- **Bulk Content Download (Phase-1)**: Implemented foundational support for `BULK_FETCH_BODIES` and `BULK_FETCH_ATTACHMENTS` jobs.
-  - Added DAO helpers to surface messages without bodies and attachments pending download.
-  - Added handlers in `SyncController` queuing fine-grained download jobs.
-- **Debug Logging Enhancements**: Added detailed Timber instrumentation to bulk handlers and job submission paths.
-- **Bulk Download Producer**: Introduced `BulkDownloadJobProducer` to opportunistically queue bulk body & attachment downloads.
-- **NetworkGatekeeper Optimisation**: Cached online state with StateFlow to eliminate repeated cold-flow collection.
+### Summary
+Implemented a series of reliability improvements focused on making the application's background synchronization more robust and intelligent. The changes address how the app behaves under poor network conditions and ensure it complies with modern Android requirements for background work.
 
-### Changed
-- `SyncController` now uses the `
+### Detailed Changes
+
+1.  **Connectivity-Aware Sync Throttling:**
+    *   The `ConnectivityHealthTracker` was made more sensitive to network failures by reducing its time window from 3 minutes to 1 minute and lowering the failure count thresholds for entering `DEGRADED` (2 failures) and `BLOCKED` (4 failures) states.
+    *   The `SyncController` is now fully aware of the network's health. It will actively pause its main processing queue and its job-creation loop if the network state becomes `BLOCKED`, preventing spammy, failing network requests.
+    *   A simple back-off mechanism was added. When the network is `DEGRADED`, the `SyncController` will introduce a 10-second delay after a failure to reduce pressure on the network.
+
+2.  **Proactive Notification Permission:**
+    *   To guarantee the reliability of the foreground service used for heavy sync tasks, the application now proactively requests the `POST_NOTIFICATIONS` permission on app startup for users on Android 13 and higher.
+    *   This logic was centralized into an `onAppStart()` method in the `MainViewModel`, which is called from `MainActivity`, ensuring existing users are prompted correctly.
+
+3.  **UI State Awareness:**
+    *   The `MainViewModel` now observes the `ConnectivityHealthTracker`'s state and exposes it to the UI layer via `MainScreenState`. This makes the data available for future UI components to visualize the app's connectivity status (e.g., an "Offline" or "Limited Connectivity" banner).
+
+### Deviations from Plan
+The initial analysis was flawed due to not reading the full source code first. The original plan from `PLAN.md` was more relevant than first assumed. The implemented plan is a corrected version that is fully consistent with the application's true architecture, centered around the `SyncController`.
+
+### Code Smells & Shortcuts
+*   The delays in `SyncController` for throttling are hardcoded (e.g., `30_000ms`). A future improvement could be to use a configurable exponential backoff strategy.
+*   The notification permission request is triggered on startup without a preceding rationale dialog. This is a functional but not ideal user experience and could be improved with a dedicated UI flow. 

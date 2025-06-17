@@ -27,7 +27,7 @@ class ConnectivityHealthTracker @Inject constructor(
 
     enum class ThrottleState { NORMAL, DEGRADED, BLOCKED }
 
-    private val windowMillis = TimeUnit.MINUTES.toMillis(3)
+    private val windowMillis = TimeUnit.MINUTES.toMillis(1)
     private val failures: MutableList<Long> = mutableListOf()
 
     private val _state = MutableStateFlow(ThrottleState.NORMAL)
@@ -60,6 +60,8 @@ class ConnectivityHealthTracker @Inject constructor(
 
     fun isBlocked(): Boolean = _state.value == ThrottleState.BLOCKED
 
+    fun shouldPauseHeavyWork(): Boolean = _state.value == ThrottleState.BLOCKED || _state.value == ThrottleState.DEGRADED
+
     private fun reset() {
         synchronized(failures) {
             if (failures.isNotEmpty()) {
@@ -74,12 +76,12 @@ class ConnectivityHealthTracker @Inject constructor(
         failures.removeAll { now - it > windowMillis }
         val count = failures.size
         val newState = when {
-            count >= 6 -> ThrottleState.BLOCKED
-            count >= 3 -> ThrottleState.DEGRADED
+            count >= 4 -> ThrottleState.BLOCKED
+            count >= 2 -> ThrottleState.DEGRADED
             else -> ThrottleState.NORMAL
         }
         if (newState != _state.value) {
-            Timber.i("ConnectivityHealthTracker: transitioning ${_state.value} → $newState (failures in window=$count)")
+            Timber.tag("Throttle").w("ConnectivityHealthTracker: transitioning ${_state.value} → $newState (failures in window=$count)")
             _state.value = newState
         }
     }

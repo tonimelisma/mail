@@ -54,6 +54,7 @@ import net.melisma.domain.actions.SyncFolderUseCase
 import net.melisma.domain.account.SignOutAllMicrosoftAccountsUseCase
 import net.melisma.core_data.repository.GenericSignOutAllResult
 import net.melisma.data.sync.SyncController
+import net.melisma.core_data.connectivity.ConnectivityHealthTracker
 import timber.log.Timber
 import javax.inject.Inject
 
@@ -82,7 +83,8 @@ data class MainScreenState(
     val toastMessage: String? = null,
     val isUnreadFilterActive: Boolean = false,
     val isStarredFilterActive: Boolean = false,
-    val signature: String = ""
+    val signature: String = "",
+    val throttleState: ConnectivityHealthTracker.ThrottleState = ConnectivityHealthTracker.ThrottleState.NORMAL
 ) {
     val isAnyFolderLoading: Boolean
         get() = foldersByAccountId.values.any { it is FolderFetchState.Loading }
@@ -119,7 +121,8 @@ class MainViewModel @Inject constructor(
     private val userPreferencesRepository: UserPreferencesRepository,
     private val syncFolderUseCase: SyncFolderUseCase,
     private val signOutAllMicrosoftAccountsUseCase: SignOutAllMicrosoftAccountsUseCase,
-    private val syncController: SyncController
+    private val syncController: SyncController,
+    private val connectivityHealthTracker: ConnectivityHealthTracker
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(MainScreenState())
     val uiState: StateFlow<MainScreenState> = _uiState.asStateFlow()
@@ -147,6 +150,7 @@ class MainViewModel @Inject constructor(
         observeMessageRepositorySyncState()
         observeThreadRepository()
         observeUserPreferences()
+        observeConnectivityHealth()
         // observeSelectedFolderAndMessages() // This responsibility is now part of onFolderSelected / selection changes
     }
 
@@ -343,6 +347,12 @@ class MainViewModel @Inject constructor(
                     )
                 }
             }.launchIn(viewModelScope)
+    }
+
+    private fun observeConnectivityHealth() {
+        connectivityHealthTracker.state.onEach { throttleState ->
+            _uiState.update { it.copy(throttleState = throttleState) }
+        }.launchIn(viewModelScope)
     }
 
     fun onNotificationsPermissionResult(granted: Boolean, activity: Activity) {
@@ -1159,6 +1169,20 @@ class MainViewModel @Inject constructor(
                 syncController.submit(net.melisma.core_data.model.SyncJob.FullAccountBootstrap(acc.id))
             }
             tryEmitToastMessage("Queued full re-sync for ${accounts.size} account(s)")
+        }
+    }
+
+    fun onAppStart() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val hasPermission = ContextCompat.checkSelfPermission(
+                applicationContext,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+            if (!hasPermission) {
+                viewModelScope.launch {
+                    _requestPostNotificationsPermission.emit(Unit)
+                }
+            }
         }
     }
 }

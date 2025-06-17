@@ -1,4 +1,4 @@
-@ARCHITECTURE.md @BACKLOG.md @CHANGELOG.md 
+@ARCHITECTURE.md @BACKLOG.md
 
 Help me debug the following errors.
 
