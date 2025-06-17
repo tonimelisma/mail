@@ -1,5 +1,17 @@
 # Changelog
 
+## [YYYY-MM-DD] - Critical Crash Hotfix
+
+### Summary
+Fixed a critical crash (`ForegroundServiceStartNotAllowedException`) that occurred when the application was backgrounded while a sync operation was in progress. This was caused by an attempt to start a foreground service from the background, which is not allowed on modern Android versions.
+
+### Detailed Changes
+
+*   **Removed Proactive Foreground Service Start:** The logic in `SyncLifecycleObserver` that attempted to start the `InitialSyncForegroundService` when the app entered the background (`onStop`) was removed. This was the direct cause of the crash.
+
+### Code Smells & Shortcuts
+*   This is a hotfix to prevent a crash. The underlying issue is that the app relies on long-running background work without a proper mechanism like push notifications to trigger it. The long-term solution is to implement a push-based sync system, but that effort was unsuccessful. This fix ensures app stability but means that long-running syncs may be interrupted by the OS when the app is backgrounded.
+
 ## [YYYY-MM-DD] - Connectivity & Reliability Enhancements
 
 ### Summary
