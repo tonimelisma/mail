@@ -4,27 +4,29 @@ import java.io.Serializable
 
 // Represents a discrete, prioritizable unit of work for the SyncController.
 // The priority value follows a strict hierarchy where higher numbers are processed first.
-sealed class SyncJob(open val accountId: String, val priority: Int, open val workScore: Int) :
-    Comparable<SyncJob>, Serializable {
+sealed class SyncJob(
+    open val accountId: String,
+    val priority: Int,
+    open val workScore: Int,
+    /** True if this job is a background, opportunistic download that should be paused by gatekeepers. */
+    open val isProactiveDownload: Boolean = false
+) : Comparable<SyncJob>, Serializable {
     override fun compareTo(other: SyncJob) = other.priority.compareTo(priority)
 
-    // Level 1: Golden Rule - User is actively waiting for this.
-    data class FetchFullMessageBody(val messageId: String, override val accountId: String) :
-        SyncJob(accountId, 95, 8)
+    // --- Job Definitions ---
 
-    data class FetchNextMessageListPage(val folderId: String, override val accountId: String) :
-        SyncJob(accountId, 90, 5)
+    // Priority 100+: Critical System Actions
+    data class FullAccountBootstrap(override val accountId: String) : SyncJob(accountId, 100, 15)
 
-    data class ForceRefreshFolder(val folderId: String, override val accountId: String) :
-        SyncJob(accountId, 88, 5)
+    // Priority 90-99: User is actively waiting for this content
+    data class FetchFullMessageBody(val messageId: String, override val accountId: String) : SyncJob(accountId, 95, 8)
+    data class DownloadAttachment(val messageId: String, val attachmentId: Long, override val accountId: String) : SyncJob(accountId, 90, 8)
 
-    data class SearchOnline(
-        val query: String,
-        val folderId: String? = null,
-        override val accountId: String
-    ) : SyncJob(accountId, 85, 3)
+    // Priority 80-89: User is waiting for a list of items to refresh
+    data class ForceRefreshFolder(val folderId: String, override val accountId: String) : SyncJob(accountId, 88, 5)
+    data class SearchOnline(val query: String, val folderId: String?, override val accountId: String) : SyncJob(accountId, 85, 3)
 
-    // Level 2: Fulfilling User Intent - Uploading user-generated changes.
+    // Priority 70-79: Uploading user-generated changes
     data class UploadAction(
         override val accountId: String,
         val actionType: String? = null,
@@ -32,44 +34,51 @@ sealed class SyncJob(open val accountId: String, val priority: Int, open val wor
         val payload: Map<String, String?> = emptyMap()
     ) : SyncJob(accountId, 75, 2)
 
-    // Level 4: Background Freshness & Backfill - Opportunistic, battery-conscious syncing.
+    // Priority 60-69: Structural sync (e.g., folder lists)
+    data class SyncFolderList(override val accountId: String) : SyncJob(accountId, 60, 3)
+
+    // Priority 50-59: Lightweight background freshness checks
+    data class CheckForNewMail(override val accountId: String) : SyncJob(accountId, 50, 1)
+
+    // Priority 20-49: Proactive, opportunistic background downloads (can be vetoed by gatekeepers)
+    data class HeaderBackfill(
+        val folderId: String,
+        val pageToken: String?,
+        override val accountId: String
+    ) : SyncJob(accountId, 40, 1, isProactiveDownload = true)
+
+    data class BulkFetchBodies(
+        override val accountId: String
+    ) : SyncJob(accountId, 30, 5, isProactiveDownload = true)
+
+    data class BulkFetchAttachments(
+        override val accountId: String
+    ) : SyncJob(accountId, 20, 10, isProactiveDownload = true)
+
+    // Priority 10-19: System maintenance
+    object EvictFromCache : SyncJob("system", 10, 10)
+
+    // --- Legacy / Compatibility Job Definitions ---
+    // These are kept to avoid breaking existing code that calls them.
+    // They will be mapped to the new jobs in the SyncController.
+    // In a real project, we would eventually refactor all callers and remove these.
+
+    @Deprecated("Use HeaderBackfill instead", ReplaceWith("HeaderBackfill(folderId, pageToken, accountId)"))
     data class FetchMessageHeaders(
         val folderId: String,
         val pageToken: String?,
         override val accountId: String
-    ) : SyncJob(accountId, 50, 1)
+    ) : SyncJob(accountId, 40, 1, isProactiveDownload = true)
 
-    data class CheckForNewMail(override val accountId: String) :
-        SyncJob(accountId, 50, 1)
-
-    data class SyncFolderList(override val accountId: String) :
-        SyncJob(accountId, 40, 3)
-
-    data class EvictFromCache(override val accountId: String) :
-        SyncJob(accountId, 10, 10)
-
-    // --- Legacy job names kept temporarily for backward compatibility ---
-
-    // Maps to Level 1 FetchFullMessageBody
+    @Deprecated("Use FetchFullMessageBody instead", ReplaceWith("FetchFullMessageBody(messageId, accountId)"))
     data class DownloadMessageBody(val messageId: String, override val accountId: String) :
         SyncJob(accountId, 95, 8)
 
-    // Maps to Level 1 FetchFullMessageBody when requesting refresh of folder. Priority slightly lower.
+    @Deprecated("Use ForceRefreshFolder instead", ReplaceWith("ForceRefreshFolder(folderId, accountId)"))
     data class RefreshFolderContents(val folderId: String, override val accountId: String) :
         SyncJob(accountId, 88, 5)
 
-    // Attachment download – treat with Level 1 urgency when user taps attachment.
-    data class DownloadAttachment(
-        val attachmentId: Long,
-        val messageId: String,
-        override val accountId: String
-    ) : SyncJob(accountId, 90, 8)
-
-    /**
-     * Triggers a full bootstrap of *all* folders for the account. The SyncController will iterate
-     * over every local folder (or call FolderRepository to pull the list first) and queue a
-     * ForceRefreshFolder for each one. This is used immediately after an account is added or when
-     * the user explicitly requests a full re-sync.
-     */
-    data class FullAccountBootstrap(override val accountId: String) : SyncJob(accountId, 100, 15)
+    @Deprecated("Superseded by HeaderBackfill and its internal paging", ReplaceWith("HeaderBackfill(folderId, null, accountId)"))
+    data class FetchNextMessageListPage(val folderId: String, override val accountId: String) :
+        SyncJob(accountId, 88, 5)
 } 

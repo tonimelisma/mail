@@ -13,6 +13,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.GlobalScope
 import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -25,7 +26,7 @@ class AndroidNetworkMonitor @Inject constructor(
     private val connectivityManager =
         context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
 
-    override val isOnline: Flow<Boolean> = callbackFlow {
+    private val onlineUpdates: Flow<Boolean> = callbackFlow {
         val networkCallback = object : ConnectivityManager.NetworkCallback() {
             override fun onAvailable(network: Network) {
                 // Check capabilities to ensure it's actually online and validated
@@ -70,9 +71,16 @@ class AndroidNetworkMonitor @Inject constructor(
         }
 
         awaitClose { connectivityManager.unregisterNetworkCallback(networkCallback) }
-    }.conflate() // Emit only the latest state
+    }.conflate()
 
-    override val isWifiConnected: Flow<Boolean> = callbackFlow {
+    // Expose as hot StateFlow to prevent re-registering the network callback for every consumer/`first()` call
+    override val isOnline: Flow<Boolean> = onlineUpdates.stateIn(
+        scope = kotlinx.coroutines.GlobalScope, // This singleton monitor lives for the app lifetime
+        started = SharingStarted.Eagerly,
+        initialValue = false
+    )
+
+    private val wifiUpdates: Flow<Boolean> = callbackFlow {
         val wifiNetworkCallback = object : ConnectivityManager.NetworkCallback() {
             private fun checkWifiStatus() {
                 val activeNetwork = connectivityManager.activeNetwork
@@ -117,6 +125,12 @@ class AndroidNetworkMonitor @Inject constructor(
 
         awaitClose { connectivityManager.unregisterNetworkCallback(wifiNetworkCallback) }
     }.conflate()
+
+    override val isWifiConnected: Flow<Boolean> = wifiUpdates.stateIn(
+        scope = kotlinx.coroutines.GlobalScope,
+        started = SharingStarted.Eagerly,
+        initialValue = false
+    )
 
     // Consider making these StateFlows if frequent .first() calls are an issue, for caching last known state.
     // For workers, .first() is fine as they are short-lived. For ViewModels, .stateIn is used.

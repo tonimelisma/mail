@@ -55,4 +55,7 @@ interface AccountDao {
 
     @Query("DELETE FROM accounts WHERE providerType = 'MS'")
     suspend fun deleteAllMicrosoftAccounts()
+
+    @Query("SELECT * FROM accounts")
+    suspend fun getAccountsSuspend(): List<AccountEntity>
 } 

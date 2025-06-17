@@ -1,5 +1,28 @@
 ### Sync Engine v2.1 Migration Log
 
+**Date:** 2025-08-03
+
+#### Summary
+Conducted a major refactoring and bug-fix pass on the v2.1 Sync Engine, correcting architectural flaws from the initial implementation and hardening the logic.
+
+1.  **Refactored `SyncJob` Model**:
+    *   Renamed `FetchMessageHeaders` to `HeaderBackfill` for clarity.
+    *   Added new `BulkFetchBodies` and `BulkFetchAttachments` jobs for future opportunistic downloads.
+    *   Converted `EvictFromCache` to a global, system-level job (`object`) instead of a per-account one.
+    *   Introduced an `isProactiveDownload` flag on the base `SyncJob` to simplify gatekeeper logic.
+    *   Marked legacy job names with `@Deprecated` to guide future cleanup.
+2.  **Corrected Gatekeeper Logic**:
+    *   Simplified `CachePressureGatekeeper` to use the new `isProactiveDownload` flag, making it more reliable and easier to maintain.
+3.  **Fixed Cache Eviction Architecture**:
+    *   `CacheEvictionProducer` is now stateless (using SharedPreferences for its timer) and correctly produces a single, global `EvictFromCache` job.
+    *   `SyncController.runCacheEviction` now performs a global eviction based on total cache usage, fixing the critical flaw of the previous per-account implementation.
+4.  **Streamlined Job Producers**:
+    *   Removed redundant cache-pressure checks from `BackfillJobProducer`, making `CachePressureGatekeeper` the single source of truth.
+5.  **Build & Verification**:
+    *   Verified the complete build with `./gradlew build`. Deprecation warnings are expected and confirm the refactoring path.
+
+---
+
 **Date:** 2025-08-02
 
 #### Summary

@@ -1,6 +1,6 @@
 Read @BACKLOG.md @ARCHITECTURE.md 
 
-Today we'll implement Epic 3.
+We're looking to implement @SYNCVISION.md via @SYNCPLAN.md 
 
 1. Explain all of the work that needs to happen to successfully accomplish the requirements. Explain clearly the body of work you seek to accomplish and the outcomes.
 1b. Explain which parts of the app the changes will touch: backend-google, backend-microsoft, calendar, core-data, core-db, data, domain, mail? All of them? UI?
@@ -10,7 +10,7 @@ Today we'll implement Epic 3.
 5. Read the rest of the files on disk required to harden the soft spots. Ensure you know each and every API that will be affected by your changes and have read the actual files on disk and know them before moving to the next step.
 6. Implement the required changes.
 7. Build and fix any build errors.
-8. Update @ARCHITECTURE.md, @BACKLOG.md and CHANGELOG.md with any relevant changes. Document the detailed work you did, deviations from plan, code smells, shortcuts etc in CHANGELOG.md
+8. Update SYNCLOG.md with any relevant changes. Document the detailed work you did, deviations from plan, code smells, shortcuts etc in CHANGELOG.md
 9. Check to make sure you didn't introduce any placeholders in the documents such as parts that say "this section is just like before".
 10. Use your tools to do a git commit of everything changed. Ensure the comment is a one-liner. Then git push.
 

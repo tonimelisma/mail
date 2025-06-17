@@ -7,5 +7,7 @@ import androidx.room.PrimaryKey
 data class FolderSyncStateEntity(
     @PrimaryKey val folderId: String,
     val nextPageToken: String?,
-    val lastSyncedTimestamp: Long?
+    val lastSyncedTimestamp: Long?,
+    val deltaToken: String? = null,
+    val historyId: String? = null
 ) 

@@ -1,5 +1,8 @@
 package net.melisma.data.sync
 
+import android.content.Context
+import androidx.core.content.edit
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import net.melisma.core_data.model.SyncJob
@@ -11,52 +14,41 @@ import kotlinx.coroutines.flow.first
 
 @Singleton
 class CacheEvictionProducer @Inject constructor(
+    @ApplicationContext private val context: Context,
     private val appDatabase: AppDatabase,
     private val userPrefs: UserPreferencesRepository,
 ) : JobProducer {
-    private val HARD_PRESSURE_THRESHOLD = 0.98f // 98%
+    private val HARD_PRESSURE_THRESHOLD = 0.98f
     private val TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000L
 
-    @Volatile
-    private var lastEvictionCheckTimestamp = 0L
+    private val prefs by lazy {
+        context.getSharedPreferences("cache_eviction_producer_state", Context.MODE_PRIVATE)
+    }
 
     override suspend fun produce(): List<SyncJob> = withContext(Dispatchers.IO) {
         val now = System.currentTimeMillis()
-        val dueForPeriodicCheck = (now - lastEvictionCheckTimestamp) > TWENTY_FOUR_HOURS_MS
+        val lastCheck = prefs.getLong(KEY_LAST_CHECK_TIMESTAMP, 0L)
+        val dueForPeriodicCheck = (now - lastCheck) > TWENTY_FOUR_HOURS_MS
 
-        val jobs = mutableListOf<SyncJob>()
-        val attachmentDao = appDatabase.attachmentDao()
-        val messageBodyDao = appDatabase.messageBodyDao()
-        val accountDao = appDatabase.accountDao()
-
-        val prefs = userPrefs.userPreferencesFlow.first()
-        val hardLimit = prefs.cacheSizeLimitBytes
+        val userPrefs = userPrefs.userPreferencesFlow.first()
+        val hardLimit = userPrefs.cacheSizeLimitBytes
         val hardThreshold = (hardLimit * HARD_PRESSURE_THRESHOLD).toLong()
 
-        val accounts = accountDao.getAccountsSuspend()
-        var needsEviction = false
-        for (account in accounts) {
-            val attsBytes = attachmentDao.getTotalDownloadedSizeForAccount(account.id) ?: 0L
-            val bodyBytes = messageBodyDao.getTotalBodiesSizeForAccount(account.id) ?: 0L
-            val used = attsBytes + bodyBytes
-            if (used >= hardThreshold) {
-                needsEviction = true
-                jobs += SyncJob.EvictFromCache(account.id)
-            }
+        val attachmentsBytes = appDatabase.attachmentDao().getTotalDownloadedSize() ?: 0L
+        val bodiesBytes = appDatabase.messageBodyDao().getTotalBodiesSize() ?: 0L
+        val totalUsage = attachmentsBytes + bodiesBytes
+
+        val isOverHardThreshold = totalUsage >= hardThreshold
+
+        if (isOverHardThreshold || dueForPeriodicCheck) {
+            prefs.edit { putLong(KEY_LAST_CHECK_TIMESTAMP, now) }
+            return@withContext listOf(SyncJob.EvictFromCache)
         }
 
-        if (jobs.isEmpty() && dueForPeriodicCheck) {
-            // If no account is over the hard threshold, but it's time for a check,
-            // run eviction on all accounts just in case there's old stuff to clean.
-            accounts.forEach { account ->
-                jobs += SyncJob.EvictFromCache(account.id)
-            }
-        }
+        return@withContext emptyList()
+    }
 
-        if (jobs.isNotEmpty() || dueForPeriodicCheck) {
-            lastEvictionCheckTimestamp = now
-        }
-
-        jobs
+    companion object {
+        private const val KEY_LAST_CHECK_TIMESTAMP = "last_check_timestamp"
     }
 } 

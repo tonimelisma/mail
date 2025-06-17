@@ -51,6 +51,7 @@ import net.openid.appauth.AuthorizationResponse
 import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
+import net.melisma.core_data.repository.GenericSignOutAllResult
 
 // Companion object for constants
 private const val GMAIL_API_SCOPE_BASE = "https://www.googleapis.com/auth/gmail."

@@ -1,107 +1,72 @@
-# **Melisma Mail \- Sync Architecture Specification v4.1**
+### **Sync Engine v2.1: System Requirements**
 
-Version: 4.1  
-Date: June 8, 2025  
-Status: Approved (Phase 1 & 2 delivered 2025-06-17)
+This document defines the logic, state, and behavior of the Melisma Mail data synchronization engine. It supersedes previous proposals and is based on a tiered, priority-driven model.
 
-## **1\. Introduction & Core Principles**
+#### **1.0 State Management & Data Models**
 
-This document defines the behavioral specification for the SyncController, the next-generation synchronization engine in Melisma Mail. It is designed from the ground up to be responsive, reliable, transparent, and battery-efficient, built on a four-tier priority model.
+The following database fields are required to support the dynamic sync logic.
 
-## **2\. Core Architecture: The "Dedicated Dispatcher" Model**
+* **1.1 In FolderSyncStateEntity (or equivalent):**  
+  * folderId (Primary Key)  
+  * deltaToken / historyId: The string token from the last successful delta sync for this folder.  
+* **1.2 In MessageEntity:**  
+  * lastAccessedTimestamp: A nullable long representing the UTC timestamp of the last time the user opened this message. It is null by default and updated on every open action.  
+  * hasFullBodyCached: A boolean flag indicating if the full, parsed body content has been successfully downloaded.  
+* **1.3 In AttachmentEntity:**  
+  * downloadState: An enum or integer (NOT\_DOWNLOADED, DOWNLOADED, FAILED) representing the cache state of the attachment's content.
 
-The heart of the new architecture is a singleton class, the **SyncController**.
+#### **2.0 Core Sync Controller Logic**
 
-* **Centralized Control:** The SyncController is the single component responsible for orchestrating all data synchronization.  
-* **Job Queue:** It maintains an internal PriorityBlockingQueue of discrete SyncJob objects.  
-* **Dedicated Coroutine Scope:** It operates within its own CoroutineScope, allowing fine-grained control over job execution.  
-* **State Machine:** It manages its own state based on the application's lifecycle (Active, Passive, Initial Sync).
+The SyncController will use these core rules to manage its operation.
 
-## **3\. The SyncJob: Granular Units of Work**
+* **2.1 Dynamic Backfill Calculation:** The controller will not use an isInitialBackfillComplete flag. Instead, it will dynamically determine the need for backfill by running a query to find the oldestHeaderSyncTimestamp for a given folder and comparing it against the 90-day requirement. While SQL searches are fast, this calculation will be done judiciously to avoid excessive queries during active sync cycles.  
+* **2.2 Cache-Aware Job Queuing:** A CACHE\_PRESSURE\_THRESHOLD (e.g., 90% of limit) will be used. If cache usage is at or above this threshold, no new **proactive download jobs** (Header Backfill, Bulk Body/Attachment Fetch) will be queued. This prevents the "yo-yo" effect of downloading and immediately evicting data. High-priority user-driven jobs will still be queued.  
+* **2.3 Dynamic Foreground Service Management:** The decision to use a Foreground Service will be holistic and based on the total work in the queue.  
+  * The controller will estimate a "work score" based on the number of messages to download, total size of attachments, etc.  
+  * If this score exceeds a defined threshold, a Foreground Service will be started to guarantee completion of the batch of work.  
+  * The service will stop only when the queue's work score drops below the threshold. This single mechanism covers all large jobs (initial sync, big delta sync, bulk downloads).
 
-To enable true prioritization, all work is broken down into small, well-defined SyncJobs.  
-// Represents a discrete, prioritizable unit of work  
-sealed class SyncJob(val accountId: String, val priority: Int) {  
-    // Level 1: Golden Rule \- User is actively waiting for this.  
-    data class FetchFullMessageBody(val messageId: String) : SyncJob(priority \= 95\)  
-    data class FetchNextMessageListPage(val folderId: String) : SyncJob(priority \= 90\) // For predictive scrolling  
-    data class ForceRefreshFolder(val folderId: String) : SyncJob(priority \= 88\) // For user pull-to-refresh
-    data class SearchOnline(val query: String) : SyncJob(priority \= 85\)
+#### **3.0 Cache Management & Eviction**
 
-    // Level 2: Fulfilling User Intent \- Uploading user-generated changes.  
-    data class UploadAction(val pendingActionId: String) : SyncJob(priority \= 75\) // e.g., send, delete, mark read
+* **3.1 Trigger:** A low-priority CACHE\_EVICTION job will run once every 24 hours or when cache usage exceeds a critical limit (e.g., 98%).  
+* **3.2 Eviction Rule:** A message and all its associated data are candidates for eviction if:  
+  1. The message's sentDate is older than 90 days.  
+  2. The message's lastAccessedTimestamp is either null or older than **24 hours**. This grace period protects recently scrolled-to or searched items from being immediately removed.
 
-    // Level 4: Background Freshness & Backfill \- Opportunistic, battery-conscious syncing.  
-    data class FetchMessageHeaders(val folderId: String, val pageToken: String?) : SyncJob(priority \= 50\)  
-    data class SyncFolderList(val accountId: String) : SyncJob(priority \= 40\)  
-    data class EvictFromCache(val accountId: String) : SyncJob(priority \= 10\)  
-}
+#### **4.0 Sync Job Prioritization**
 
-## **4\. The Sync Algorithm: A Strict Priority Hierarchy**
+The SyncController will process jobs in a strict, tiered order. Foreground/background states do not change a job's *priority*, but they do change *which jobs get queued and how often*.
 
-The SyncController processes jobs from its queue by strictly adhering to the following priority levels. It will **only** process jobs from a lower level if all higher-priority levels are empty.
-
-### **Priority Level 1: The Golden Rule (Immediate User Interaction)**
-
-This level has absolute priority and will preempt any lower-priority work.
-
-* **1a. Content Viewing:** When a user taps to open an email, a `FetchFullMessageBody` job is created.  
-* **1b. Predictive Scrolling:** When a user scrolls to the end of a message list, a `FetchNextMessageListPage` job is created to seamlessly load the next page.
-* **1c. Manual Refresh:** When a user executes a pull-to-refresh gesture, a `ForceRefreshFolder` job is created. This job will reset the paging token for the folder to ensure a full refresh.
-* **1d. Search:** When a user executes a search, a `SearchOnline` job is created.
-  _(Update 2025-07-01: Remote search implemented in code – see `SyncController.handleSearchOnline` and `SearchMessagesUseCase` wiring.)_
-
-### **Priority Level 2: Fulfilling User Intent**
-
-The engine will process any pending `UploadAction` jobs (send, delete, move, etc.) to sync user changes to the server.
-
-### **Priority Level 4: Background Freshness & Backfill (Self-Perpetuating Queue)**
-
-This is the default, continuous work of keeping the entire local cache up-to-date when no higher-priority work exists. These jobs are queued by the internal polling mechanisms.
-
-* **The Algorithm:** The engine syncs one page of message headers at a time. If the server response indicates more pages are available, a new `FetchMessageHeaders` job for the next page of that same folder is immediately created and added back into the low-priority queue.
-
-## **5\. Engine States & Polling Lifecycle**
-
-_(Update 2025-06-19: Active & Passive polling implemented in code – see SyncController.startActivePolling and PassivePollingWorker.)_
-
-* **Active Polling (App in Foreground):** An aggressive polling timer runs every 5 seconds. This loop queues low-priority `FetchMessageHeaders` jobs for critical folders (e.g., Inbox). The controller's internal logic will deduplicate jobs, preventing redundant work if a job for that folder is already pending or in progress.
-* **Passive Polling (App in Background):** The 5-second timer is stopped. A periodic WorkManager job is scheduled to run approximately every 15 minutes. This worker's sole responsibility is to queue a low-priority `FetchMessageHeaders` job, ensuring reasonable data freshness while conserving battery.
-* **Initial Sync Mode (New Account):** A long-running sync managed by a Foreground Service. It will honor the user's "initial sync duration" preference by fetching mail only within that time window.
-
-_(Update 2025-06-30: Preference now enforced in code – SyncController passes earliestTimestampEpochMillis on first page request of folder sync.)_
-
-## **6\. Data Model & Concurrency**
-
-* **Concurrency:** One active network operation per account at any given time. _(Update 2025-06-20: Enforced in code via `SyncController` `activeAccounts` mutex.)_  
-* **Gmail & Labels (Unified Model):** A many-to-many relationship using a MessageFolderJunction table.
-
-## **7\. Detailed Sync Policies & Edge Case Handling**
-
-* **Folder List Syncing:** A `SyncFolderList` job is queued once immediately after a new account is added. Subsequently, it is queued as a low-priority (Level 4) job once every 24 hours to discover new folders created on the server.
-* **Cache Eviction:** An `EvictFromCache` job is a standard, low-priority (Level 4) job. It is added to the main sync queue whenever the total cache size exceeds the user-configured limit.
-* **Body Snippets:** The engine **will fetch** message snippets/previews provided by the server API. These will be stored in the MessageEntity.snippet field.  
-* **Background Sync State Persistence:** The nextPageToken for each folder **will be persisted** in a dedicated FolderSyncStateEntity table.  
-* **Graceful Full Resync:** Detect expired sync tokens and silently trigger a full resync.  
-* **Adaptive API Backoff:** Handle API throttling with per-account exponential backoff.  
-* **Conflict Resolution:** The defined strategy is "last write wins". This is considered sufficient for the current implementation phase.
-
-## **8\. Android System Integration**
-
-### **Disabling Cache Backup**
-
-The backup\_rules.xml file will be configured to exclude the Room database and the attachments directory from Android's Auto Backup.  
-\<?xml version="1.0" encoding="utf-8"?\>  
-\<full-backup-content\>  
-    \<\!-- Exclude all Room database files from backup \--\>  
-    \<exclude domain="database" path="." /\>  
-    \<\!-- Exclude all downloaded attachments from backup \--\>  
-    \<exclude domain="no\_backup" path="attachments/" /\>  
-\</full-backup-content\>  
-
-* **Eviction Policy:** A dedicated SyncJob for cache cleanup is triggered periodically or when the total cache size exceeds the user-configured limit. The policy evicts data to bring usage down to 80% of the limit.
-* **Priority:** It evicts the least recently used data first, prioritizing the removal of attachments, then message bodies, and finally message headers.
-
-_(Update 2025-06-25: Cache eviction algorithm implemented in code – see SyncController.runCacheEviction.)_
-
-_(Update 2025-06-26: Attachment storage moved to `Context.noBackupFilesDir` and backup_rules.xml updated; Requirement 0.7 completed.)_
+* **Priority 1: User-Driven Actions (Immediate)**  
+  * **Description:** These jobs are direct results of a user's interaction and must be executed immediately for the UI to feel responsive.  
+  * **Jobs Include:**  
+    * SEND\_MESSAGE, CREATE\_DRAFT, UPDATE\_DRAFT  
+    * FETCH\_MESSAGE\_CONTENT\_AND\_ATTACHMENTS (Triggered when user opens an email)  
+    * MARK\_READ, DELETE, MOVE  
+* **Priority 2: Folder & Structural Integrity (Pre-computation)**  
+  * **Description:** Ensures the app's folder structure is up-to-date before trying to sync messages that might belong to new or renamed folders.  
+  * **Job:** SYNC\_FOLDER\_LIST  
+  * **Triggers:**  
+    * Queued once when the app enters the foreground.  
+    * Queued once as part of the 15-minute background sync cycle.  
+* **Priority 3: Delta Sync (What's New?)**  
+  * **Description:** Fetches all new or updated messages. This is the core of keeping the app current.  
+  * **Job:** DELTA\_SYNC  
+  * **Triggers:**  
+    * **High-Frequency (Foreground):** Every 5-10 seconds for critical folders (Active, Inbox, Sent, Drafts, Junk).  
+    * **Low-Frequency (Foreground):** Every 3-5 minutes for all other folders (round-robin).  
+    * **Comprehensive (Background):** Every 15 minutes for **all** folders.  
+* **Priority 4: Header Backfill (Completing History)**  
+  * **Description:** Proactively fetches pages of older message headers to fill the 90-day offline cache.  
+  * **Job:** HEADER\_BACKFILL  
+  * **Trigger:** Queued by the controller's main loop whenever a folder is found to have less than 90 days of headers and the cache is not under pressure. The *frequency* of this check is higher in the foreground, leading to more frequent queuing of these jobs.  
+* **Priority 5: Bulk Content Download (Opportunistic)**  
+  * **Description:** Downloads message bodies and attachments in the background when no higher-priority work is pending.  
+  * **Jobs Include:**  
+    * BULK\_FETCH\_BODIES  
+    * BULK\_FETCH\_ATTACHMENTS  
+  * **Trigger:** Queued by the controller's main loop when network is available, cache is not under pressure, and all header backfill is complete.  
+* **Priority 6: Maintenance (Housekeeping)**  
+  * **Description:** Low-impact jobs that are not critical to real-time data.  
+  * **Job:** CACHE\_EVICTION  
+  * **Trigger:** Queued once every 24 hours or when the cache is full.

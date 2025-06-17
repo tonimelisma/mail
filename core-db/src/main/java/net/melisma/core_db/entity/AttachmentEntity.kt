@@ -33,6 +33,13 @@ data class AttachmentEntity(
     val contentId: String? = null,
     val isInline: Boolean = false,
     val isDownloaded: Boolean = false,
+    /**
+     * Download state as ordinal of [net.melisma.core_data.model.AttachmentDownloadState].
+     * NOT_DOWNLOADED = 0 (default), DOWNLOADED = 1, FAILED = 2.
+     * Int is used to avoid TypeConverter churn while we are still iterating fast; once
+     * stabilised we will migrate to a proper enum converter.
+     */
+    val downloadState: Int = 0,
     val localFilePath: String? = null,
     val downloadTimestamp: Long? = null,
 

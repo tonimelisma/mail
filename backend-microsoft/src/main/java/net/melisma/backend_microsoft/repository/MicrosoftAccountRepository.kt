@@ -34,7 +34,6 @@ import net.melisma.core_data.model.Account
 import net.melisma.core_data.model.ErrorDetails
 import net.melisma.core_data.model.GenericAuthResult
 import net.melisma.core_data.model.GenericSignOutResult
-import net.melisma.core_data.model.GenericSignOutAllResult
 import net.melisma.core_data.repository.AccountRepository
 import net.melisma.core_data.repository.GenericSignOutAllResult
 import net.melisma.core_data.repository.OverallApplicationAuthState

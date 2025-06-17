@@ -381,6 +381,14 @@ fun SettingsScreen(
                     }
                     Text("Clear All Microsoft Accounts (Cache)")
                 }
+
+                // Force full re-sync button
+                Button(
+                    onClick = { viewModel.forceFullSyncAllAccounts() },
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                ) {
+                    Text("Force Full Sync of All Accounts")
+                }
             }
 
             // Spacer for FAB

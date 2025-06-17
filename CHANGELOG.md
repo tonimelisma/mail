@@ -13,6 +13,10 @@
 ### Changed
 - `SyncController` now uses the `Gatekeeper` infrastructure and `workScore` to manage the synchronization queue.
 - `InitialSyncForegroundService` lifecycle is now tied to the `totalWorkScore` in the `SyncController`.
+- **Refactored `SyncJob` Model**: The sealed class for sync jobs was restructured for clarity, with legacy job names marked as deprecated.
 
 ### Fixed
+- **Critical Cache Eviction Flaw**: Corrected the cache eviction logic to operate on a global level instead of a flawed per-account basis. The eviction producer is now stateless and more reliable.
+- **Redundant Logic in Producers**: Removed duplicate cache pressure checks from `BackfillJobProducer`, making `CachePressureGatekeeper` the single source of truth.
+- **Incomplete Gatekeeper Logic**: The `CachePressureGatekeeper` now correctly identifies all proactive download jobs.
 - Build error in `BackfillJobProducer` caused by a duplicate variable declaration. 

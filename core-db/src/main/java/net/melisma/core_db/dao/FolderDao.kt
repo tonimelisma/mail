@@ -77,4 +77,7 @@ interface FolderDao {
             ))
         }
     }
+
+    @Query("SELECT * FROM folders WHERE accountId = :accountId ORDER BY name ASC")
+    suspend fun getFoldersForAccountSuspend(accountId: String): List<FolderEntity>
 } 

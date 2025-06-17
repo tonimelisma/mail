@@ -140,26 +140,28 @@ class SyncController @Inject constructor(
 
             try {
                 when (job) {
+                    // New job handlers
+                    is SyncJob.HeaderBackfill -> handleFetchMessageHeaders(job.folderId, job.pageToken, job.accountId)
+                    is SyncJob.EvictFromCache -> runCacheEviction() // Global eviction
+
+                    // Legacy job mapping
+                    is SyncJob.FetchMessageHeaders -> handleFetchMessageHeaders(job.folderId, job.pageToken, job.accountId)
+                    is SyncJob.DownloadMessageBody -> handleDownloadMessageBody(SyncJob.FetchFullMessageBody(job.messageId, job.accountId))
+                    is SyncJob.RefreshFolderContents -> handleForceRefreshFolder(SyncJob.ForceRefreshFolder(job.folderId, job.accountId))
+                    is SyncJob.FetchNextMessageListPage -> handleFetchMessageHeaders(job.folderId, null, job.accountId) // Simplified: just trigger a refresh from the start
+                    
+                    // Existing handlers
                     is SyncJob.SyncFolderList -> handleSyncFolderList(job)
                     is SyncJob.ForceRefreshFolder -> handleForceRefreshFolder(job)
-                    is SyncJob.DownloadMessageBody -> handleDownloadMessageBody(job)
-                    is SyncJob.RefreshFolderContents -> handleForceRefreshFolder(
-                        SyncJob.ForceRefreshFolder(
-                            accountId = job.accountId,
-                            folderId = job.folderId
-                        )
-                    )
+                    is SyncJob.FetchFullMessageBody -> handleDownloadMessageBody(job)
                     is SyncJob.UploadAction -> handleUploadAction(job)
                     is SyncJob.DownloadAttachment -> handleDownloadAttachment(job)
-                    is SyncJob.FetchFullMessageBody -> handleDownloadMessageBody(
-                        SyncJob.DownloadMessageBody(job.messageId, job.accountId)
-                    )
-                    is SyncJob.FetchMessageHeaders -> handleFetchMessageHeaders(job)
-                    is SyncJob.FetchNextMessageListPage -> handleFetchNextPage(job)
                     is SyncJob.SearchOnline -> handleSearchOnline(job)
-                    is SyncJob.EvictFromCache -> runCacheEviction(job.accountId)
                     is SyncJob.CheckForNewMail -> handleCheckForNewMail(job)
                     is SyncJob.FullAccountBootstrap -> handleFullAccountBootstrap(job)
+
+                    // No-op for now for these new job types
+                    is SyncJob.BulkFetchBodies, is SyncJob.BulkFetchAttachments -> Timber.d("Ignoring ${job::class.simpleName} for now.")
                 }
                 _status.update { it.copy(error = null) }
             } catch (e: Exception) {
@@ -184,9 +186,9 @@ class SyncController @Inject constructor(
     @Volatile
     var initialSyncDurationDays: Long = 90L
 
-    private suspend fun handleFetchMessageHeaders(job: SyncJob.FetchMessageHeaders) {
+    private suspend fun handleFetchMessageHeaders(folderId: String, pageToken: String?, accountId: String) {
         kotlinx.coroutines.withContext(ioDispatcher) {
-            processFetchHeaders(job.folderId, job.pageToken, job.accountId)
+            processFetchHeaders(folderId, pageToken, accountId)
         }
     }
 
@@ -466,7 +468,7 @@ class SyncController @Inject constructor(
         }
     }
 
-    private suspend fun handleDownloadMessageBody(job: SyncJob.DownloadMessageBody) {
+    private suspend fun handleDownloadMessageBody(job: SyncJob.FetchFullMessageBody) {
         kotlinx.coroutines.withContext(ioDispatcher) {
             if (!networkMonitor.isOnline.first()) {
                 Timber.i("Offline – skip body download for ${job.messageId}")
@@ -727,7 +729,7 @@ class SyncController @Inject constructor(
         }
     }
 
-    private suspend fun runCacheEviction(accountId: String) {
+    private suspend fun runCacheEviction() {
         withContext(ioDispatcher) {
             val prefs = userPreferencesRepository.userPreferencesFlow.first()
             val cacheLimitBytes = prefs.cacheSizeLimitBytes
@@ -738,19 +740,17 @@ class SyncController @Inject constructor(
             val messageDao = appDatabase.messageDao()
             val messageBodyDao = appDatabase.messageBodyDao()
 
-            // Calculate current cache usage for the specific account
-            val attachmentsBytes = attachmentDao.getTotalDownloadedSizeForAccount(accountId) ?: 0L
-            val bodiesBytes = messageBodyDao.getTotalBodiesSizeForAccount(accountId) ?: 0L
+            // Calculate current TOTAL cache usage
+            val attachmentsBytes = attachmentDao.getTotalDownloadedSize() ?: 0L
+            val bodiesBytes = messageBodyDao.getTotalBodiesSize() ?: 0L
             var totalUsageBytes = attachmentsBytes + bodiesBytes
 
-            Timber.d("Cache eviction check for account $accountId: " +
+            Timber.d("Global cache eviction check: " +
                     "Usage: ${totalUsageBytes / 1024 / 1024}MB, " +
                     "Limit: ${cacheLimitBytes / 1024 / 1024}MB")
-
-            // The producer already checks the 98% threshold, but we re-check here
-            // to handle direct calls or race conditions. We proceed if over the 80% target.
+            
             if (totalUsageBytes <= targetBytesAfterEvict) {
-                Timber.d("Cache usage is below target. No eviction needed for account $accountId.")
+                Timber.d("Cache usage is below target. No eviction needed.")
                 return@withContext
             }
 
@@ -771,12 +771,12 @@ class SyncController @Inject constructor(
                         EntitySyncStatus.ERROR.name,
                         EntitySyncStatus.PENDING_DELETE.name
                     )
-                ).filter { it.accountId == accountId }
+                )
 
                 val candidateMessageIds = candidateMessagesForAttachmentEviction.map { it.id }.toSet()
 
                 val attachmentsToEvict = attachmentDao.getAllDownloadedAttachments()
-                    .filter { it.accountId == accountId && it.messageId in candidateMessageIds }
+                    .filter { it.messageId in candidateMessageIds }
                     .sortedBy { it.downloadTimestamp ?: 0L }
 
                 for (att in attachmentsToEvict) {
@@ -808,8 +808,7 @@ class SyncController @Inject constructor(
                      maxLastAccessedTimestampMillis = evictionAccessCutoffTs,
                      maxSentTimestampMillis = evictionAgeCutoffTs,
                      excludedSyncStates = listOf(EntitySyncStatus.PENDING_UPLOAD.name)
-                ).filter { it.accountId == accountId }
-                 .sortedBy { it.timestamp }
+                ).sortedBy { it.timestamp }
 
                 for (msg in finalCandidateMessages) {
                     if (bytesFreed >= bytesToFree) break
@@ -817,8 +816,7 @@ class SyncController @Inject constructor(
                     bytesFreed += 500 // Approximate size for header and junctions
                 }
             }
-
-            Timber.i("Cache eviction for $accountId freed ${bytesFreed / 1024 / 1024} MB.")
+            Timber.i("Global cache eviction freed ${bytesFreed / 1024 / 1024} MB.")
         }
     }
 

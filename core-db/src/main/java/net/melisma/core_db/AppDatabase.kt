@@ -39,7 +39,7 @@ import net.melisma.core_db.migration.M18_M19
         MessageFolderJunction::class,
         FolderSyncStateEntity::class
     ],
-    version = 20,
+    version = 21,
     exportSchema = true,
     // autoMigrations disabled during ongoing schema development – rely on fallbackToDestructiveMigration in AppDatabase builder.
 )

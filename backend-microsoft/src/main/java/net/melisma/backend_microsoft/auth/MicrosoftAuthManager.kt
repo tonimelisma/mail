@@ -691,10 +691,7 @@ class MicrosoftAuthManager @Inject constructor(
                 performLocalSignOutCleanup(accountId, "MSAL client not initialized")
             }
             return@withContext SignOutResultWrapper.Error(
-                MsalClientException(
-                    "client_not_initialized", // Replaced MsalClientException.CLIENT_NOT_INITIALIZED
-                    "MSAL client not initialized."
-                )
+                MsalClientException("client_not_initialized", "MSAL not initialized.")
             )
         }
 
@@ -1044,7 +1041,7 @@ class MicrosoftAuthManager @Inject constructor(
         if (msalApp == null) {
             Timber.tag(TAG).w("signOutAll: MSAL client not initialized.")
             return@withContext SignOutAllResultWrapper.Error(
-                MsalClientException(MsalClientException.NOT_INITIALIZED, "MSAL not initialized."),
+                MsalClientException("client_not_initialized", "MSAL not initialized."),
                 "MSAL client was null during signOutAll."
             )
         }

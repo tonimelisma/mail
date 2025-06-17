@@ -1,110 +1,89 @@
-# **Melisma Mail - Sync Architecture Refactor Plan**
+### **Architecture A Migration Plan – Incremental Evolution of the existing SyncController**
 
-> **Overall Status:** <span style="color:green">**ALL PHASES COMPLETE - ✅**</span> (As of 2025-07-02)
-
-**Legend:**
-*   <span style="color:green">**[DONE - ✅]**</span>
-*   <span style="color:orange">**[WIP - 🚧]**</span>
-*   <span style="color:red">**[TODO - ❌]**</span>
+This document converts the vision in **SYNCVISION.md** into an actionable, file-by-file to-do list that a junior developer can follow.  Each task states **where**, **what** and **why**, the **blast radius**, and any **gotchas / risks**.
 
 ---
-Version: 1.3 (Reflects completed status)
-Date: July 3, 2025  
-Status: Implemented
+## 📍 High-Level Roadmap
+1. Add pluggable _Gatekeepers_ that can veto queuing when cache pressure / network / battery is outside allowed ranges.
+2. Add a lightweight **WorkScore** metric to every `SyncJob` and expose `totalWorkScore` as a `StateFlow` from `SyncController`.
+3. Teach the existing **InitialSyncForegroundService** to start/stop based on `totalWorkScore` instead of the coarse `isSyncing` flag.
+4. Update Back-fill and Cache-Eviction logic to match the rules in **SYNCVISION.md** (90-day header window, 24-hour grace period, 98 % hard cache limit, 90 % soft limit).
+5. Maintain backward compatibility for the UI – keep `isSyncing` (derived) so nothing crashes.
+6. Write unit tests for the new Gatekeeper decisions & WorkScore maths.
 
-## **1\. Objective**
+We implement the above in **five small PRs** (you can squash before main merge).
 
-This document outlines the plan to refactor the application's data synchronization mechanism from the current WorkManager-based SyncEngine to the centralized, priority-driven SyncController model.
+---
+## 1️⃣ PR-1  – Gatekeeper Infrastructure
 
-## **2\. Current Architecture Overview**
+| File | Change | Blast-Radius | Risk |
+|------|--------|-------------|------|
+| `data/src/main/java/net/melisma/data/sync/Gatekeeper.kt` (NEW) | Define an **interface** `Gatekeeper { suspend fun isAllowed(job: SyncJob): Boolean }`. | None (new file) | None.
+| `data/src/main/java/net/melisma/data/sync/gate/CachePressureGatekeeper.kt` (NEW) | Implements interface. Reads `AttachmentDao`+`MessageBodyDao` sizes, compares to **90 %** of `UserPreferences.cacheSizeLimitBytes`. | Low | SQL cost – run on IO dispatcher.
+| `SyncController.kt` | 1) Inject `List<Gatekeeper>`  (Hilt multibinding)  2) In `submit(job)` call `gatekeepers.all { it.isAllowed(job) }` before enqueue. | High – touches central queue. | Deadlock if `isAllowed` is long-running ⇒ ensure `withContext(Dispatchers.IO)`.
+| `data/src/main/java/.../di/SyncGateModule.kt` (NEW) | Provide the gatekeeper impls via Hilt. | None | DI mis-wiring.
 
-The existing architecture uses a distributed SyncEngine with multiple WorkManager workers and a RemoteMediator for paging, leading to logic fragmentation and unpredictable prioritization.
+####  Implementation steps
+1. Create interface + impls.  
+2. Register with Hilt.  
+3. Update `SyncController` constructor to accept `@JvmSuppressWildcards List<Gatekeeper>`.
+4. Ensure `submit()` remains **non-suspending** (wrap check in `runBlocking` or keep gatekeepers fast).
 
-## **3\. Proposed Architecture: SyncController**
+---
+## 2️⃣ PR-2  – WorkScore Metric
 
-The new architecture will be centered around a SyncController singleton. Key characteristics include:
+| File | Change | Blast-Radius | Risk |
+|------|--------|-------------|------|
+| `core-data/src/main/java/net/melisma/core_data/model/SyncJob.kt` | Add property `open val workScore: Int` to sealed class root.  Provide defaults in each subclass (e.g. DownloadBody = 2, Attachment = size/1 MB, Header = 1, FolderList = 3). | All job callers compile-error until updated. | Medium – keep serialisation constructors.
+| `SyncController.kt` | Add private `_totalWorkScore` `MutableStateFlow<Int>` updated on `submit` (+ score) and after job finishes (– score).  Expose `totalWorkScore` as `asStateFlow()`. | High | Off-by-one on errors; ensure decrement in `finally` even on exception.
+| Unit tests folder (NEW) | Add `SyncJobWorkScoreTest.kt`. | None | Build config for JUnit.
 
-*   **Centralized Control** via a PriorityBlockingQueue of SyncJobs.  
-*   **Observable State** via a StateFlow for UI feedback.  
-*   **Unified Sync Logic**, consolidating all previous worker logic.  
-*   **Database-Driven Paging**, removing the RemoteMediator.  
-*   **Many-to-Many Schema** for Gmail compatibility.  
-*   **Stateful Background Sync** using a FolderSyncStateEntity to persist progress.
+#### Steps
+1. Update `SyncJob` root class signature.  
+2. Touch every data class line – IntelliJ quick-fix.  
+3. Update queue logic in `SyncController.run()` to subtract `job.workScore` in `finally`.
 
-## **4\. Detailed Migration Plan**
+---
+## 3️⃣ PR-3  – Foreground-Service Heuristics
 
-### **Phase 1: Foundation \- SyncController and Database Schema**
+| File | Change | Blast-Radius | Risk |
+|------|--------|-------------|------|
+| `InitialSyncForegroundService.kt` | Replace usage of `status.isSyncing` with `syncController.totalWorkScore` (> `WORK_THRESHOLD` = 10). | Medium – UI string only. | Service may flicker → add hysteresis of 5 seconds same as today.
+| `SyncController.kt` | Derive `isSyncing = totalWorkScore.value > 0` for backwards compatibility. | Medium | None.
 
-1.  **[DONE - ✅]** **Define SyncJob and SyncStatus:**  
-    *   **Action**: Create the SyncJob sealed class and the SyncStatus data class.
-2.  **[DONE - ✅]** **Create SyncController Stub:**  
-    *   **Action**: Create the SyncController singleton with its priority queue, CoroutineScope, and StateFlow.
-3.  **[DONE - ✅]** **Database Migration:**  
-    *   **Action**: This will be a **complete "nuke and pave" destructive migration.** The existing schema and all local data will be deleted.  
-    *   **Action**: Implement a new Room Migration to:  
-        1.  Create the MessageFolderJunction table.  
-        2.  Create the FolderSyncStateEntity table (columns: folderId, nextPageToken).  
-        3.  Update the MessageEntity table (remove folderId).  
-4.  **[DONE - ✅]** **Update Backup Configuration:**  
-    *   **Action**: Modify backup\_rules.xml to exclude the database and the attachments/ directory inside no_backup.
-    *   **Status:** Completed on 2025-06-26 – backup_rules.xml now excludes `no_backup/attachments/` and SyncController writes downloaded attachments there.
-5.  **[DONE - ✅]** **Integrate User Preferences:**
-    *   **Action**: Inject `UserPreferencesRepository` into the `SyncController`.
-    *   **Action**: During initial sync, the controller will read the `initialSyncDurationDays` preference and pass a calculated date filter to the backend services to limit the scope of the sync.
-    *   **Status:** Completed on 2025-06-30 – SyncController now applies the earliest‐timestamp filter for the first page of every folder sync.
+#### Steps
+1. Add companion `WORK_THRESHOLD` = 10.  
+2. Subscribe to `totalWorkScore` instead of `status.isSyncing`.
 
-### **Phase 2: Core Logic Migration \- Replacing SyncEngine**
+---
+## 4️⃣ PR-4  – Back-fill & Eviction Alignment
 
-1.  **[DONE - ✅]** **Update DI:**  
-    *   **Action**: Change the Hilt module to provide the SyncController singleton instead of SyncEngine.
-2.  **[DONE - ✅]** **Refactor Repositories & ViewModels:**  
-    *   **Action**: Replace all SyncEngine injections with SyncController. Update all calls to submit the appropriate SyncJob instead of calling engine methods.
+| File | Change | Blast-Radius | Risk |
+|------|--------|-------------|------|
+| `BackfillJobProducer.kt` | Before queuing headers, call `gatekeeperCachePressure.isAllowed(job)`; skip if false. | Low | None.
+| `CacheEvictionProducer.kt` | Change soft threshold to **98 %** for hard eviction trigger, keep 90 % as soft gate. | Low | Wrong constant.
+| `SyncController.runCacheEviction()` | Modify selection predicate to `sentDate < now-90d AND (lastAccess == null || lastAccess < now-24h)`. | Medium | SQL perf – add new index on `lastAccessedTimestamp` (already exists).
 
-### **Phase 3: Paging and Worker Replacement**
+---
+## 5️⃣ PR-5  – UI & Compatibility Clean-up
 
-1.  **[DONE - ✅]** **Remove Remote Mediator:**  
-    *   **Action**: Delete MessageRemoteMediator.kt and RemoteKeyEntity.kt.
-    *   **Status**: Completed on 2025-06-18 (see SYNCLOG).
-2.  **[DONE - ✅]** **Simplify Paging in Repository:**  
-    *   **Action**: Modify the Pager factory to use a DB-only PagingSource.  
-    *   **Note on UX Risk & Mitigation**: The removal of on-demand paging presents a risk. This is mitigated by the **Level 1 "Predictive Scrolling" job**, which ensures the SyncController will prioritize fetching the next page for the user's active folder above all background work.  
-    *   **(Update 2025-07-01: Online search pipeline implemented – `SearchOnline` no longer a stub.)**
-3.  **[DONE - ✅]** **Consolidate Worker Logic into SyncController:**
-    *   **Action**: Port the logic from all ...Worker.kt files into private methods within SyncController and then delete the worker files.
-    *   **Status**: Completed between 2025-06-21 and 2025-06-23 (see SYNCLOG).
+| File | Change | Blast-Radius | Risk |
+|------|--------|-------------|------|
+| `mail/.../MessageDetailViewModel.kt` & others | Still rely on `isSyncing`. No change needed, flag now derived. | Low | None.
+| Documentation | Update `ARCHITECTURE.md` diagram once Gatekeepers & WorkScore merged. | None | Docs only.
 
-### **Phase 4: Lifecycle and Finalization**
+---
+## 🛠️ General Risks & Mitigations
+1. **Deadlocks** – gatekeeper check inside `submit()` must be quick; use non-blocking caches or snapshot sizes.
+2. **WorkScore drift** – ensure decrement happens even if job throws; add unit test.
+3. **Foreground Service flaps** – add hysteresis (≥ 5 s below threshold before stop).
+4. **Schema migrations** – Changing eviction predicate needs no DB schema change, but if you later add new columns ensure `AppDatabase.migrations` updated.
+5. **Junior dev confusion** – Keep each PR < 400 loc; write comments in new interfaces; run `./gradlew test` locally.
 
-1.  **[DONE - ✅]** **Implement Polling Lifecycle:**  
-    *   **Action:** Implement the 5-second foreground polling timer that queues low-priority freshness jobs.
-    *   **Action:** Implement the periodic (~15 minute) background polling mechanism.
-    *   **Status:** Completed on 2025-06-19 and 2025-06-23. The `PassivePollingWorker` was fully absorbed into the `SyncController`'s internal coroutine loop, removing the `WorkManager` dependency entirely.
-2.  **[DONE - ✅]** **Implement Foreground Service:**  
-    *   **Action**: Implement the Foreground Service to be managed by the SyncController during a new account's initial sync.
-    *   **Status**: Completed on 2025-07-02 with `InitialSyncForegroundService`.
-3.  **[DONE - ✅]** **Final Cleanup:**  
-    *   **Action**: Search the codebase for any remaining references to SyncEngine, RemoteMediator, and old Worker classes, and remove them.
-    *   **Status**: Completed as part of worker consolidation and SyncEngine retirement (see SYNCLOG 2025-06-21).
-4.  **[DONE - ✅]** **New Progress (Cache eviction & mutex):**
-    *   **Action**: Implement the Cache eviction job wiring and per-account mutex.
-    *   **Status**: Completed. Mutex on 2025-06-20, Cache Eviction on 2025-06-25 (see SYNCLOG).
-5.  **[DONE - ✅]** **Message/Attachment Download Internalised & Workers Deleted:**
-    *   **Action**: See SYNCLOG 2025-06-22.
-6.  **[DONE - ✅]** **Phase-4 B** (Worker consolidation) **completed** – internalised folder/message/attachment handlers, WorkManager stripped (SYNCLOG 2025-06-23).
-7.  **[DONE - ✅]** **Phase-4 C** (Per-account mutex & polling) **completed** – concurrency guard, active/passive polling in-place (see SYNCLOG 2025-06-19 & 23).
-8.  **[DONE - ✅]** **Phase-4 D** (PendingAction upload pipeline) **completed** – SyncController now processes PendingAction queue (SYNCLOG 2025-06-24).
-9.  **[DONE - ✅]** **Phase-4 E** (Cache eviction algorithm) **completed** – full `runCacheEviction()` implementation integrated into SyncController and passive polling queues EvictFromCache jobs (SYNCLOG 2025-06-25).
-10. **[DONE - ✅]** **Phase-4 F** (Sync State Observation) **completed** – `SyncController.status` exposed to UI, status bar implemented (SYNCLOG 2025-06-27).
-
-## **5\. Core Implementation Guarantees**
-
-1.  **[DONE - ✅]** **Algorithm Adherence:** The implementation **must** strictly follow the defined priority algorithm.
-2.  **[DONE - ✅]** **Transaction Safety:** Each logical unit of work **must** be wrapped in a single database transaction.
-
-> • **New Progress – 2025-06-14** (Retained for historical context)
-> • *Phase-1-C* (Data Module green build) **completed** – workers + repository compile, full project builds.  
-> • *Phase-1-D* (Retire SyncEngine) **completed** – all repositories & ViewModels now use SyncController.  
-> • *Phase-1-E2* (Schema & Pref Wiring) **completed** – junction/state DAOs added, backup rules updated, SyncController observes initialSyncDuration.  
-> • *Phase-1-F* (FolderId removal) **completed** – see SYNCLOG 2025-06-17.  
-> • *Phase-3-A* (Remove RemoteMediator & DB-only paging) **completed** – MessageRemoteMediator removed from repository, self-perpetuating SyncController pagination implemented. Build green.
-> • *Phase-A (Toolchain Upgrade)* **completed** – Kotlin 2.1.21, KSP 2.1.21-2.0.2, Compose BOM 2025.06.00 integrated (SYNCLOG 2025-06-20).
+---
+## ✅ Definition of Done
+- All existing UI flows compile and behave unchanged.
+- New unit tests in PR-2 pass.
+- Foreground service starts only when `totalWorkScore ≥ 10` for >2 ticks and stops after 5 idle ticks.
+- Back-fill pauses automatically when cache ≥ 90 % of limit.
+- Cache eviction only runs when usage ≥ 98 % or at 24-h cadence. 

@@ -52,6 +52,8 @@ import net.melisma.core_data.repository.ThreadRepository
 import net.melisma.data.repository.DefaultAccountRepository
 import net.melisma.domain.actions.SyncFolderUseCase
 import net.melisma.domain.account.SignOutAllMicrosoftAccountsUseCase
+import net.melisma.core_data.repository.GenericSignOutAllResult
+import net.melisma.data.sync.SyncController
 import timber.log.Timber
 import javax.inject.Inject
 
@@ -116,7 +118,8 @@ class MainViewModel @Inject constructor(
     private val threadRepository: ThreadRepository,
     private val userPreferencesRepository: UserPreferencesRepository,
     private val syncFolderUseCase: SyncFolderUseCase,
-    private val signOutAllMicrosoftAccountsUseCase: SignOutAllMicrosoftAccountsUseCase
+    private val signOutAllMicrosoftAccountsUseCase: SignOutAllMicrosoftAccountsUseCase,
+    private val syncController: SyncController
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(MainScreenState())
     val uiState: StateFlow<MainScreenState> = _uiState.asStateFlow()
@@ -593,6 +596,27 @@ class MainViewModel @Inject constructor(
                     }
                 }
             }
+
+            // Cancel previous folder's pager job if any
+            currentFolderMessagesJob?.cancel()
+
+            // Update the pager flow for the new folder
+            _messagesPagerFlow.value = messageRepository.getMessagesPager(
+                accountId = account.id,
+                folderId = folder.id,
+                // Define a PagingConfig - this should probably be a constant or configurable
+                pagingConfig = PagingConfig(pageSize = 20, enablePlaceholders = false)
+            ).cachedIn(viewModelScope) // cachedIn is important for surviving config changes
+
+            // Kick off a background sync if this folder looks empty or has never been synced.
+            viewModelScope.launch {
+                Timber.i("selectFolder: Triggering syncMessagesForFolder for account ${account.emailAddress}, folder ${folder.displayName}")
+                try {
+                    messageRepository.syncMessagesForFolder(account.id, folder.id, null)
+                } catch (e: Exception) {
+                    Timber.e(e, "selectFolder: Failed to queue syncMessagesForFolder job")
+                }
+            }
         } else {
             Timber.d("selectFolder: SAME folder and account selected ($newAccountId/$newFolderId). No change to Pager. Any explicit refresh should be handled by UI (e.g. pull-to-refresh).")
             // If the same folder is selected, the Pager instance is the same.
@@ -949,6 +973,16 @@ class MainViewModel @Inject constructor(
                 threadRepository.setTargetFolderForThreads(account, folder, null)
             }
         }
+
+        // Kick off a background sync if this folder looks empty or has never been synced.
+        viewModelScope.launch {
+            Timber.i("selectFolder: Triggering syncMessagesForFolder for account ${account.emailAddress}, folder ${folder.displayName}")
+            try {
+                messageRepository.syncMessagesForFolder(account.id, folder.id, null)
+            } catch (e: Exception) {
+                Timber.e(e, "selectFolder: Failed to queue syncMessagesForFolder job")
+            }
+        }
     }
 
     fun refreshMessages() {
@@ -1111,6 +1145,20 @@ class MainViewModel @Inject constructor(
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * Submit a FullAccountBootstrap job for every currently configured account.
+     * Useful from the Debug section to re-sync everything on demand.
+     */
+    fun forceFullSyncAllAccounts() {
+        viewModelScope.launch {
+            val accounts = _uiState.value.accounts
+            accounts.forEach { acc ->
+                syncController.submit(net.melisma.core_data.model.SyncJob.FullAccountBootstrap(acc.id))
+            }
+            tryEmitToastMessage("Queued full re-sync for ${accounts.size} account(s)")
         }
     }
 }

@@ -67,5 +67,6 @@ data class MessageEntity(
     // lastSyncError is already present above
     var isLocalOnly: Boolean = false,
     var needsFullSync: Boolean = false,
-    var lastAccessedTimestamp: Long? = null // Added for cache eviction policy
+    var lastAccessedTimestamp: Long? = null,
+    var hasFullBodyCached: Boolean = false // New: explicit flag for body cache status
 ) 

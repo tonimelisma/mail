@@ -19,8 +19,9 @@ class CachePressureGatekeeper @Inject constructor(
     private val CACHE_PRESSURE_THRESHOLD = 0.90f
 
     override suspend fun isAllowed(job: SyncJob): Boolean {
-        // Only apply this gate to proactive, non-user-initiated downloads
-        if (!isProactiveDownload(job)) return true
+        // This gate only applies to proactive, non-user-initiated downloads.
+        // The SyncJob itself now carries a flag to identify these jobs.
+        if (!job.isProactiveDownload) return true
 
         val prefs = userPrefs.userPreferencesFlow.first()
         val hardLimitBytes = prefs.cacheSizeLimitBytes
@@ -36,14 +37,5 @@ class CachePressureGatekeeper @Inject constructor(
                     "Usage: ${totalUsageBytes / 1024 / 1024}MB / ${hardLimitBytes / 1024 / 1024}MB")
         }
         return isAllowed
-    }
-
-    private fun isProactiveDownload(job: SyncJob): Boolean {
-        return when (job) {
-            // These jobs are for filling history and are not directly requested by the user viewing a message.
-            is SyncJob.FetchMessageHeaders -> true
-            // Potentially add other opportunistic jobs here in the future
-            else -> false
-        }
     }
 } 
