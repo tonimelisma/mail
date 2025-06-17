@@ -26,8 +26,9 @@ class BulkDownloadJobProducer @Inject constructor(
 
     override suspend fun produce(): List<SyncJob> = withContext(Dispatchers.IO) {
         val networkStatus = networkMonitor.isOnline.first()
-        if (!networkStatus || networkMonitor.isMetered()) {
-            Timber.d("Skipping BulkDownloadJobProducer due to network state (Online: $networkStatus, Metered: ${networkMonitor.isMetered()})")
+        val unmetered = networkMonitor.isWifiConnected.first()
+        if (!networkStatus || !unmetered) {
+            Timber.d("Skipping BulkDownloadJobProducer due to network state (Online: $networkStatus, Unmetered: $unmetered)")
             return@withContext emptyList()
         }
 

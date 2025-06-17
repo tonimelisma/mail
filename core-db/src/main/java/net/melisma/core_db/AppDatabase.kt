@@ -3,7 +3,6 @@ package net.melisma.core_db
 import androidx.room.Database
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
-import androidx.room.AutoMigration
 import net.melisma.core_db.converter.StringListConverter
 import net.melisma.core_db.converter.WellKnownFolderTypeConverter
 import net.melisma.core_db.converter.PayloadConverter
@@ -39,11 +38,8 @@ import net.melisma.core_db.migration.M18_M19
         MessageFolderJunction::class,
         FolderSyncStateEntity::class
     ],
-    version = 22,
-    exportSchema = true,
-    autoMigrations = [
-        AutoMigration(from = 20, to = 21)
-    ]
+    version = 23,
+    exportSchema = true
 )
 @TypeConverters(
     WellKnownFolderTypeConverter::class, 
@@ -77,6 +73,11 @@ abstract class AppDatabase : RoomDatabase() {
                 db.execSQL("CREATE TABLE folder_sync_state (folderId TEXT NOT NULL, nextPageToken TEXT, lastSyncedTimestamp INTEGER, deltaToken TEXT, historyId TEXT, continuousHistoryToTimestamp INTEGER, PRIMARY KEY(folderId))")
                 db.execSQL("INSERT INTO folder_sync_state (folderId, nextPageToken, lastSyncedTimestamp, deltaToken, historyId) SELECT folderId, nextPageToken, lastSyncedTimestamp, deltaToken, historyId FROM folder_sync_state_old")
                 db.execSQL("DROP TABLE folder_sync_state_old")
+            }
+        }
+        val M22_23 = object : androidx.room.migration.Migration(22, 23) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN hasFullBodyCached INTEGER NOT NULL DEFAULT 0")
             }
         }
     }

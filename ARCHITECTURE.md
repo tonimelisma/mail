@@ -102,3 +102,7 @@ graph TD
 5.  If `hasChangesSince` returns `false`, nothing else happens.
 6.  If it returns `true`, the `SyncController` queues a `SyncJob.SyncFolderList` to get the full list of changes, ensuring the local state is brought back in sync with the server.
 7.  The data flow then proceeds as in the "Refreshing the Inbox" example.
+
+## Recent Maintenance
+
+* **2025-09-15 – Build Hardening:** Removed Room **auto-migrations** from `AppDatabase` because they erroneously attempted to generate 21→23 migrations resulting in KSP failures ("new NOT NULL column 'hasFullBodyCached' added with no default value"). The project now relies solely on **explicit `Migration` objects** registered in `DatabaseModule` together with `fallbackToDestructiveMigration()` during rapid schema iteration.

@@ -6,7 +6,7 @@
 
 **EPIC 0: ARCHITECTURAL REFACTOR & BUILD FIX** (Highest Priority - BLOCKER)
 
-*   **Requirement 0.0 (Resolve KSP Build Blocker):** 🟢 **Completed** - The application builds successfully. Auto-migrations were disabled in favor of destructive migrations to resolve KSP `MissingType` errors during heavy development.
+*   **Requirement 0.0 (Resolve KSP Build Blocker):** 🟢 **Completed** - The application builds successfully. Auto-migrations were disabled in favor of explicit `Migration` objects and `fallbackToDestructiveMigration()` to resolve Room/KSP errors (most recently the `hasFullBodyCached` column).
 *   **Requirement 0.1 (Implement SyncController):** 🟢 **Completed** - The `SyncController` is fully implemented as the centralized component for all data synchronization, replacing the old `SyncEngine`.
 *   **Requirement 0.2 (Database Migration to Many-to-Many):** 🟢 **Completed** - The database schema now correctly uses a `MessageFolderJunction` table for a many-to-many relationship. Placeholder folder creation is also implemented.
 *   **Requirement 0.3 (Remove RemoteMediator):** 🟢 **Completed** - The Paging 3 `RemoteMediator` has been removed. Paging is now driven by the local database, which is populated by the `SyncController`'s background sync.

@@ -210,7 +210,7 @@ class DefaultMessageRepository @Inject constructor(
 
     override suspend fun moveMessage(account: Account, messageId: String, newFolderId: String): Result<Unit> = withContext(ioDispatcher) {
         try {
-            val currentFolders = messageFolderJunctionDao.getFoldersForMessage(messageId)
+            val currentFolders = messageFolderJunctionDao.getFolderIdsForMessage(messageId)
             val oldFolderId = currentFolders.firstOrNull() ?: ""
 
             // Remove old label link (if any) and add new label link
