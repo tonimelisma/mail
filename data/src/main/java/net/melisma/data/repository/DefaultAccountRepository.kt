@@ -157,8 +157,9 @@ class DefaultAccountRepository @Inject constructor(
                         activeMicrosoftAccountHolder.setActiveMicrosoftAccountId(it.id)
                     }
                 } else {
+                    // Keep the active account even if it is flagged for re-authentication; we still want to attempt silent token refresh first.
                     val isActiveMicrosoftAccountStillValid = accounts.any {
-                        it.id == currentActiveMicrosoftId && it.providerType == Account.PROVIDER_TYPE_MS && !it.needsReauthentication
+                        it.id == currentActiveMicrosoftId && it.providerType == Account.PROVIDER_TYPE_MS
                     }
                     if (!isActiveMicrosoftAccountStillValid) {
                         Timber.tag(TAG)
