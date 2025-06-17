@@ -76,6 +76,7 @@ class SyncController @Inject constructor(
     companion object {
         private const val BASE_RETRY_DELAY_MS = 10_000L // 10 seconds
         private const val MAX_RETRY_JITTER_MS = 2_000L // 2 seconds
+        private const val WORK_THRESHOLD = 10
     }
 
     init {
@@ -89,6 +90,18 @@ class SyncController @Inject constructor(
         externalScope.launch {
             totalWorkScore.collect { score ->
                 _status.update { it.copy(isSyncing = score > 0) }
+
+                // Centralised foreground-service management
+                if (score >= WORK_THRESHOLD) {
+                    val intent = Intent().apply {
+                        setClassName(appContext, "net.melisma.mail.sync.InitialSyncForegroundService")
+                    }
+                    ContextCompat.startForegroundService(appContext, intent)
+                }
+
+                if (score == 0) {
+                    stopInitialSyncServiceIfIdle()
+                }
             }
         }
 
@@ -402,11 +415,7 @@ class SyncController @Inject constructor(
             val accountDao = appDatabase.accountDao()
             val folderDao = appDatabase.folderDao()
 
-            // Start foreground Initial Sync service if this appears to be the very first sync for the account.
-            val accountEntity = accountDao.getAccountByIdSuspend(job.accountId)
-            if (accountEntity?.lastFolderListSyncTimestamp == null) {
-                maybeStartInitialSyncService()
-            }
+            // Foreground service now triggered centrally by WorkScore; no explicit start here.
 
             val service = mailApiServiceFactory.getService(job.accountId) ?: run {
                 Timber.w("MailApiService not found for account ${job.accountId}")
@@ -458,8 +467,7 @@ class SyncController @Inject constructor(
             }
 
             accountDao.updateFolderListSyncSuccess(job.accountId, System.currentTimeMillis())
-            // If the service is running and sync is now complete, attempt to stop it.
-            stopInitialSyncServiceIfIdle()
+            // Service stop handled centrally when workScore=0.
             accountDao.updateFolderListSyncToken(job.accountId, delta.nextSyncToken)
             Timber.d("Folder list sync completed for ${job.accountId}")
         }
