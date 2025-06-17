@@ -116,12 +116,14 @@ class DefaultAccountRepository @Inject constructor(
 
                 // Sync ActiveGoogleAccountHolder
                 if (activeGoogleAccountHolder.getActiveAccountIdValue() == null) {
-                    accounts.firstOrNull { it.providerType == Account.PROVIDER_TYPE_GOOGLE && !it.needsReauthentication }
-                        ?.let { googleAccount ->
-                            Timber.tag(TAG)
-                                .i("Init: Setting active Google account from DAO: ${googleAccount.emailAddress} (ID: ${googleAccount.id})")
-                            activeGoogleAccountHolder.setActiveAccountId(googleAccount.id)
-                        }
+                    val googleAccount = accounts.firstOrNull { it.providerType == Account.PROVIDER_TYPE_GOOGLE && !it.needsReauthentication }
+                        ?: accounts.firstOrNull { it.providerType == Account.PROVIDER_TYPE_GOOGLE }
+
+                    googleAccount?.let { 
+                        Timber.tag(TAG)
+                            .i("Init: Setting active Google account from DAO: ${it.emailAddress} (ID: ${it.id}) (needsReauth=${it.needsReauthentication})")
+                        activeGoogleAccountHolder.setActiveAccountId(it.id)
+                    }
                 } else {
                     // Verify existing active Google account
                     val currentActiveGoogleId = activeGoogleAccountHolder.getActiveAccountIdValue()
@@ -145,12 +147,15 @@ class DefaultAccountRepository @Inject constructor(
                 val currentActiveMicrosoftId =
                     activeMicrosoftAccountHolder.getActiveMicrosoftAccountIdValue()
                 if (currentActiveMicrosoftId == null) {
-                    accounts.firstOrNull { it.providerType == Account.PROVIDER_TYPE_MS && !it.needsReauthentication }
-                        ?.let { msAccount ->
-                            Timber.tag(TAG)
-                                .i("Init: Setting active Microsoft account from DAO: ${msAccount.emailAddress} (ID: ${msAccount.id})")
-                            activeMicrosoftAccountHolder.setActiveMicrosoftAccountId(msAccount.id)
-                        }
+                    // Prefer an authenticated account, but fall back to the first MS account to allow silent token attempt which may succeed.
+                    val msAccount = accounts.firstOrNull { it.providerType == Account.PROVIDER_TYPE_MS && !it.needsReauthentication }
+                        ?: accounts.firstOrNull { it.providerType == Account.PROVIDER_TYPE_MS }
+
+                    msAccount?.let {
+                        Timber.tag(TAG)
+                            .i("Init: Setting active Microsoft account from DAO: ${it.emailAddress} (ID: ${it.id}) (needsReauth=${it.needsReauthentication})")
+                        activeMicrosoftAccountHolder.setActiveMicrosoftAccountId(it.id)
+                    }
                 } else {
                     val isActiveMicrosoftAccountStillValid = accounts.any {
                         it.id == currentActiveMicrosoftId && it.providerType == Account.PROVIDER_TYPE_MS && !it.needsReauthentication
