@@ -194,12 +194,6 @@ class MicrosoftKtorTokenProvider @Inject constructor(
                         .w("Unexpected MSAL result ($acquireTokenResult) during token $operationType for ${msalAccount.username}")
                     throw TokenProviderException("Unexpected or non-successful MSAL result: $acquireTokenResult")
                 }
-
-                else -> {
-                    Timber.tag(TAG)
-                        .e("Unhandled MSAL acquireTokenSilent result: $acquireTokenResult")
-                    throw TokenProviderException("Unhandled MSAL acquireTokenSilent result: ${acquireTokenResult::class.java.simpleName}")
-                }
             }
         } catch (e: MsalUiRequiredException) { // Catch direct MsalUiRequiredException if not wrapped by our sealed class
             Timber.tag(TAG)

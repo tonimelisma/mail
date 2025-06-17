@@ -188,11 +188,7 @@ class SyncController @Inject constructor(
                     is SyncJob.BulkFetchBodies -> handleBulkFetchBodies(job)
                     is SyncJob.BulkFetchAttachments -> handleBulkFetchAttachments(job)
 
-                    // Handle legacy/deprecated jobs
-                    is SyncJob.FetchMessageHeaders -> handleFetchMessageHeaders(job.folderId, job.pageToken, job.accountId)
-                    is SyncJob.DownloadMessageBody -> handleDownloadMessageBody(SyncJob.FetchFullMessageBody(job.messageId, job.accountId))
-                    is SyncJob.RefreshFolderContents -> handleForceRefreshFolder(SyncJob.ForceRefreshFolder(job.folderId, job.accountId))
-                    is SyncJob.FetchNextMessageListPage -> handleFetchNextPage(job)
+                    // Unsupported legacy job types: just log.
 
                     else -> Timber.d("Ignoring unknown job type ${job::class.simpleName}")
                 }

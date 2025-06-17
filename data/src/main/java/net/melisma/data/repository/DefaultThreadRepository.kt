@@ -235,10 +235,10 @@ class DefaultThreadRepository @Inject constructor(
     override suspend fun moveThread(
         account: Account,
         threadId: String,
-        newFolderId: String,
-        currentFolderId: String
+        currentFolderId: String,
+        destinationFolderId: String
     ): Result<Unit> {
-        Timber.d("moveThread: threadId=$threadId, newFolderId=$newFolderId, account=${account.id}")
+        Timber.d("moveThread: threadId=$threadId, destinationFolderId=$destinationFolderId, account=${account.id}")
         return try {
             appDatabase.withTransaction {
                 val messageIds = messageDao.getMessageIdsByThreadId(threadId)
@@ -246,13 +246,13 @@ class DefaultThreadRepository @Inject constructor(
                     if (currentFolderId.isNotBlank()) {
                         messageFolderJunctionDao.removeLabel(mid, currentFolderId)
                     }
-                    messageFolderJunctionDao.addLabel(mid, newFolderId)
+                    messageFolderJunctionDao.addLabel(mid, destinationFolderId)
                 }
-                Timber.i("$TAG: Optimistically moved ${messageIds.size} messages in thread $threadId to folder $newFolderId")
+                Timber.i("$TAG: Optimistically moved ${messageIds.size} messages in thread $threadId to folder $destinationFolderId")
             }
 
             val payload = mapOf(
-                SyncConstants.KEY_NEW_FOLDER_ID to newFolderId,
+                SyncConstants.KEY_NEW_FOLDER_ID to destinationFolderId,
                 SyncConstants.KEY_OLD_FOLDER_ID to currentFolderId
             )
             queuePendingAction(account.id, threadId, SyncConstants.ACTION_MOVE_THREAD, payload)

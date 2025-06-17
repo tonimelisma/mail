@@ -1005,7 +1005,7 @@ class GraphApiHelper @Inject constructor(
             val requestUrl = syncToken ?: buildString {
                 append("$MS_GRAPH_ROOT_ENDPOINT/me/mailFolders/$folderRemoteId/messages/delta")
                 append("?\$select=$MESSAGE_DEFAULT_SELECT_FIELDS") // Use constant for select fields
-                if (earliestTimestampEpochMillis != null && syncToken == null) { // Filter only for initial sync
+                if (earliestTimestampEpochMillis != null) { // Filter only for initial sync
                     val isoDate = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US).apply {
                         timeZone = TimeZone.getTimeZone("UTC")
                     }.format(Date(earliestTimestampEpochMillis))
@@ -1097,6 +1097,7 @@ class GraphApiHelper @Inject constructor(
         } catch (e: Exception) { Result.failure(ApiServiceException(errorMapper.mapExceptionToErrorDetails(e))) }
     }
 
+    @Suppress("SENSELESS_COMPARISON")
     override suspend fun sendMessage(draft: MessageDraft): Result<String> = withContext(ioDispatcher) {
         Timber.d("GraphApiHelper: sendMessage. Subject: ${draft.subject}, Attachments: ${draft.attachments.size}")
         val accountId = credentialStore.getActiveAccountId() // Checked by caller (ActionUploadWorker)
@@ -1114,13 +1115,9 @@ class GraphApiHelper @Inject constructor(
                     return@forEach
                 }
                 val fileSize = getFileSizeBytes(att.localUri!!)
-                 if (fileSize == 0L && att.size > 0L) {
-                     Timber.w("Send: Attachment ${att.fileName} URI invalid or size 0 via URI, but draft has size ${att.size}. Skipping.")
+                 if (fileSize <= 0L) {
+                     Timber.w("Send: Attachment ${att.fileName} reports size 0 (possibly invalid URI). Skipping.")
                      return@forEach
-                 }
-                 if (fileSize == 0L) {
-                    Timber.w("Send: Attachment ${att.fileName} has size 0 or URI is invalid: ${att.localUri}. Skipping.")
-                    return@forEach
                  }
 
                 if (fileSize < LARGE_ATTACHMENT_THRESHOLD_BYTES) {
@@ -1182,7 +1179,7 @@ class GraphApiHelper @Inject constructor(
             for (largeAtt in largeAttachmentsToUpload) {
                 if (largeAtt.localUri.isNullOrBlank()) continue 
                 val fileSize = getFileSizeBytes(largeAtt.localUri!!) 
-                 if (fileSize == 0L) continue
+                 if (fileSize <= 0L) continue
 
 
                 Timber.d("Processing large attachment for send: ${largeAtt.fileName}, size: $fileSize, URI: ${largeAtt.localUri}")
@@ -1259,7 +1256,7 @@ class GraphApiHelper @Inject constructor(
                     return@forEach
                 }
                 val fileSize = getFileSizeBytes(att.localUri!!)
-                if (fileSize == 0L) {
+                if (fileSize <= 0L) {
                     Timber.w("CreateDraft: Attachment ${att.fileName} has size 0 or URI is invalid. Skipping.")
                     return@forEach
                 }
@@ -1322,7 +1319,7 @@ class GraphApiHelper @Inject constructor(
             for (largeAtt in largeAttachmentsToUpload) {
                 if (largeAtt.localUri.isNullOrBlank()) continue
                 val fileSize = getFileSizeBytes(largeAtt.localUri!!)
-                if (fileSize == 0L) continue
+                if (fileSize <= 0L) continue
 
                 Timber.d("CreateDraft: Processing large attachment: ${largeAtt.fileName}, size: $fileSize, URI: ${largeAtt.localUri} for draft $createdDraftMessageId")
                 val correlatedNameForLargeAtt = createCorrelatedName(largeAtt.fileName, largeAtt.id)
@@ -1482,7 +1479,7 @@ class GraphApiHelper @Inject constructor(
                         return@forEach
                     }
                     val fileSize = getFileSizeBytes(localAtt.localUri!!)
-                    if (fileSize == 0L) {
+                    if (fileSize <= 0L) {
                         Timber.w("UpdateDraft: New attachment ${localAtt.fileName} has size 0 or URI is invalid. Skipping.")
                         return@forEach
                     }
@@ -1561,7 +1558,7 @@ class GraphApiHelper @Inject constructor(
             for (largeAtt in largeAttachmentsToUpload) { // These are identified as new
                 if (largeAtt.localUri.isNullOrBlank()) continue
                 val fileSize = getFileSizeBytes(largeAtt.localUri!!)
-                if (fileSize == 0L) continue
+                if (fileSize <= 0L) continue
 
                 Timber.d("UpdateDraft: Processing new large attachment: ${largeAtt.fileName}, size: $fileSize for draft $messageId")
                 val correlatedNameForLargeAtt = createCorrelatedName(largeAtt.fileName, largeAtt.id)

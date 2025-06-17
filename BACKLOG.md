@@ -19,6 +19,7 @@
 *   **Requirement 0.9 (Central AuthEventBus):** 🟢 **Completed** (2025-10-XX) – Introduced `AuthEventBus` and removed unused `AuthState` sealed class. Silent token successes now automatically clear `needsReauthentication` via event collection in `DefaultAccountRepository`, eliminating stale "Needs re-auth" banners.
 *   **Requirement 0.10 (Foreground Service Escalation Fix):** 🟢 **Completed** (2025-06-17) – Reduced work-score threshold and proactive service start ensure heavy sync continues when the app is backgrounded.
 *   **Requirement 0.11 (Connectivity Throttle Detection):** 🟢 **Completed** (2025-06-17) – Introduced `ConnectivityHealthTracker` with NORMAL/DEGRADED/BLOCKED states, hooked into SyncController and BulkDownload producer to avoid futile retries during provider/DNS outages.
+*   **Requirement 0.12 (Deprecated API & Warning Clean-up):** 🟢 **Completed** (2025-10-20) – Replaced deprecated Room API, removed `GlobalScope`, pruned legacy `SyncJob` handling branches, resolved Kotlin compiler warnings, and augmented critical paths with additional Timber debug logging.
 
 **EPIC 1: Core Mail Viewing** (Highest Priority)
 

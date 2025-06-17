@@ -13,7 +13,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.Dispatchers
 import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -73,9 +75,11 @@ class AndroidNetworkMonitor @Inject constructor(
         awaitClose { connectivityManager.unregisterNetworkCallback(networkCallback) }
     }.conflate()
 
+    private val monitorScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
     // Expose as hot StateFlow to prevent re-registering the network callback for every consumer/`first()` call
     override val isOnline: Flow<Boolean> = onlineUpdates.stateIn(
-        scope = kotlinx.coroutines.GlobalScope, // This singleton monitor lives for the app lifetime
+        scope = monitorScope,
         started = SharingStarted.Eagerly,
         initialValue = false
     )
@@ -127,7 +131,7 @@ class AndroidNetworkMonitor @Inject constructor(
     }.conflate()
 
     override val isWifiConnected: Flow<Boolean> = wifiUpdates.stateIn(
-        scope = kotlinx.coroutines.GlobalScope,
+        scope = monitorScope,
         started = SharingStarted.Eagerly,
         initialValue = false
     )

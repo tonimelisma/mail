@@ -110,6 +110,7 @@ graph TD
 * **2025-09-17 – MS Graph Delta Compliance:** Replaced unsupported `/me/messages/delta` change-tracking with folder-level `/me/mailFolders/delta`. This fixes 400 *Unsupported request: Change tracking is not supported against 'microsoft.graph.message'* errors during account polling.
 * **2025-06-17 – Foreground-Service Escalation:** Lowered the SyncController *work-score* threshold from 10 → 5 and added a proactive start from `SyncLifecycleObserver.onStop()`. A single opportunistic `BulkFetchBodies` job now spins up `InitialSyncForegroundService` when the app backgrounds, preventing OS background-network throttling during large backfills.
 * **2025-06-17 – ConnectivityHealthTracker:** Added a singleton that tracks repeated `UnknownHostException` / time-out failures across the app and emits NORMAL/DEGRADED/BLOCKED throttle states. Producers and SyncController now consult it to pause heavy sync and prevent OS throttling cascades.
+* **2025-10-20 – API & Build Clean-up:** Migrated all deprecated APIs (Room destructive-migration overload, `GlobalScope`, legacy `SyncJob`s) and fixed the remaining Kotlin compiler warnings. `GraphApiHelper` comparison logic was tightened and `MicrosoftKtorTokenProvider`'s exhaustive `when` expression simplified. Added targeted `Timber` debug logging to `SyncController`, `AndroidNetworkMonitor`, and the Microsoft Graph send-path for better observability during uploads.
 
 ## Authentication Architecture (2025-10-XX)
 

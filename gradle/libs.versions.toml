@@ -1,9 +1,11 @@
 # File: gradle/libs.versions.toml
 
 [versions]
-agp = "8.10.1" # Assuming this is your AGP version, adjust if different
+agp = "8.10.1"
 kotlin = "2.1.21"
 kotlinxSerialization = "1.8.1"
+firebaseBomVersion = "33.1.2"
+google-services-plugin = "4.4.2"
 ktor = "3.2.0"
 coreKtx = "1.16.0"
 junit = "4.13.2"
@@ -13,43 +15,50 @@ lifecycle = "2.9.1"
 activityCompose = "1.10.1"
 composeBom = "2025.06.00"
 composeMaterial = "1.8.2"
-materialViews = "1.12.0" # Added for traditional views Material Components
+materialViews = "1.12.0"
 
 msal = "6.0.1"
-hilt = "2.56.2" # Check for latest Hilt version
-coroutines = "1.10.2" # Updated to a more recent version of coroutines, e.g., 1.8.1
-room = "2.7.1" # Added Room version
+hilt = "2.56.2"
+coroutines = "1.10.2"
+room = "2.7.1"
 robolectric = "4.14.1"
 
-mockk = "1.14.2" # Check for latest
-turbine = "1.2.1" # Check for latest
+mockk = "1.14.2"
+turbine = "1.2.1"
 
 # Google Play Services
-activityKtx = "1.10.1" # Check for latest
+activityKtx = "1.10.1"
 
 googleIdLibrary = "1.1.1"
 
-kotlinxCoroutinesPlayServices = "1.10.2" # Added for Task.await() - match your main coroutines version
+kotlinxCoroutinesPlayServices = "1.10.2"
 
 # AppAuth for Android
-appAuth = "0.11.1" # Latest stable version as of May 2025
-appcompatViews = "1.7.1" # Added for traditional views
+appAuth = "0.11.1"
+appcompatViews = "1.7.1"
 # Browser for CustomTabs support
-browserCustomTabs = "1.8.0" # Latest stable version as of May 2025
+browserCustomTabs = "1.8.0"
 
 ksp = "2.1.21-2.0.2"
-datastorePreferences = "1.1.7" # <-- ADDED DATASTORE VERSION
-timber = "5.0.1" # Added Timber version
-navigationCompose = "2.9.0" # Added Navigation Compose version
-hiltNavigationCompose = "1.2.0" # Added Hilt Navigation Compose version
+datastorePreferences = "1.1.7"
+timber = "5.0.1"
+navigationCompose = "2.9.0"
+hiltNavigationCompose = "1.2.0"
 paging = "3.3.6"
+
+# WorkManager
+
+# Firebase
+firebaseBom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBomVersion" }
+firebaseAnalytics = { group = "com.google.firebase", name = "firebase-analytics-ktx" }
+firebaseMessaging = { group = "com.google.firebase", name = "firebase-messaging-ktx" }
 
 [libraries]
 kotlin-stdlib = { group = "org.jetbrains.kotlin", name = "kotlin-stdlib", version.ref = "kotlin" }
 kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }
-kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" } # Added Android variant for coroutines
+kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
-kotlinx-coroutines-play-services = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-play-services", version.ref = "kotlinxCoroutinesPlayServices" } # Added
+kotlinx-coroutines-play-services = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-play-services", version.ref = "kotlinxCoroutinesPlayServices" }
 
 # --- Kotlinx Serialization ---
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
@@ -72,10 +81,11 @@ appauth = { group = "net.openid", name = "appauth", version.ref = "appAuth" }
 androidx-browser = { group = "androidx.browser", name = "browser", version.ref = "browserCustomTabs" }
 
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
-androidx-appcompat-views = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompatViews" } # Added for traditional views
+androidx-appcompat-views = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompatViews" }
 androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycle" }
 androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycle" }
 androidx-lifecycle-runtime-compose = { group = "androidx.lifecycle", name = "lifecycle-runtime-compose", version.ref = "lifecycle" }
+androidx-lifecycle-process = { group = "androidx.lifecycle", name = "lifecycle-process", version.ref = "lifecycle" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
 
 androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
@@ -83,11 +93,11 @@ androidx-ui = { group = "androidx.compose.ui", name = "ui" }
 androidx-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
 androidx-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
 androidx-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
-google-android-material-views = { group = "com.google.android.material", name = "material", version.ref = "materialViews" } # Added for traditional views Material Components
+google-android-material-views = { group = "com.google.android.material", name = "material", version.ref = "materialViews" }
 androidx-material = { group = "androidx.compose.material", name = "material", version.ref = "composeMaterial" }
 androidx-material3 = { group = "androidx.compose.material3", name = "material3" }
-androidx-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" } # Removed version.ref, should come from BOM or define version
-androidx-navigation-compose = { group = "androidx.navigation", name = "navigation-compose", version.ref = "navigationCompose" } # Added Navigation Compose library
+androidx-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
+androidx-navigation-compose = { group = "androidx.navigation", name = "navigation-compose", version.ref = "navigationCompose" }
 androidx-hilt-navigation-compose = { group = "androidx.hilt", name = "hilt-navigation-compose", version.ref = "hiltNavigationCompose" }
 
 microsoft-msal = { group = "com.microsoft.identity.client", name = "msal", version.ref = "msal" }
@@ -112,28 +122,26 @@ robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "
 turbine = { group = "app.cash.turbine", name = "turbine", version.ref = "turbine" }
 
 # DataStore Preferences
-androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastorePreferences" } # <-- ADDED DATASTORE LIBRARY
+androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastorePreferences" }
 
-timber = { group = "com.jakewharton.timber", name = "timber", version.ref = "timber" } # Added Timber library alias
+timber = { group = "com.jakewharton.timber", name = "timber", version.ref = "timber" }
 
 # Room
 androidx-room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
 androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
 androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
 androidx-room-testing = { group = "androidx.room", name = "room-testing", version.ref = "room" }
-androidx-room-paging = { group = "androidx.room", name = "room-paging", version.ref = "room" } # Added for Room Paging 3 integration
+androidx-room-paging = { group = "androidx.room", name = "room-paging", version.ref = "room" }
 
 androidx-paging-runtime = { group = "androidx.paging", name = "paging-runtime-ktx", version.ref = "paging" }
-androidx-paging-common = { group = "androidx.paging", name = "paging-common-ktx", version.ref = "paging" } # Added for Room PagingSource support
+androidx-paging-common = { group = "androidx.paging", name = "paging-common-ktx", version.ref = "paging" }
 androidx-paging-compose = { group = "androidx.paging", name = "paging-compose", version.ref = "paging" }
-
-# WorkManager
-androidx-lifecycle-process = { group = "androidx.lifecycle", name = "lifecycle-process", version.ref = "lifecycle" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
+google-services = { id = "com.google.gms.google-services", version.ref = "google-services-plugin" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
-kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" } # This is the new Compose Compiler plugin
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 android-library = { id = "com.android.library", version.ref = "agp" }
 hilt-gradle = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }

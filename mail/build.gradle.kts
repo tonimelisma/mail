@@ -184,8 +184,6 @@ dependencies {
     // Hilt Navigation Compose
     implementation(libs.androidx.hilt.navigation.compose)
 
-    implementation(libs.androidx.lifecycle.process)
-
     // Hilt testing
     androidTestImplementation("com.google.dagger:hilt-android-testing:2.51.1")
     kspAndroidTest("com.google.dagger:hilt-compiler:2.51.1")
@@ -195,4 +193,6 @@ dependencies {
 
     // For coroutines testing
     androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.0")
+
+    implementation(libs.androidx.lifecycle.process)
 }
