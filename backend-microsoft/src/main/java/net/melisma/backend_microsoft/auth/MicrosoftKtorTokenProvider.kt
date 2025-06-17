@@ -61,12 +61,8 @@ class MicrosoftKtorTokenProvider @Inject constructor(
 
         if (msalAccount == null) {
             Timber.tag(TAG)
-                .e("MSAL IAccount still not found for $accountId after waiting.")
-            accountRepository.markAccountForReauthentication(accountId, Account.PROVIDER_TYPE_MS)
-            throw NeedsReauthenticationException(
-                accountIdToReauthenticate = accountId,
-                message = "MSAL IAccount not found for active ID $accountId after initialisation wait. User may need to sign in again."
-            )
+                .e("MSAL IAccount still not found for $accountId after waiting. Will retry later without marking re-auth.")
+            return null // Let caller retry later instead of flagging re-auth prematurely
         }
         Timber.tag(TAG).d("Found MSAL account: ${msalAccount.username}")
         return acquireTokenAndConvertToBearer(msalAccount, isRefreshAttempt = false)
@@ -95,14 +91,9 @@ class MicrosoftKtorTokenProvider @Inject constructor(
         }
 
         if (msalAccount == null) {
-            Timber.tag(TAG).e(
-                "MSAL IAccount still not found for $accountId after wait during refresh."
-            )
-            accountRepository.markAccountForReauthentication(accountId, Account.PROVIDER_TYPE_MS)
-            throw NeedsReauthenticationException(
-                accountIdToReauthenticate = accountId,
-                message = "MSAL account not found for ID $accountId via MicrosoftAuthManager during token refresh after wait."
-            )
+            Timber.tag(TAG)
+                .e("MSAL IAccount still not found for $accountId after wait during refresh. Skipping token refresh without marking re-auth.")
+            return null // Allow retry on next request
         }
 
         return acquireTokenAndConvertToBearer(msalAccount, isRefreshAttempt = true)
