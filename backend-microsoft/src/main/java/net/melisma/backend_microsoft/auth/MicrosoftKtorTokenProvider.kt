@@ -16,6 +16,8 @@ import net.melisma.core_data.repository.AccountRepository
 import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.flow.first
 
 @Singleton
 class MicrosoftKtorTokenProvider @Inject constructor(
@@ -39,21 +41,32 @@ class MicrosoftKtorTokenProvider @Inject constructor(
         }
         Timber.tag(TAG).d("Active Microsoft account ID: $accountId")
 
-        // Use the new getMsalAccount from MicrosoftAuthManager
-        val msalAccount = microsoftAuthManager.getMsalAccount(accountId)
+        var msalAccount = microsoftAuthManager.getMsalAccount(accountId)
+
+        if (msalAccount == null) {
+            // MSAL might still be initialising / loading cache. Wait briefly for it.
+            Timber.tag(TAG)
+                .w("MSAL account not yet loaded for $accountId. Waiting for MSAL initialisation…")
+            try {
+                withTimeoutOrNull(1500) {
+                    microsoftAuthManager.msalAccounts
+                        .first { list -> list.any { it.id == accountId } }
+                }?.let { list ->
+                    msalAccount = list.firstOrNull { it.id == accountId }
+                }
+            } catch (_: Exception) {
+                // ignore and fall through
+            }
+        }
 
         if (msalAccount == null) {
             Timber.tag(TAG)
-                .e("MSAL IAccount not found via MicrosoftAuthManager for active ID: $accountId.")
-            // This could trigger a re-auth needed state more proactively.
-            // For now, returning null will cause API call to fail, which Ktor might retry or bubble up.
-            // Consider throwing a specific exception like AccountNotFoundException or NeedsReauthenticationException.
+                .e("MSAL IAccount still not found for $accountId after waiting.")
             accountRepository.markAccountForReauthentication(accountId, Account.PROVIDER_TYPE_MS)
             throw NeedsReauthenticationException(
                 accountIdToReauthenticate = accountId,
-                message = "MSAL IAccount not found for active ID $accountId via MicrosoftAuthManager. Account may need re-login or is missing from MSAL cache."
+                message = "MSAL IAccount not found for active ID $accountId after initialisation wait. User may need to sign in again."
             )
-            // return null // Old behavior
         }
         Timber.tag(TAG).d("Found MSAL account: ${msalAccount.username}")
         return acquireTokenAndConvertToBearer(msalAccount, isRefreshAttempt = false)
@@ -69,17 +82,26 @@ class MicrosoftKtorTokenProvider @Inject constructor(
         }
         Timber.tag(TAG).d("Attempting to refresh tokens for Microsoft account ID: $accountId")
 
-        // Use the new getMsalAccount from MicrosoftAuthManager
-        val msalAccount = microsoftAuthManager.getMsalAccount(accountId)
+        var msalAccount = microsoftAuthManager.getMsalAccount(accountId)
+
+        if (msalAccount == null) {
+            Timber.tag(TAG)
+                .w("MSAL account not yet loaded for $accountId during refresh. Waiting briefly…")
+            withTimeoutOrNull(1500) {
+                microsoftAuthManager.msalAccounts.first { list -> list.any { it.id == accountId } }
+            }?.let { list ->
+                msalAccount = list.firstOrNull { it.id == accountId }
+            }
+        }
 
         if (msalAccount == null) {
             Timber.tag(TAG).e(
-                "MSAL IAccount not found via MicrosoftAuthManager for active ID: $accountId during refresh."
+                "MSAL IAccount still not found for $accountId after wait during refresh."
             )
             accountRepository.markAccountForReauthentication(accountId, Account.PROVIDER_TYPE_MS)
             throw NeedsReauthenticationException(
                 accountIdToReauthenticate = accountId,
-                message = "MSAL account not found for ID $accountId via MicrosoftAuthManager during token refresh. Account may need re-login or is missing from MSAL cache."
+                message = "MSAL account not found for ID $accountId via MicrosoftAuthManager during token refresh after wait."
             )
         }
 
