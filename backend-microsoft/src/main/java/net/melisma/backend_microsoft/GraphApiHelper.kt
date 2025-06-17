@@ -1704,8 +1704,7 @@ class GraphApiHelper @Inject constructor(
         try {
             val response: HttpResponse = httpClient.get(requestUrl) {
                 accept(ContentType.Application.Json)
-                // We only need a minimal page to detect any change.
-                parameter("\$top", 1)
+                // Folder delta does not allow $top/$filter. Fetch first page without extra params.
             }
 
             if (!response.status.isSuccess()) {
