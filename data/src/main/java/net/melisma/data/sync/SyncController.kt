@@ -47,6 +47,7 @@ class SyncController @Inject constructor(
     @ApplicationScope private val externalScope: CoroutineScope,
     private val queue: PriorityBlockingQueue<SyncJob>,
     private val networkMonitor: NetworkMonitor,
+    private val connectivityHealthTracker: net.melisma.core_data.connectivity.ConnectivityHealthTracker,
     private val userPreferencesRepository: UserPreferencesRepository,
     private val mailApiServiceFactory: MailApiServiceFactory,
     private val appDatabase: net.melisma.core_db.AppDatabase,
@@ -192,10 +193,15 @@ class SyncController @Inject constructor(
                 Timber.e(e, "Error processing job: $job")
                 // Emit detailed device diagnostics on network-related failures.
                 if (e is java.net.UnknownHostException || e is java.net.SocketTimeoutException) {
+                    connectivityHealthTracker.recordFailure()
                     net.melisma.core_data.util.DiagnosticUtils.logDeviceState(appContext, "jobError ${job::class.simpleName}")
                 }
                 _status.update { it.copy(error = e.message) }
             } finally {
+                // Successful completion counts as success for connectivity tracker
+                if (_status.value.error == null) {
+                    connectivityHealthTracker.recordSuccess()
+                }
                 activeAccounts.remove(job.accountId)
                 _totalWorkScore.update { (it - job.workScore).coerceAtLeast(0) }
                 _status.update { it.copy(currentJob = null) }

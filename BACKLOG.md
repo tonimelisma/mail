@@ -18,6 +18,7 @@
 *   **Requirement 0.8 (Polling Lifecycle – Foreground & Background):** 🟢 **Completed** - The app correctly switches between aggressive (5s) foreground delta polling and battery-saving (15min) background polling.
 *   **Requirement 0.9 (Central AuthEventBus):** 🟢 **Completed** (2025-10-XX) – Introduced `AuthEventBus` and removed unused `AuthState` sealed class. Silent token successes now automatically clear `needsReauthentication` via event collection in `DefaultAccountRepository`, eliminating stale "Needs re-auth" banners.
 *   **Requirement 0.10 (Foreground Service Escalation Fix):** 🟢 **Completed** (2025-06-17) – Reduced work-score threshold and proactive service start ensure heavy sync continues when the app is backgrounded.
+*   **Requirement 0.11 (Connectivity Throttle Detection):** 🟢 **Completed** (2025-06-17) – Introduced `ConnectivityHealthTracker` with NORMAL/DEGRADED/BLOCKED states, hooked into SyncController and BulkDownload producer to avoid futile retries during provider/DNS outages.
 
 **EPIC 1: Core Mail Viewing** (Highest Priority)
 

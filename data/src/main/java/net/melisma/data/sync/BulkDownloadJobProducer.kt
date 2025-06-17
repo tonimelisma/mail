@@ -22,10 +22,18 @@ class BulkDownloadJobProducer @Inject constructor(
     private val networkMonitor: NetworkMonitor,
     private val appDatabase: AppDatabase,
     private val cachePressureGatekeeper: CachePressureGatekeeper,
+    private val connectivityHealthTracker: net.melisma.core_data.connectivity.ConnectivityHealthTracker,
 ) : JobProducer {
 
     override suspend fun produce(): List<SyncJob> = withContext(Dispatchers.IO) {
         val networkStatus = networkMonitor.isOnline.first()
+
+        // If network is currently blocked, skip proactive bulk downloads.
+        if (connectivityHealthTracker.isBlocked()) {
+            Timber.d("Skipping BulkDownloadJobProducer due to connectivity throttle (${connectivityHealthTracker.state.value})")
+            return@withContext emptyList()
+        }
+
         val unmetered = networkMonitor.isWifiConnected.first()
         if (!networkStatus || !unmetered) {
             Timber.d("Skipping BulkDownloadJobProducer due to network state (Online: $networkStatus, Unmetered: $unmetered)")

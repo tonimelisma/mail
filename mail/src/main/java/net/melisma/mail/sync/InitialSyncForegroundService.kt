@@ -40,9 +40,10 @@ import javax.inject.Inject
 class InitialSyncForegroundService : Service() {
 
     @Inject lateinit var syncController: SyncController
+    @Inject lateinit var connectivityHealthTracker: net.melisma.core_data.connectivity.ConnectivityHealthTracker
     private val serviceScope = CoroutineScope(Dispatchers.Main)
     private var watchJob: Job? = null
-    private val WORK_SCORE_THRESHOLD = 10
+    private val WORK_SCORE_THRESHOLD = 5
 
     override fun onCreate() {
         super.onCreate()
@@ -52,10 +53,10 @@ class InitialSyncForegroundService : Service() {
         watchJob = serviceScope.launch {
             syncController.totalWorkScore
                 .collect { score ->
+                    val netState = connectivityHealthTracker.state.value.name
                     if (score > 0) {
-                        updateNotification("Syncing mail… Current work score: $score")
+                        updateNotification("Syncing mail… ($netState) score=$score")
                     } else {
-                        // Debounce is better applied before stopping
                         delay(5000)
                         if (syncController.totalWorkScore.value == 0) {
                             Timber.d("InitialSyncForegroundService: Work score is zero, stopping service.")
