@@ -144,12 +144,6 @@ class SyncController @Inject constructor(
                     is SyncJob.HeaderBackfill -> handleFetchMessageHeaders(job.folderId, job.pageToken, job.accountId)
                     is SyncJob.EvictFromCache -> runCacheEviction() // Global eviction
 
-                    // Legacy job mapping
-                    is SyncJob.FetchMessageHeaders -> handleFetchMessageHeaders(job.folderId, job.pageToken, job.accountId)
-                    is SyncJob.DownloadMessageBody -> handleDownloadMessageBody(SyncJob.FetchFullMessageBody(job.messageId, job.accountId))
-                    is SyncJob.RefreshFolderContents -> handleForceRefreshFolder(SyncJob.ForceRefreshFolder(job.folderId, job.accountId))
-                    is SyncJob.FetchNextMessageListPage -> handleFetchMessageHeaders(job.folderId, null, job.accountId) // Simplified: just trigger a refresh from the start
-                    
                     // Existing handlers
                     is SyncJob.SyncFolderList -> handleSyncFolderList(job)
                     is SyncJob.ForceRefreshFolder -> handleForceRefreshFolder(job)
@@ -163,6 +157,8 @@ class SyncController @Inject constructor(
                     // No-op for now for these new job types
                     is SyncJob.BulkFetchBodies -> handleBulkFetchBodies(job)
                     is SyncJob.BulkFetchAttachments -> handleBulkFetchAttachments(job)
+
+                    else -> Timber.d("Ignoring deprecated or unknown job type ${job::class.simpleName}")
                 }
                 _status.update { it.copy(error = null) }
             } catch (e: Exception) {
@@ -283,7 +279,7 @@ class SyncController @Inject constructor(
         }
 
         if (paged.nextPageToken != null) {
-            submit(SyncJob.FetchMessageHeaders(folderId, paged.nextPageToken, accountId))
+            submit(SyncJob.HeaderBackfill(folderId, paged.nextPageToken, accountId))
         }
     }
 
@@ -361,7 +357,7 @@ class SyncController @Inject constructor(
 
             // Queue next page if exists
             if (paged.nextPageToken != null) {
-                submit(SyncJob.FetchMessageHeaders(job.folderId, paged.nextPageToken, job.accountId))
+                submit(SyncJob.HeaderBackfill(job.folderId, paged.nextPageToken, job.accountId))
             }
         }
     }
@@ -1049,7 +1045,8 @@ class SyncController @Inject constructor(
                 return@withContext
             }
             undownloaded.forEach { att ->
-                submit(SyncJob.DownloadAttachment(att.messageId, att.id, job.accountId))
+                val score = ((att.size / (1024 * 1024)).toInt()).coerceAtLeast(1)
+                submit(SyncJob.DownloadAttachment(att.messageId, att.id, job.accountId, score))
             }
             Timber.d("Queued ${'$'}{undownloaded.size} DownloadAttachment jobs from BulkFetchAttachments")
         }
