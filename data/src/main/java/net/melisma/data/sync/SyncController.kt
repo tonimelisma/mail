@@ -161,7 +161,8 @@ class SyncController @Inject constructor(
                     is SyncJob.FullAccountBootstrap -> handleFullAccountBootstrap(job)
 
                     // No-op for now for these new job types
-                    is SyncJob.BulkFetchBodies, is SyncJob.BulkFetchAttachments -> Timber.d("Ignoring ${job::class.simpleName} for now.")
+                    is SyncJob.BulkFetchBodies -> handleBulkFetchBodies(job)
+                    is SyncJob.BulkFetchAttachments -> handleBulkFetchAttachments(job)
                 }
                 _status.update { it.copy(error = null) }
             } catch (e: Exception) {
@@ -1011,6 +1012,46 @@ class SyncController @Inject constructor(
                 }
             }
             kotlinx.coroutines.delay(30_000L) // 30-second cadence – adjustable later via prefs
+        }
+    }
+
+    private suspend fun handleBulkFetchBodies(job: SyncJob.BulkFetchBodies) {
+        withContext(ioDispatcher) {
+            Timber.d("BulkFetchBodies started for account ${'$'}{job.accountId}")
+            if (!networkMonitor.isOnline.first()) {
+                Timber.i("Offline – skipping BulkFetchBodies for ${'$'}{job.accountId}")
+                return@withContext
+            }
+            val messageDao = appDatabase.messageDao()
+            val messagesNeedingBody = messageDao.getMessagesMissingBody(job.accountId, limit = 25)
+            if (messagesNeedingBody.isEmpty()) {
+                Timber.d("No messages need body download for account ${'$'}{job.accountId}")
+                return@withContext
+            }
+            messagesNeedingBody.forEach { msg ->
+                submit(SyncJob.FetchFullMessageBody(msg.id, job.accountId))
+            }
+            Timber.d("Queued ${'$'}{messagesNeedingBody.size} FetchFullMessageBody jobs from BulkFetchBodies")
+        }
+    }
+
+    private suspend fun handleBulkFetchAttachments(job: SyncJob.BulkFetchAttachments) {
+        withContext(ioDispatcher) {
+            Timber.d("BulkFetchAttachments started for account ${'$'}{job.accountId}")
+            if (!networkMonitor.isOnline.first()) {
+                Timber.i("Offline – skipping BulkFetchAttachments for ${'$'}{job.accountId}")
+                return@withContext
+            }
+            val attachmentDao = appDatabase.attachmentDao()
+            val undownloaded = attachmentDao.getUndownloadedAttachmentsForAccount(job.accountId, limit = 25)
+            if (undownloaded.isEmpty()) {
+                Timber.d("No attachments need download for account ${'$'}{job.accountId}")
+                return@withContext
+            }
+            undownloaded.forEach { att ->
+                submit(SyncJob.DownloadAttachment(att.messageId, att.id, job.accountId))
+            }
+            Timber.d("Queued ${'$'}{undownloaded.size} DownloadAttachment jobs from BulkFetchAttachments")
         }
     }
 }

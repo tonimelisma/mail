@@ -64,4 +64,18 @@ Initial groundwork for Sync Engine v2.1 (Architecture A – single dispatcher wi
 Build verified with `./gradlew assembleDebug`.
 
 - **2025-07-29**: Integrated comprehensive diagnostic logging to monitor device state (battery, network, memory, disk) during sync operations, especially on network failures. This helps diagnose issues related to Doze mode and background restrictions.
-- **2025-07-28**: Refactored the authentication flow to correctly handle the `POST_NOTIFICATIONS` permission on Android 13+. The `MainViewModel` now orchestrates the permission request before launching the OAuth intent, ensuring the initial sync foreground service can post its notification. 
+- **2025-07-28**: Refactored the authentication flow to correctly handle the `POST_NOTIFICATIONS` permission on Android 13+. The `MainViewModel` now orchestrates the permission request before launching the OAuth intent, ensuring the initial sync foreground service can post its notification.
+
+**Date:** 2025-09-12
+
+#### Summary
+Completed post-intern hardening pass.
+
+1. **Implemented Bulk Download Job Handling**
+   * Added DAO helpers `getMessagesMissingBody` and `getUndownloadedAttachmentsForAccount` for efficient selection.
+   * Added `handleBulkFetchBodies` and `handleBulkFetchAttachments` in `SyncController` and wired them into the main `run()` dispatcher.
+   * Each handler now queues the fine-grained `FetchFullMessageBody`/`DownloadAttachment` jobs, respecting existing gatekeepers.
+2. **Extended Debug Logging**
+   * Inserted granular Timber `d`/`i` calls within bulk handlers and job submission paths to aid field diagnostics.
+3. **Schema-Free Migration** – new DAO methods use existing columns; no DB version bump required.
+4. **Build Verification** – Full `./gradlew build` completed without errors. 

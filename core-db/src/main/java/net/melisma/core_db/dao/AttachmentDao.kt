@@ -73,4 +73,12 @@ interface AttachmentDao {
 
     @Query("SELECT SUM(size) FROM attachments WHERE isDownloaded = 1")
     suspend fun getTotalDownloadedSize(): Long?
+
+    @Query("""
+        SELECT * FROM attachments
+        WHERE accountId = :accountId
+          AND isDownloaded = 0
+        LIMIT :limit
+    """)
+    suspend fun getUndownloadedAttachmentsForAccount(accountId: String, limit: Int = 50): List<AttachmentEntity>
 }

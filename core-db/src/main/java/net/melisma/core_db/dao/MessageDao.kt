@@ -146,4 +146,15 @@ interface MessageDao {
         WHERE j.folderId = :folderId
     """)
     suspend fun getOldestMessageTimestamp(folderId: String): Long?
+
+    @Query("""
+        SELECT * FROM messages
+        WHERE accountId = :accountId
+          AND hasFullBodyCached = 0
+          AND isDraft = 0
+          AND isOutbox = 0
+        ORDER BY timestamp DESC
+        LIMIT :limit
+    """)
+    suspend fun getMessagesMissingBody(accountId: String, limit: Int = 50): List<MessageEntity>
 } 
