@@ -1657,7 +1657,8 @@ class GraphApiHelper @Inject constructor(
         deltaToken: String?
     ): Result<Pair<Boolean, String?>> = withContext(ioDispatcher) {
         Timber.d("hasChangesSince (Graph) called for account $accountId. DeltaToken: $deltaToken")
-        val requestUrl = deltaToken ?: "$MS_GRAPH_ROOT_ENDPOINT/messages/delta"
+        // Use /me/messages/delta to scope the delta query to the authenticated user.
+        val requestUrl = deltaToken ?: "$MS_GRAPH_ROOT_ENDPOINT/me/messages/delta"
 
         try {
             val response: HttpResponse = httpClient.get(requestUrl) {
