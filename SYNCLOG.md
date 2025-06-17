@@ -78,4 +78,8 @@ Completed post-intern hardening pass.
 2. **Extended Debug Logging**
    * Inserted granular Timber `d`/`i` calls within bulk handlers and job submission paths to aid field diagnostics.
 3. **Schema-Free Migration** – new DAO methods use existing columns; no DB version bump required.
-4. **Build Verification** – Full `./gradlew build` completed without errors. 
+4. **Build Verification** – Full `./gradlew build` completed without errors.
+
+5. **BulkDownloadJobProducer**
+   * New producer queues `BULK_FETCH_BODIES` / `BULK_FETCH_ATTACHMENTS` opportunistically when online and data missing.
+6. **NetworkGatekeeper optimisation** – caches `isOnline` in a hot `StateFlow` to avoid cold-flow overhead per job vetting. 

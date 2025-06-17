@@ -13,6 +13,8 @@
   - Added DAO helpers to surface messages without bodies and attachments pending download.
   - Added handlers in `SyncController` queuing fine-grained download jobs.
 - **Debug Logging Enhancements**: Added detailed Timber instrumentation to bulk handlers and job submission paths.
+- **Bulk Download Producer**: Introduced `BulkDownloadJobProducer` to opportunistically queue bulk body & attachment downloads.
+- **NetworkGatekeeper Optimisation**: Cached online state with StateFlow to eliminate repeated cold-flow collection.
 
 ### Changed
 - `SyncController` now uses the `
