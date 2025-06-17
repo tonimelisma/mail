@@ -76,7 +76,14 @@ class SyncController @Inject constructor(
     companion object {
         private const val BASE_RETRY_DELAY_MS = 10_000L // 10 seconds
         private const val MAX_RETRY_JITTER_MS = 2_000L // 2 seconds
-        private const val WORK_THRESHOLD = 10
+        /**
+         * Minimum aggregated work score that triggers escalation to a foreground service while the
+         * app is in the background. Lowered from 10 → **5** so that a single `BulkFetchBodies`
+         * job (score = 5) is now sufficient to start the service before any heavy network work
+         * begins. This prevents the system from aggressively restricting background traffic on
+         * older Android versions and gives us a safety-margin for network connectivity.
+         */
+        private const val WORK_THRESHOLD = 5
     }
 
     init {
@@ -89,6 +96,7 @@ class SyncController @Inject constructor(
         // Observe total work score to derive isSyncing status for backward compatibility
         externalScope.launch {
             totalWorkScore.collect { score ->
+                Timber.d("totalWorkScore changed → $score (threshold=$WORK_THRESHOLD)")
                 _status.update { it.copy(isSyncing = score > 0) }
 
                 // Centralised foreground-service management

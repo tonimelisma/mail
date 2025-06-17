@@ -11,6 +11,7 @@ import javax.inject.Singleton
 import net.melisma.core_data.repository.AccountRepository
 import android.content.Context
 import net.melisma.core_data.util.DiagnosticUtils
+import androidx.core.content.ContextCompat
 
 /**
  * Observes the application process lifecycle and instructs [SyncController] to start/stop
@@ -44,5 +45,15 @@ class SyncLifecycleObserver @Inject constructor(
         net.melisma.core_data.util.DiagnosticUtils.logDeviceState(appContext, "lifecycle onStop")
         syncController.stopActivePolling()
         syncController.startPassivePolling()
+
+        // Ensure long-running work keeps network priority while the app is backgrounded.
+        val currentScore = syncController.totalWorkScore.value
+        if (currentScore > 0) {
+            Timber.d("SyncLifecycleObserver: Work score $currentScore > 0 on background – starting InitialSyncForegroundService proactively")
+            val intent = android.content.Intent().apply {
+                setClassName(appContext, "net.melisma.mail.sync.InitialSyncForegroundService")
+            }
+            ContextCompat.startForegroundService(appContext, intent)
+        }
     }
 } 
