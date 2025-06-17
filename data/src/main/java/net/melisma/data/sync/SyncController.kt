@@ -360,61 +360,23 @@ class SyncController @Inject constructor(
             }
 
             val folderDao = appDatabase.folderDao()
-            val messageDao = appDatabase.messageDao()
-            val junctionDao = appDatabase.messageFolderJunctionDao()
-
             val localFolder = folderDao.getFolderByIdSuspend(job.folderId) ?: run {
                 Timber.w("Folder ${job.folderId} not found; dropping ForceRefreshFolder job")
                 return@withContext
             }
 
-            val apiFolderId = localFolder.remoteId ?: job.folderId
-
             folderDao.updateSyncStatus(job.folderId, EntitySyncStatus.PENDING_DOWNLOAD)
 
-            val service = mailApiServiceFactory.getService(job.accountId) ?: run {
-                Timber.w("MailApiService not found for account ${job.accountId}")
-                return@withContext
-            }
-
-            val response = service.getMessagesForFolder(
-                folderId = apiFolderId,
-                maxResults = 50,
-                pageToken = null
-            )
-
-            if (response.isFailure) {
-                val ex = response.exceptionOrNull()
+            try {
+                // MODIFICATION: Instead of destructively deleting messages, we perform a non-destructive
+                // header fetch, which will update existing messages and add new ones without
+                // clearing the view first. This fixes the UI bug where the list disappears.
+                processFetchHeaders(job.folderId, null, job.accountId)
+                folderDao.updateLastSuccessfulSync(job.folderId, System.currentTimeMillis())
+            } catch (e: Exception) {
+                val ex = e
                 Timber.e(ex, "ForceRefreshFolder failed for ${job.folderId}")
                 folderDao.updateSyncStatusAndError(job.folderId, EntitySyncStatus.ERROR, ex?.message)
-                return@withContext
-            }
-
-            val paged = response.getOrThrow()
-            val msgEntities = paged.messages.map { it.toEntity(job.accountId) }
-
-            appDatabase.withTransaction {
-                messageDao.deleteMessagesByFolder(job.folderId)
-                junctionDao.deleteByFolder(job.folderId)
-
-                messageDao.insertOrUpdateMessages(msgEntities)
-                val junctions = msgEntities.map { me -> MessageFolderJunction(me.id, job.folderId) }
-                junctionDao.insertAll(junctions)
-
-                folderDao.updateLastSuccessfulSync(job.folderId, System.currentTimeMillis())
-
-                appDatabase.folderSyncStateDao().upsert(
-                    FolderSyncStateEntity(
-                        folderId = job.folderId,
-                        nextPageToken = paged.nextPageToken,
-                        lastSyncedTimestamp = System.currentTimeMillis()
-                    )
-                )
-            }
-
-            // Queue next page if exists
-            if (paged.nextPageToken != null) {
-                submit(SyncJob.HeaderBackfill(job.folderId, paged.nextPageToken, job.accountId))
             }
         }
     }
