@@ -106,3 +106,4 @@ graph TD
 ## Recent Maintenance
 
 * **2025-09-15 – Build Hardening:** Removed Room **auto-migrations** from `AppDatabase` because they erroneously attempted to generate 21→23 migrations resulting in KSP failures ("new NOT NULL column 'hasFullBodyCached' added with no default value"). The project now relies solely on **explicit `Migration` objects** registered in `DatabaseModule` together with `fallbackToDestructiveMigration()` during rapid schema iteration.
+* **2025-09-17 – Auth Flow Hardening:** Fixed a regression where Microsoft accounts prompted re-authentication on each launch because the active account ID was **not persisted at sign-in**. The `DefaultAccountRepository` now records the active MS account immediately alongside Google.

@@ -704,8 +704,14 @@ class DefaultAccountRepository @Inject constructor(
         return if (saveResult is PersistenceResult.Success<Unit>) { // Specify type for Success
             Timber.tag(TAG)
                 .i("Account ${account.emailAddress} ($providerType) saved to DB successfully.")
-            if (providerType == Account.PROVIDER_TYPE_GOOGLE) {
-                activeGoogleAccountHolder.setActiveAccountId(account.id)
+            // Persist the active account selection immediately so token providers have it
+            when (providerType) {
+                Account.PROVIDER_TYPE_GOOGLE -> {
+                    activeGoogleAccountHolder.setActiveAccountId(account.id)
+                }
+                Account.PROVIDER_TYPE_MS -> {
+                    activeMicrosoftAccountHolder.setActiveMicrosoftAccountId(account.id)
+                }
             }
             GenericAuthResult.Success(account)
         } else {

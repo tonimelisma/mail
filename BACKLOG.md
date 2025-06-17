@@ -1,6 +1,6 @@
 # **Melisma Mail - Backlog (Updated after Code Review)**
 
-**Legend:** 🟢 (Completed) | 🟡 (Partial) | 🔴 (Not Started)
+**Legend:** 🟢 (Completed) | 🟡 (Partial) | 🔴 (Not Started) | ❌ (Open)
 
 ### **Prioritized Requirements Backlog (Epics & Status)**
 
@@ -31,6 +31,7 @@
 *   **Requirement 2.2 (Delete Message):** 🟢 **Completed** - Messages and threads can be deleted. The action is queued for sync.
 *   **Requirement 2.3 (Archive Message):** 🟢 **Completed** - Archiving is implemented as a "move" operation.
 *   **Requirement 2.4 (Customizable Swipe Actions - UI/UX):** 🔴 **Not Started** - There is no implementation for swipe actions.
+*   **Requirement 2.1 (Auth Reliability - Microsoft silent token):** 🟢 **Completed** (2025-09-17) – Persist active MS account ID at sign-in so `MicrosoftKtorTokenProvider` can obtain tokens without spurious re-auth prompts.
 
 **EPIC 3: Composing & Sending (Offline Capable)** (Medium-High Priority)
 
