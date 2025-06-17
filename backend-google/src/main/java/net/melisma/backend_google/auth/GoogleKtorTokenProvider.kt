@@ -16,7 +16,8 @@ import javax.inject.Singleton
 class GoogleKtorTokenProvider @Inject constructor(
     private val googleAuthManager: GoogleAuthManager,
     private val activeAccountHolder: ActiveGoogleAccountHolder,
-    private val accountRepository: AccountRepository
+    private val accountRepository: AccountRepository,
+    private val authEventBus: net.melisma.core_data.auth.AuthEventBus
 ) : TokenProvider {
     private val TAG = "GoogleKtorTokenProv"
     private val refreshMutex = Mutex()
@@ -71,6 +72,15 @@ class GoogleKtorTokenProvider @Inject constructor(
                 is GoogleGetTokenResult.Success -> {
                     Timber.tag(TAG)
                         .i("Google Token acquired successfully for $accountId during $operation.")
+
+                    // Notify observers that authentication is healthy for this account.
+                    authEventBus.publish(
+                        net.melisma.core_data.auth.AuthEvent.AuthSuccess(
+                            accountId,
+                            Account.PROVIDER_TYPE_GOOGLE
+                        )
+                    )
+
                     return BearerTokens(
                         accessToken = tokenResult.accessToken,
                         refreshToken = accountId // Store accountId in refreshToken

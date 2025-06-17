@@ -5,6 +5,7 @@ import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
 import net.melisma.core_data.model.EntitySyncStatus
+import androidx.room.ColumnInfo
 
 @Entity(
     tableName = "messages",
@@ -68,5 +69,6 @@ data class MessageEntity(
     var isLocalOnly: Boolean = false,
     var needsFullSync: Boolean = false,
     var lastAccessedTimestamp: Long? = null,
+    @ColumnInfo(defaultValue = "0")
     var hasFullBodyCached: Boolean = false // New: explicit flag for body cache status
 ) 

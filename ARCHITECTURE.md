@@ -108,3 +108,17 @@ graph TD
 * **2025-09-15 – Build Hardening:** Removed Room **auto-migrations** from `AppDatabase` because they erroneously attempted to generate 21→23 migrations resulting in KSP failures ("new NOT NULL column 'hasFullBodyCached' added with no default value"). The project now relies solely on **explicit `Migration` objects** registered in `DatabaseModule` together with `fallbackToDestructiveMigration()` during rapid schema iteration.
 * **2025-09-17 – Auth Flow Hardening:** Fixed a regression where Microsoft accounts prompted re-authentication on each launch because the active account ID was **not persisted at sign-in**. The `DefaultAccountRepository` now records the active MS account immediately alongside Google.
 * **2025-09-17 – MS Graph Delta Compliance:** Replaced unsupported `/me/messages/delta` change-tracking with folder-level `/me/mailFolders/delta`. This fixes 400 *Unsupported request: Change tracking is not supported against 'microsoft.graph.message'* errors during account polling.
+
+## Authentication Architecture (2025-10-XX)
+
+The project now relies on a lightweight, event-driven pattern for tracking authentication health across providers.
+
+1. `GoogleKtorTokenProvider` and `MicrosoftKtorTokenProvider` emit `AuthEventBus.AuthSuccess(accountId, providerType)` **every time** they successfully acquire or refresh an access token.
+2. `DefaultAccountRepository` collects these events and immediately clears the `needsReauthentication` flag on the corresponding `AccountEntity`.  This guarantees that the UI banner (driven by `overallApplicationAuthState`) flips back to "authenticated" as soon as a silent token refresh succeeds—without waiting for a poll or manual refresh.
+3. Any component can listen to `AuthEventBus.events` for fine-grained telemetry (e.g. analytics, debug overlays).
+
+This removes scattered calls to `setNeedsReauthentication(false)` from multiple layers and ensures a **single source of truth** for re-authentication state while keeping provider implementations decoupled from database concerns.
+
+### Why not keep a separate global AuthState model?
+
+An earlier iteration defined a sealed `AuthState` hierarchy in `core-data`. That model was never wired into the UI and has now been removed in favour of the simpler enum `OverallApplicationAuthState` (NONE / PARTIAL / ALL / OK).  The new bus keeps the enum accurate in real-time without an additional aggregate state machine.

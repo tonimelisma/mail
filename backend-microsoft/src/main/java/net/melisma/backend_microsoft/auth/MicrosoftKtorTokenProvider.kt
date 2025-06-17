@@ -13,6 +13,7 @@ import net.melisma.core_data.auth.TokenProvider
 import net.melisma.core_data.auth.TokenProviderException
 import net.melisma.core_data.model.Account
 import net.melisma.core_data.repository.AccountRepository
+import net.melisma.core_data.auth.AuthEventBus
 import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -23,7 +24,8 @@ import kotlinx.coroutines.flow.first
 class MicrosoftKtorTokenProvider @Inject constructor(
     private val microsoftAuthManager: MicrosoftAuthManager,
     private val activeAccountHolder: ActiveMicrosoftAccountHolder,
-    private val accountRepository: AccountRepository // Used to mark account for re-authentication
+    private val accountRepository: AccountRepository, // Used to mark account for re-authentication
+    private val authEventBus: AuthEventBus
 ) : TokenProvider {
     private val TAG = "MsKtorTokenProvider" // Shortened for clarity in logs
     private val refreshMutex = Mutex()
@@ -127,6 +129,14 @@ class MicrosoftKtorTokenProvider @Inject constructor(
                             .e("MSAL account ID (IAccount.id) is null after successful token acquisition. This should not happen.")
                         throw TokenProviderException("MSAL account ID is null post-success.")
                     }
+
+                    // Notify observers of healthy auth
+                    authEventBus.publish(
+                        net.melisma.core_data.auth.AuthEvent.AuthSuccess(
+                            msalAccountId,
+                            Account.PROVIDER_TYPE_MS
+                        )
+                    )
 
                     return BearerTokens(
                         accessToken = acquireTokenResult.result.accessToken,

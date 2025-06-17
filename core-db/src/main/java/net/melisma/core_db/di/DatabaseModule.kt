@@ -41,7 +41,7 @@ object DatabaseModule {
             AppDatabase::class.java,
             "melisma.db"
         )
-            .addMigrations(AppDatabase.M18_19, AppDatabase.M19_20, AppDatabase.M21_22)
+            .addMigrations(AppDatabase.M18_19, AppDatabase.M19_20, AppDatabase.M21_22, AppDatabase.M22_23)
             // Destructive migration is enabled for development builds to speed up schema iteration.
             // In a production app, every schema change would require a tested Migration plan.
             .fallbackToDestructiveMigration()

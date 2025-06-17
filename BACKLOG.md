@@ -16,6 +16,7 @@
 *   **Requirement 0.6 (Integrate Initial Sync Duration):** 🟢 **Completed** - The user preference for "initial sync duration" is integrated and used by the `SyncController`.
 *   **Requirement 0.7 (Isolate Attachments for Backup Exclusion):** 🟢 **Completed** - Downloaded attachments are correctly saved to the `no_backup` directory to exclude them from Android's Auto Backup.
 *   **Requirement 0.8 (Polling Lifecycle – Foreground & Background):** 🟢 **Completed** - The app correctly switches between aggressive (5s) foreground delta polling and battery-saving (15min) background polling.
+*   **Requirement 0.9 (Central AuthEventBus):** 🟢 **Completed** (2025-10-XX) – Introduced `AuthEventBus` and removed unused `AuthState` sealed class. Silent token successes now automatically clear `needsReauthentication` via event collection in `DefaultAccountRepository`, eliminating stale "Needs re-auth" banners.
 
 **EPIC 1: Core Mail Viewing** (Highest Priority)
 

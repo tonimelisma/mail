@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.transform
+import kotlinx.coroutines.withContext
 import net.melisma.backend_google.auth.ActiveGoogleAccountHolder
 import net.melisma.backend_google.auth.GoogleAuthManager
 import net.melisma.backend_google.auth.GoogleGetTokenResult
@@ -52,6 +53,8 @@ import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
 import net.melisma.core_data.repository.GenericSignOutAllResult
+import net.melisma.core_data.auth.AuthEventBus
+import kotlinx.coroutines.flow.filterIsInstance
 
 // Companion object for constants
 private const val GMAIL_API_SCOPE_BASE = "https://www.googleapis.com/auth/gmail."
@@ -71,7 +74,8 @@ class DefaultAccountRepository @Inject constructor(
     private val errorMappers: Map<String, @JvmSuppressWildcards ErrorMapperService>,
     private val activeGoogleAccountHolder: ActiveGoogleAccountHolder,
     private val activeMicrosoftAccountHolder: ActiveMicrosoftAccountHolder,
-    private val accountDao: AccountDao
+    private val accountDao: AccountDao,
+    private val authEventBus: AuthEventBus
 ) : AccountRepository {
 
     private val TAG = "DefaultAccountRepo"
@@ -89,6 +93,26 @@ class DefaultAccountRepository @Inject constructor(
     private val googleAuthResultChannel = Channel<GenericAuthResult>(Channel.CONFLATED)
 
     init {
+        // Observe authentication events to clear stale re-auth flags
+        authEventBus.events
+            .filterIsInstance<net.melisma.core_data.auth.AuthEvent.AuthSuccess>()
+            .onEach { evt ->
+                withContext(ioDispatcher) {
+                    val entity = accountDao.getAccountByIdSuspend(evt.accountId)
+                    if (entity != null && entity.needsReauthentication) {
+                        try {
+                            accountDao.setNeedsReauthentication(evt.accountId, false)
+                            Timber.tag(TAG)
+                                .i("AuthEventBus: Cleared needsReauthentication for ${'$'}{entity.emailAddress} (${evt.accountId})")
+                        } catch (e: Exception) {
+                            Timber.tag(TAG).e(e, "AuthEventBus: DAO error clearing flag for ${evt.accountId}")
+                        }
+                    }
+                }
+            }
+            .catch { e -> Timber.tag(TAG).e(e, "Error collecting auth events") }
+            .launchIn(externalScope)
+
         Timber.tag(TAG).d("Initializing DefaultAccountRepository. DAO is SSoT for accounts.")
 
         accountDao.getAllAccounts() // Observe DAO directly
