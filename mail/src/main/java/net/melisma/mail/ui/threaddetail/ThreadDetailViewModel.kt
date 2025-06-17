@@ -257,7 +257,7 @@ class ThreadDetailViewModel @Inject constructor(
 
     private fun enqueueMessageBodyDownload(messageId: String, accId: String) {
         Timber.d("Submitting DownloadMessageBody job for $messageId (ThreadDetail)")
-        syncController.submit(SyncJob.DownloadMessageBody(messageId, accId))
+        syncController.submit(SyncJob.FetchFullMessageBody(messageId, accId))
     }
 
     private fun updateMessageBodyState(messageId: String, newBodyState: BodyLoadingState) {

@@ -232,8 +232,8 @@ class MessageDetailViewModel @Inject constructor(
             return
         }
         _uiState.update { it.copy(bodyDisplayState = ContentDisplayState.DOWNLOADING, transientError = null) }
-        Timber.d("ViewModelDBG: Submitting DownloadMessageBody job for $msgId.")
-        syncController.submit(SyncJob.DownloadMessageBody(messageId = msgId, accountId = accId))
+        Timber.d("ViewModelDBG: Submitting FetchFullMessageBody job for $msgId.")
+        syncController.submit(SyncJob.FetchFullMessageBody(messageId = msgId, accountId = accId))
     }
 
     fun onAttachmentClicked(attachment: Attachment) {

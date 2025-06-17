@@ -80,7 +80,7 @@ class DefaultMessageRepository @Inject constructor(
                 val needsSync = messagesCount == 0 || folderEntity.lastSuccessfulSyncTimestamp == null
                 if (needsSync && folderEntity.remoteId != null) {
                     Timber.d("Observe: Folder $folderId needs content sync. Submitting job.")
-                    syncController.submit(SyncJob.RefreshFolderContents(folderId, accountId))
+                    syncController.submit(SyncJob.ForceRefreshFolder(folderId, accountId))
                 } else if (folderEntity.remoteId == null) {
                     Timber.w("Observe: Cannot sync folder $folderId, remoteId is null.")
                 }
@@ -134,7 +134,7 @@ class DefaultMessageRepository @Inject constructor(
         folderId: String,
         activity: Activity?
     ) {
-        syncController.submit(SyncJob.RefreshFolderContents(folderId, accountId))
+        syncController.submit(SyncJob.ForceRefreshFolder(folderId, accountId))
     }
 
 
@@ -145,7 +145,7 @@ class DefaultMessageRepository @Inject constructor(
                 messageDao.updateLastAccessedTimestamp(message.id, System.currentTimeMillis())
                 if (message.body.isNullOrEmpty()) {
                     Timber.d("Message body for $messageId is empty, requesting download.")
-                    syncController.submit(SyncJob.DownloadMessageBody(messageId = message.id, accountId = accountId))
+                    syncController.submit(SyncJob.FetchFullMessageBody(messageId = message.id, accountId = accountId))
                 }
             }
         }
