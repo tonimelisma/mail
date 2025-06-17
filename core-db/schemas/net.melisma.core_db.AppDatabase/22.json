@@ -1,0 +1,998 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 22,
+    "identityHash": "fb48e543af5e544f1ca87e58815090d4",
+    "entities": [
+      {
+        "tableName": "accounts",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `displayName` TEXT, `emailAddress` TEXT NOT NULL, `providerType` TEXT NOT NULL, `needsReauthentication` INTEGER NOT NULL, `syncStatus` TEXT NOT NULL, `lastSyncAttemptTimestamp` INTEGER, `lastSuccessfulSyncTimestamp` INTEGER, `lastSyncError` TEXT, `isLocalOnly` INTEGER NOT NULL, `needsFullSync` INTEGER NOT NULL, `lastFolderListSyncTimestamp` INTEGER, `lastFolderListSyncError` TEXT, `folderListSyncToken` TEXT, `latestDeltaToken` TEXT, `lastGenericSyncError` TEXT, PRIMARY KEY(`id`))",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "displayName",
+            "columnName": "displayName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "emailAddress",
+            "columnName": "emailAddress",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "providerType",
+            "columnName": "providerType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "needsReauthentication",
+            "columnName": "needsReauthentication",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "syncStatus",
+            "columnName": "syncStatus",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSyncAttemptTimestamp",
+            "columnName": "lastSyncAttemptTimestamp",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "lastSuccessfulSyncTimestamp",
+            "columnName": "lastSuccessfulSyncTimestamp",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "lastSyncError",
+            "columnName": "lastSyncError",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "isLocalOnly",
+            "columnName": "isLocalOnly",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "needsFullSync",
+            "columnName": "needsFullSync",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastFolderListSyncTimestamp",
+            "columnName": "lastFolderListSyncTimestamp",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "lastFolderListSyncError",
+            "columnName": "lastFolderListSyncError",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "folderListSyncToken",
+            "columnName": "folderListSyncToken",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "latestDeltaToken",
+            "columnName": "latestDeltaToken",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastGenericSyncError",
+            "columnName": "lastGenericSyncError",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_accounts_emailAddress",
+            "unique": true,
+            "columnNames": [
+              "emailAddress"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_accounts_emailAddress` ON `${TABLE_NAME}` (`emailAddress`)"
+          }
+        ]
+      },
+      {
+        "tableName": "folders",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `accountId` TEXT NOT NULL, `remoteId` TEXT, `name` TEXT, `wellKnownType` TEXT, `unreadCount` INTEGER, `totalCount` INTEGER, `canHaveChildren` INTEGER, `parentFolderId` TEXT, `syncStatus` TEXT NOT NULL, `lastSyncAttemptTimestamp` INTEGER, `lastSuccessfulSyncTimestamp` INTEGER, `lastSyncError` TEXT, `lastFullContentSyncTimestamp` INTEGER, `nextPageToken` TEXT, `messageListSyncToken` TEXT, `isPlaceholder` INTEGER NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`accountId`) REFERENCES `accounts`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "accountId",
+            "columnName": "accountId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "remoteId",
+            "columnName": "remoteId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "wellKnownType",
+            "columnName": "wellKnownType",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "unreadCount",
+            "columnName": "unreadCount",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "totalCount",
+            "columnName": "totalCount",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "canHaveChildren",
+            "columnName": "canHaveChildren",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "parentFolderId",
+            "columnName": "parentFolderId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "syncStatus",
+            "columnName": "syncStatus",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSyncAttemptTimestamp",
+            "columnName": "lastSyncAttemptTimestamp",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "lastSuccessfulSyncTimestamp",
+            "columnName": "lastSuccessfulSyncTimestamp",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "lastSyncError",
+            "columnName": "lastSyncError",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastFullContentSyncTimestamp",
+            "columnName": "lastFullContentSyncTimestamp",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "nextPageToken",
+            "columnName": "nextPageToken",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "messageListSyncToken",
+            "columnName": "messageListSyncToken",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "isPlaceholder",
+            "columnName": "isPlaceholder",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_folders_accountId",
+            "unique": false,
+            "columnNames": [
+              "accountId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_folders_accountId` ON `${TABLE_NAME}` (`accountId`)"
+          },
+          {
+            "name": "index_folders_accountId_remoteId",
+            "unique": true,
+            "columnNames": [
+              "accountId",
+              "remoteId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_folders_accountId_remoteId` ON `${TABLE_NAME}` (`accountId`, `remoteId`)"
+          },
+          {
+            "name": "index_folders_wellKnownType",
+            "unique": false,
+            "columnNames": [
+              "wellKnownType"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_folders_wellKnownType` ON `${TABLE_NAME}` (`wellKnownType`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "accounts",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "accountId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "messages",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `messageId` TEXT, `accountId` TEXT NOT NULL, `threadId` TEXT, `subject` TEXT, `snippet` TEXT, `body` TEXT, `senderName` TEXT, `senderAddress` TEXT, `recipientNames` TEXT, `recipientAddresses` TEXT, `timestamp` INTEGER NOT NULL, `sentTimestamp` INTEGER, `isRead` INTEGER NOT NULL, `isStarred` INTEGER NOT NULL, `hasAttachments` INTEGER NOT NULL, `isLocallyDeleted` INTEGER NOT NULL, `lastSyncError` TEXT, `isDraft` INTEGER NOT NULL, `isOutbox` INTEGER NOT NULL, `draftType` TEXT, `draftParentId` TEXT, `sendAttempts` INTEGER NOT NULL, `lastSendError` TEXT, `scheduledSendTime` INTEGER, `syncStatus` TEXT NOT NULL, `lastSyncAttemptTimestamp` INTEGER, `lastSuccessfulSyncTimestamp` INTEGER, `isLocalOnly` INTEGER NOT NULL, `needsFullSync` INTEGER NOT NULL, `lastAccessedTimestamp` INTEGER, `hasFullBodyCached` INTEGER NOT NULL, PRIMARY KEY(`id`), FOREIGN KEY(`accountId`) REFERENCES `accounts`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "messageId",
+            "columnName": "messageId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "accountId",
+            "columnName": "accountId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "threadId",
+            "columnName": "threadId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "subject",
+            "columnName": "subject",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "snippet",
+            "columnName": "snippet",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "body",
+            "columnName": "body",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "senderName",
+            "columnName": "senderName",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "senderAddress",
+            "columnName": "senderAddress",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "recipientNames",
+            "columnName": "recipientNames",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "recipientAddresses",
+            "columnName": "recipientAddresses",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "timestamp",
+            "columnName": "timestamp",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "sentTimestamp",
+            "columnName": "sentTimestamp",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "isRead",
+            "columnName": "isRead",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isStarred",
+            "columnName": "isStarred",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "hasAttachments",
+            "columnName": "hasAttachments",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isLocallyDeleted",
+            "columnName": "isLocallyDeleted",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSyncError",
+            "columnName": "lastSyncError",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "isDraft",
+            "columnName": "isDraft",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isOutbox",
+            "columnName": "isOutbox",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "draftType",
+            "columnName": "draftType",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "draftParentId",
+            "columnName": "draftParentId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "sendAttempts",
+            "columnName": "sendAttempts",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSendError",
+            "columnName": "lastSendError",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "scheduledSendTime",
+            "columnName": "scheduledSendTime",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "syncStatus",
+            "columnName": "syncStatus",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSyncAttemptTimestamp",
+            "columnName": "lastSyncAttemptTimestamp",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "lastSuccessfulSyncTimestamp",
+            "columnName": "lastSuccessfulSyncTimestamp",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "isLocalOnly",
+            "columnName": "isLocalOnly",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "needsFullSync",
+            "columnName": "needsFullSync",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastAccessedTimestamp",
+            "columnName": "lastAccessedTimestamp",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "hasFullBodyCached",
+            "columnName": "hasFullBodyCached",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_messages_accountId",
+            "unique": false,
+            "columnNames": [
+              "accountId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_messages_accountId` ON `${TABLE_NAME}` (`accountId`)"
+          },
+          {
+            "name": "index_messages_threadId",
+            "unique": false,
+            "columnNames": [
+              "threadId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_messages_threadId` ON `${TABLE_NAME}` (`threadId`)"
+          },
+          {
+            "name": "index_messages_timestamp",
+            "unique": false,
+            "columnNames": [
+              "timestamp"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_messages_timestamp` ON `${TABLE_NAME}` (`timestamp`)"
+          },
+          {
+            "name": "index_messages_isRead",
+            "unique": false,
+            "columnNames": [
+              "isRead"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_messages_isRead` ON `${TABLE_NAME}` (`isRead`)"
+          },
+          {
+            "name": "index_messages_isStarred",
+            "unique": false,
+            "columnNames": [
+              "isStarred"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_messages_isStarred` ON `${TABLE_NAME}` (`isStarred`)"
+          },
+          {
+            "name": "index_messages_syncStatus",
+            "unique": false,
+            "columnNames": [
+              "syncStatus"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_messages_syncStatus` ON `${TABLE_NAME}` (`syncStatus`)"
+          },
+          {
+            "name": "index_messages_lastAccessedTimestamp",
+            "unique": false,
+            "columnNames": [
+              "lastAccessedTimestamp"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_messages_lastAccessedTimestamp` ON `${TABLE_NAME}` (`lastAccessedTimestamp`)"
+          },
+          {
+            "name": "index_messages_accountId_isRead",
+            "unique": false,
+            "columnNames": [
+              "accountId",
+              "isRead"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_messages_accountId_isRead` ON `${TABLE_NAME}` (`accountId`, `isRead`)"
+          },
+          {
+            "name": "index_messages_accountId_isStarred",
+            "unique": false,
+            "columnNames": [
+              "accountId",
+              "isStarred"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_messages_accountId_isStarred` ON `${TABLE_NAME}` (`accountId`, `isStarred`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "accounts",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "accountId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "message_bodies",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `message_id` TEXT NOT NULL, `content_type` TEXT NOT NULL DEFAULT 'TEXT', `content` TEXT, `size_in_bytes` INTEGER NOT NULL DEFAULT 0, `last_fetched_ts` INTEGER NOT NULL DEFAULT 0, `syncStatus` TEXT NOT NULL, `lastSyncAttemptTimestamp` INTEGER, `lastSuccessfulSyncTimestamp` INTEGER, `lastSyncError` TEXT, `isLocalOnly` INTEGER NOT NULL, `needsFullSync` INTEGER NOT NULL, FOREIGN KEY(`message_id`) REFERENCES `messages`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "messageId",
+            "columnName": "message_id",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "contentType",
+            "columnName": "content_type",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "'TEXT'"
+          },
+          {
+            "fieldPath": "content",
+            "columnName": "content",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "sizeInBytes",
+            "columnName": "size_in_bytes",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "lastFetchedTimestamp",
+            "columnName": "last_fetched_ts",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "syncStatus",
+            "columnName": "syncStatus",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSyncAttemptTimestamp",
+            "columnName": "lastSyncAttemptTimestamp",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "lastSuccessfulSyncTimestamp",
+            "columnName": "lastSuccessfulSyncTimestamp",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "lastSyncError",
+            "columnName": "lastSyncError",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "isLocalOnly",
+            "columnName": "isLocalOnly",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "needsFullSync",
+            "columnName": "needsFullSync",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_message_bodies_message_id",
+            "unique": true,
+            "columnNames": [
+              "message_id"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_message_bodies_message_id` ON `${TABLE_NAME}` (`message_id`)"
+          },
+          {
+            "name": "index_message_bodies_syncStatus",
+            "unique": false,
+            "columnNames": [
+              "syncStatus"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_message_bodies_syncStatus` ON `${TABLE_NAME}` (`syncStatus`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "messages",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "message_id"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "attachments",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `messageId` TEXT NOT NULL, `accountId` TEXT NOT NULL, `remoteAttachmentId` TEXT, `fileName` TEXT NOT NULL, `size` INTEGER NOT NULL, `mimeType` TEXT NOT NULL, `contentId` TEXT, `isInline` INTEGER NOT NULL, `isDownloaded` INTEGER NOT NULL, `downloadState` INTEGER NOT NULL, `localFilePath` TEXT, `downloadTimestamp` INTEGER, `syncStatus` TEXT NOT NULL, `lastSyncAttemptTimestamp` INTEGER, `lastSuccessfulSyncTimestamp` INTEGER, `lastSyncError` TEXT, `isLocalOnly` INTEGER NOT NULL, `needsFullSync` INTEGER NOT NULL, FOREIGN KEY(`messageId`) REFERENCES `messages`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "messageId",
+            "columnName": "messageId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "accountId",
+            "columnName": "accountId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "remoteAttachmentId",
+            "columnName": "remoteAttachmentId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "fileName",
+            "columnName": "fileName",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "size",
+            "columnName": "size",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "mimeType",
+            "columnName": "mimeType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "contentId",
+            "columnName": "contentId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "isInline",
+            "columnName": "isInline",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "isDownloaded",
+            "columnName": "isDownloaded",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "downloadState",
+            "columnName": "downloadState",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "localFilePath",
+            "columnName": "localFilePath",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "downloadTimestamp",
+            "columnName": "downloadTimestamp",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "syncStatus",
+            "columnName": "syncStatus",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastSyncAttemptTimestamp",
+            "columnName": "lastSyncAttemptTimestamp",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "lastSuccessfulSyncTimestamp",
+            "columnName": "lastSuccessfulSyncTimestamp",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "lastSyncError",
+            "columnName": "lastSyncError",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "isLocalOnly",
+            "columnName": "isLocalOnly",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "needsFullSync",
+            "columnName": "needsFullSync",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_attachments_messageId",
+            "unique": false,
+            "columnNames": [
+              "messageId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_attachments_messageId` ON `${TABLE_NAME}` (`messageId`)"
+          },
+          {
+            "name": "index_attachments_remoteAttachmentId",
+            "unique": false,
+            "columnNames": [
+              "remoteAttachmentId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_attachments_remoteAttachmentId` ON `${TABLE_NAME}` (`remoteAttachmentId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "messages",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "messageId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "pending_actions",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `accountId` TEXT NOT NULL, `actionType` TEXT NOT NULL, `entityId` TEXT NOT NULL, `payload` TEXT NOT NULL, `status` TEXT NOT NULL, `createdAt` INTEGER NOT NULL, `lastAttemptAt` INTEGER, `attemptCount` INTEGER NOT NULL, `maxAttempts` INTEGER NOT NULL, `lastError` TEXT)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "accountId",
+            "columnName": "accountId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "actionType",
+            "columnName": "actionType",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "entityId",
+            "columnName": "entityId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "payload",
+            "columnName": "payload",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "status",
+            "columnName": "status",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastAttemptAt",
+            "columnName": "lastAttemptAt",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "attemptCount",
+            "columnName": "attemptCount",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "maxAttempts",
+            "columnName": "maxAttempts",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "lastError",
+            "columnName": "lastError",
+            "affinity": "TEXT"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        }
+      },
+      {
+        "tableName": "message_folder_junction",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`messageId` TEXT NOT NULL, `folderId` TEXT NOT NULL, PRIMARY KEY(`messageId`, `folderId`), FOREIGN KEY(`messageId`) REFERENCES `messages`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE , FOREIGN KEY(`folderId`) REFERENCES `folders`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "messageId",
+            "columnName": "messageId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "folderId",
+            "columnName": "folderId",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "messageId",
+            "folderId"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_message_folder_junction_folderId",
+            "unique": false,
+            "columnNames": [
+              "folderId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_message_folder_junction_folderId` ON `${TABLE_NAME}` (`folderId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "messages",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "messageId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          },
+          {
+            "table": "folders",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "folderId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "folder_sync_state",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`folderId` TEXT NOT NULL, `nextPageToken` TEXT, `lastSyncedTimestamp` INTEGER, `deltaToken` TEXT, `historyId` TEXT, `continuousHistoryToTimestamp` INTEGER, PRIMARY KEY(`folderId`))",
+        "fields": [
+          {
+            "fieldPath": "folderId",
+            "columnName": "folderId",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "nextPageToken",
+            "columnName": "nextPageToken",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "lastSyncedTimestamp",
+            "columnName": "lastSyncedTimestamp",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "deltaToken",
+            "columnName": "deltaToken",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "historyId",
+            "columnName": "historyId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "continuousHistoryToTimestamp",
+            "columnName": "continuousHistoryToTimestamp",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "folderId"
+          ]
+        }
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'fb48e543af5e544f1ca87e58815090d4')"
+    ]
+  }
+}

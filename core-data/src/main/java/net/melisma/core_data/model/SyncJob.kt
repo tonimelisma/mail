@@ -20,7 +20,12 @@ sealed class SyncJob(
 
     // Priority 90-99: User is actively waiting for this content
     data class FetchFullMessageBody(val messageId: String, override val accountId: String) : SyncJob(accountId, 95, 8)
-    data class DownloadAttachment(val messageId: String, val attachmentId: Long, override val accountId: String) : SyncJob(accountId, 90, 8)
+    data class DownloadAttachment(
+        val messageId: String,
+        val attachmentId: Long,
+        override val accountId: String,
+        override val workScore: Int = 8
+    ) : SyncJob(accountId, 90, workScore)
 
     // Priority 80-89: User is waiting for a list of items to refresh
     data class ForceRefreshFolder(val folderId: String, override val accountId: String) : SyncJob(accountId, 88, 5)

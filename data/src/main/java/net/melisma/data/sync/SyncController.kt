@@ -171,7 +171,13 @@ class SyncController @Inject constructor(
                     is SyncJob.BulkFetchBodies -> handleBulkFetchBodies(job)
                     is SyncJob.BulkFetchAttachments -> handleBulkFetchAttachments(job)
 
-                    else -> Timber.d("Ignoring deprecated or unknown job type ${job::class.simpleName}")
+                    // Handle legacy/deprecated jobs
+                    is SyncJob.FetchMessageHeaders -> handleFetchMessageHeaders(job.folderId, job.pageToken, job.accountId)
+                    is SyncJob.DownloadMessageBody -> handleDownloadMessageBody(SyncJob.FetchFullMessageBody(job.messageId, job.accountId))
+                    is SyncJob.RefreshFolderContents -> handleForceRefreshFolder(SyncJob.ForceRefreshFolder(job.folderId, job.accountId))
+                    is SyncJob.FetchNextMessageListPage -> handleFetchNextPage(job)
+
+                    else -> Timber.d("Ignoring unknown job type ${job::class.simpleName}")
                 }
                 _status.update { it.copy(error = null) }
             } catch (e: Exception) {
@@ -251,6 +257,7 @@ class SyncController @Inject constructor(
 
         val paged = response.getOrThrow()
         val messageEntities = paged.messages.map { it.toEntity(accountId) }
+        val oldestTimestampInPage = messageEntities.minOfOrNull { it.timestamp }
 
         appDatabase.withTransaction {
             // Ensure local folders exist for all remote labels before we process messages.
@@ -281,13 +288,24 @@ class SyncController @Inject constructor(
                 }
             }
 
-            // Persist state
-            appDatabase.folderSyncStateDao().upsert(
-                FolderSyncStateEntity(
-                    folderId = folderId,
-                    nextPageToken = paged.nextPageToken,
-                    lastSyncedTimestamp = System.currentTimeMillis()
-                )
+            // Persist state, updating the continuous history watermark
+            val currentState = stateDao.getState(folderId)
+            stateDao.upsert(
+                (currentState ?: FolderSyncStateEntity(folderId = folderId, nextPageToken = null, lastSyncedTimestamp = null))
+                    .copy(
+                        nextPageToken = paged.nextPageToken,
+                        lastSyncedTimestamp = System.currentTimeMillis(),
+                        // Only update watermark if we are continuing a backfill or starting one.
+                        // A random fetch (pageToken == null) does not guarantee continuity.
+                        continuousHistoryToTimestamp = if (pageToken != null && oldestTimestampInPage != null) {
+                            oldestTimestampInPage
+                        } else if (pageToken == null && paged.nextPageToken == null) {
+                            // This was a full sync of a small folder, continuity is to the oldest message.
+                            oldestTimestampInPage ?: currentState?.continuousHistoryToTimestamp
+                        } else {
+                            currentState?.continuousHistoryToTimestamp
+                        }
+                    )
             )
         }
 
@@ -762,9 +780,13 @@ class SyncController @Inject constructor(
             val bytesToFree = totalUsageBytes - targetBytesAfterEvict
             var bytesFreed = 0L
 
+            Timber.i("Starting cache eviction. Need to free ${bytesToFree / 1024} KB.")
+
             val now = System.currentTimeMillis()
             val evictionAccessCutoffTs = now - java.util.concurrent.TimeUnit.HOURS.toMillis(24)
             val evictionAgeCutoffTs = now - java.util.concurrent.TimeUnit.DAYS.toMillis(90)
+
+            val folderIdsWithEvictions = mutableSetOf<String>()
 
             appDatabase.withTransaction {
                 // 1. Evict attachments from messages that qualify for eviction
@@ -779,20 +801,30 @@ class SyncController @Inject constructor(
                 )
 
                 val candidateMessageIds = candidateMessagesForAttachmentEviction.map { it.id }.toSet()
+                if (candidateMessageIds.isNotEmpty()) {
+                    folderIdsWithEvictions.addAll(appDatabase.messageFolderJunctionDao().getFolderIdsForMessageIds(candidateMessageIds))
+                }
 
                 val attachmentsToEvict = attachmentDao.getAllDownloadedAttachments()
                     .filter { it.messageId in candidateMessageIds }
-                    .sortedBy { it.downloadTimestamp ?: 0L }
 
                 for (att in attachmentsToEvict) {
                     if (bytesFreed >= bytesToFree) break
                     att.localFilePath?.let { path ->
-                        try { java.io.File(path).delete() } catch (e: Exception) { Timber.w(e, "Failed to delete attachment file $path") }
+                        try {
+                            val file = java.io.File(path)
+                            if (file.delete()) {
+                                Timber.d("Evicted attachment file: $path (${att.size} bytes)")
+                            } else {
+                                Timber.w("Failed to delete attachment file: $path")
+                            }
+                        } catch (e: Exception) { Timber.w(e, "Error deleting attachment file $path", e) }
                     }
                     attachmentDao.resetDownloadStatus(att.id, EntitySyncStatus.PENDING_DOWNLOAD)
                     bytesFreed += att.size
                 }
 
+                Timber.d("Freed $bytesFreed bytes after attachment eviction pass.")
                 if (bytesFreed >= bytesToFree) return@withTransaction
 
                 // 2. Evict message bodies from the same candidate messages
@@ -803,9 +835,11 @@ class SyncController @Inject constructor(
                     if (body != null) {
                         messageBodyDao.deleteMessageBody(msgId)
                         bytesFreed += body.sizeInBytes
+                        Timber.d("Evicted body for message $msgId (${body.sizeInBytes} bytes)")
                     }
                 }
 
+                Timber.d("Freed $bytesFreed bytes after body eviction pass.")
                 if (bytesFreed >= bytesToFree) return@withTransaction
 
                 // 3. Evict entire message headers (only if still over budget)
@@ -815,10 +849,27 @@ class SyncController @Inject constructor(
                      excludedSyncStates = listOf(EntitySyncStatus.PENDING_UPLOAD.name)
                 ).sortedBy { it.timestamp }
 
+                val finalMessageIds = finalCandidateMessages.map { it.id }.toSet()
+                if(finalMessageIds.isNotEmpty()){
+                    folderIdsWithEvictions.addAll(appDatabase.messageFolderJunctionDao().getFolderIdsForMessageIds(finalMessageIds))
+                }
+
                 for (msg in finalCandidateMessages) {
                     if (bytesFreed >= bytesToFree) break
                     messageDao.deleteMessageById(msg.id)
-                    bytesFreed += 500 // Approximate size for header and junctions
+                    val approxFreed = 500 // Approximate size for header and junctions
+                    bytesFreed += approxFreed
+                    Timber.d("Evicted message header ${msg.id} (~$approxFreed bytes)")
+                }
+
+                // Finally, invalidate the watermarks for all affected folders
+                val folderStateDao = appDatabase.folderSyncStateDao()
+                folderIdsWithEvictions.forEach { folderId ->
+                    val currentState = folderStateDao.getState(folderId)
+                    if (currentState != null && currentState.continuousHistoryToTimestamp != null) {
+                        Timber.w("Eviction is invalidating continuous history watermark for folder $folderId")
+                        folderStateDao.upsert(currentState.copy(continuousHistoryToTimestamp = null))
+                    }
                 }
             }
             Timber.i("Global cache eviction freed ${bytesFreed / 1024 / 1024} MB.")
@@ -1009,8 +1060,12 @@ class SyncController @Inject constructor(
         while (true) {
             producers.forEach { producer ->
                 try {
+                    Timber.d("Running producer: ${producer::class.simpleName}")
                     val jobs = producer.produce()
-                    jobs.forEach { submit(it) }
+                    if (jobs.isNotEmpty()) {
+                        Timber.i("Producer ${producer::class.simpleName} created ${jobs.size} jobs: $jobs")
+                        jobs.forEach { submit(it) }
+                    }
                 } catch (e: Exception) {
                     Timber.e(e, "Producer ${producer::class.simpleName} failed")
                 }

@@ -39,9 +39,11 @@ import net.melisma.core_db.migration.M18_M19
         MessageFolderJunction::class,
         FolderSyncStateEntity::class
     ],
-    version = 21,
+    version = 22,
     exportSchema = true,
-    // autoMigrations disabled during ongoing schema development – rely on fallbackToDestructiveMigration in AppDatabase builder.
+    autoMigrations = [
+        AutoMigration(from = 20, to = 21)
+    ]
 )
 @TypeConverters(
     WellKnownFolderTypeConverter::class, 
@@ -67,6 +69,14 @@ abstract class AppDatabase : RoomDatabase() {
             override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE accounts ADD COLUMN latestDeltaToken TEXT")
                 db.execSQL("ALTER TABLE folders ADD COLUMN isPlaceholder INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+        val M21_22 = object : androidx.room.migration.Migration(21, 22) {
+            override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE folder_sync_state RENAME TO folder_sync_state_old")
+                db.execSQL("CREATE TABLE folder_sync_state (folderId TEXT NOT NULL, nextPageToken TEXT, lastSyncedTimestamp INTEGER, deltaToken TEXT, historyId TEXT, continuousHistoryToTimestamp INTEGER, PRIMARY KEY(folderId))")
+                db.execSQL("INSERT INTO folder_sync_state (folderId, nextPageToken, lastSyncedTimestamp, deltaToken, historyId) SELECT folderId, nextPageToken, lastSyncedTimestamp, deltaToken, historyId FROM folder_sync_state_old")
+                db.execSQL("DROP TABLE folder_sync_state_old")
             }
         }
     }

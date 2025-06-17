@@ -16,6 +16,9 @@ interface FolderSyncStateDao {
     @Query("SELECT * FROM folder_sync_state WHERE folderId = :folderId")
     fun observeState(folderId: String): Flow<FolderSyncStateEntity?>
 
+    @Query("SELECT * FROM folder_sync_state WHERE folderId = :folderId")
+    suspend fun getState(folderId: String): FolderSyncStateEntity?
+
     @Query("DELETE FROM folder_sync_state WHERE folderId = :folderId")
     suspend fun delete(folderId: String)
 } 

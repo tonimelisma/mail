@@ -37,15 +37,14 @@ object DatabaseModule {
     fun provideAppDatabase(@ApplicationContext context: Context): AppDatabase {
         Log.d("DatabaseModule", "Providing AppDatabase instance.")
         return Room.databaseBuilder(
-            context,
+            context.applicationContext,
             AppDatabase::class.java,
-            "melisma_mail.db"
+            "melisma.db"
         )
-            // Fallback for versions 1-13 to version 14 (or directly to 15 if preferred and data loss is ok for these old versions)
-            // Since we have a specific 14->15 migration, we want to ensure any older version hits the fallback to get to 14 first,
-            // or if the fallback can go directly to 15 safely.
-            // For simplicity and matching previous behavior for 1-13:
-            .fallbackToDestructiveMigration() // Phase-1: wipe & recreate schema for v16
+            .addMigrations(AppDatabase.M18_19, AppDatabase.M19_20, AppDatabase.M21_22)
+            // Destructive migration is enabled for development builds to speed up schema iteration.
+            // In a production app, every schema change would require a tested Migration plan.
+            .fallbackToDestructiveMigration()
             .build()
     }
 

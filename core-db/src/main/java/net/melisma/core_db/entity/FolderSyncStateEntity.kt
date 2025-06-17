@@ -9,5 +9,7 @@ data class FolderSyncStateEntity(
     val nextPageToken: String?,
     val lastSyncedTimestamp: Long?,
     val deltaToken: String? = null,
-    val historyId: String? = null
+    val historyId: String? = null,
+    /** Timestamp of the oldest message for which we have a provably continuous history from `now`. Null if continuity is unknown. */
+    val continuousHistoryToTimestamp: Long? = null
 ) 

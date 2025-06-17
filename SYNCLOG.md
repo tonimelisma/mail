@@ -1,5 +1,31 @@
 ### Sync Engine v2.1 Migration Log
 
+**Date:** 2025-09-13
+
+#### Summary
+Completed a major architectural refactor of the Sync Engine to implement a fully data-driven dynamic backfill mechanism and harden opportunistic downloads. This resolves critical bugs from the previous implementation and aligns the engine with the `SYNCVISION.md` goals.
+
+1.  **Re-architected Dynamic Backfill ("Continuous Watermark" Model)**:
+    *   Replaced the brittle `backfilledAgainstSyncDays` state with a robust `continuousHistoryToTimestamp` watermark in `FolderSyncStateEntity`.
+    *   Updated the database schema via a new migration (`M21_22`) to support the new architecture.
+    *   Refactored `BackfillJobProducer` to use the watermark, correctly queuing backfill jobs only when a folder's continuous history does not meet the user's sync duration preference.
+    *   Updated `SyncController` to correctly advance the watermark when fetching sequential pages of historical messages.
+
+2.  **Implemented Self-Healing Cache Eviction**:
+    *   The `SyncController`'s `runCacheEviction` logic now correctly interacts with the backfill system. When messages are evicted, the `continuousHistoryToTimestamp` for the affected folders is now invalidated (`null`), signaling to the `BackfillJobProducer` that the history is no longer complete and needs to be re-fetched when conditions allow.
+    *   Added `getFolderIdsForMessageIds` to the `MessageFolderJunctionDao` to support this new eviction logic.
+
+3.  **Hardened Opportunistic Bulk Downloads**:
+    *   Enhanced `BulkDownloadJobProducer` to be more intelligent. It now performs pre-flight checks for an un-metered network and available cache space before queuing any jobs, saving battery and data.
+
+4.  **Added Comprehensive Diagnostic Logging**:
+    *   Injected detailed `Timber` logging into the `producerLoop`, `BackfillJobProducer`, and `runCacheEviction` methods to provide critical visibility into the engine's decision-making process for future diagnostics.
+
+5.  **Fixed Critical Bug in Job Handling**:
+    *   Corrected the `when` block in `SyncController.run()` to explicitly handle all `@Deprecated` job types, preventing them from being silently ignored and ensuring backward compatibility.
+
+---
+
 **Date:** 2025-08-03
 
 #### Summary

@@ -1,89 +1,48 @@
-### **Architecture A Migration Plan – Incremental Evolution of the existing SyncController**
+### **Architecture A Migration Plan – Phase 2: Vision Completion**
 
-This document converts the vision in **SYNCVISION.md** into an actionable, file-by-file to-do list that a junior developer can follow.  Each task states **where**, **what** and **why**, the **blast radius**, and any **gotchas / risks**.
+This document outlines the remaining work to fully implement the **SYNCVISION.md** specification. The core infrastructure, bug fixes, and basic job producers from Phase 1 are complete. This plan focuses on implementing the missing opportunistic features and hardening the existing logic.
 
 ---
 ## 📍 High-Level Roadmap
-1. Add pluggable _Gatekeepers_ that can veto queuing when cache pressure / network / battery is outside allowed ranges.
-2. Add a lightweight **WorkScore** metric to every `SyncJob` and expose `totalWorkScore` as a `StateFlow` from `SyncController`.
-3. Teach the existing **InitialSyncForegroundService** to start/stop based on `totalWorkScore` instead of the coarse `isSyncing` flag.
-4. Update Back-fill and Cache-Eviction logic to match the rules in **SYNCVISION.md** (90-day header window, 24-hour grace period, 98 % hard cache limit, 90 % soft limit).
-5. Maintain backward compatibility for the UI – keep `isSyncing` (derived) so nothing crashes.
-6. Write unit tests for the new Gatekeeper decisions & WorkScore maths.
+1.  **Implement Bulk Content Downloads:** Create a new `JobProducer` that intelligently queues `BulkFetchBodies` and `BulkFetchAttachments` jobs when the device state is favorable (e.g., unmetered network, not low on battery).
+2.  **Harden Backfill Logic:** Refactor the backfill mechanism to be truly dynamic and responsive to changes in user preferences.
+3.  **Final Polish:** Add comprehensive debug logging to the producer loop and clean up any remaining tech debt.
 
-We implement the above in **five small PRs** (you can squash before main merge).
+We will implement this in **two small PRs**.
 
 ---
-## 1️⃣ PR-1  – Gatekeeper Infrastructure
+## 1️⃣ PR-1 – Bulk Content Downloads (Opportunistic)
+
+This PR implements the final missing piece of the core sync vision: proactively downloading content in the background to make the app feel faster and more responsive.
 
 | File | Change | Blast-Radius | Risk |
 |------|--------|-------------|------|
-| `data/src/main/java/net/melisma/data/sync/Gatekeeper.kt` (NEW) | Define an **interface** `Gatekeeper { suspend fun isAllowed(job: SyncJob): Boolean }`. | None (new file) | None.
-| `data/src/main/java/net/melisma/data/sync/gate/CachePressureGatekeeper.kt` (NEW) | Implements interface. Reads `AttachmentDao`+`MessageBodyDao` sizes, compares to **90 %** of `UserPreferences.cacheSizeLimitBytes`. | Low | SQL cost – run on IO dispatcher.
-| `SyncController.kt` | 1) Inject `List<Gatekeeper>`  (Hilt multibinding)  2) In `submit(job)` call `gatekeepers.all { it.isAllowed(job) }` before enqueue. | High – touches central queue. | Deadlock if `isAllowed` is long-running ⇒ ensure `withContext(Dispatchers.IO)`.
-| `data/src/main/java/.../di/SyncGateModule.kt` (NEW) | Provide the gatekeeper impls via Hilt. | None | DI mis-wiring.
+| `data/src/main/java/net/melisma/data/sync/BulkDownloadJobProducer.kt` (NEW) | Create a new `JobProducer` that implements the logic for opportunistic downloads. It should only run if the `NetworkGatekeeper` and `CachePressureGatekeeper` would allow the jobs. It will query for messages missing bodies and attachments pending download using existing DAO methods. | Low (new file) | Logic error might queue too many jobs; mitigate by limiting queries (e.g., `LIMIT 25`). |
+| `data/src/main/java/net/melisma/data/di/DataModule.kt` | Add the new `BulkDownloadJobProducer` to the Hilt multibinding set for `JobProducer`. | Low | DI mis-wiring. |
+| `SyncController.kt` | Add detailed `Timber.d` logging inside the `producerLoop` to make it clear which producer is running and how many jobs it creates. | Low | None. |
 
-####  Implementation steps
-1. Create interface + impls.  
-2. Register with Hilt.  
-3. Update `SyncController` constructor to accept `@JvmSuppressWildcards List<Gatekeeper>`.
-4. Ensure `submit()` remains **non-suspending** (wrap check in `runBlocking` or keep gatekeepers fast).
+#### Implementation Steps
+1. Create the new `BulkDownloadJobProducer.kt` file.
+2. Inside its `produce()` method, query `messageDao.getMessagesMissingBody()` and `attachmentDao.getUndownloadedAttachmentsForAccount()`.
+3. If results are found, create and return `SyncJob.BulkFetchBodies` and `SyncJob.BulkFetchAttachments` jobs.
+4. Add the new producer to the `JobProducer` set in a Hilt module (e.g., `DataModule.kt`).
+5. Add logging to the `producerLoop` in `SyncController.kt` to aid debugging.
 
 ---
-## 2️⃣ PR-2  – WorkScore Metric
+## 2️⃣ PR-2 – Harden Dynamic Backfill & Final Polish
+
+This PR improves the user experience by making historical sync fully responsive to settings changes and cleans up the last pieces of tech debt.
 
 | File | Change | Blast-Radius | Risk |
 |------|--------|-------------|------|
-| `core-data/src/main/java/net/melisma/core_data/model/SyncJob.kt` | Add property `open val workScore: Int` to sealed class root.  Provide defaults in each subclass (e.g. DownloadBody = 2, Attachment = size/1 MB, Header = 1, FolderList = 3). | All job callers compile-error until updated. | Medium – keep serialisation constructors.
-| `SyncController.kt` | Add private `_totalWorkScore` `MutableStateFlow<Int>` updated on `submit` (+ score) and after job finishes (– score).  Expose `totalWorkScore` as `asStateFlow()`. | High | Off-by-one on errors; ensure decrement in `finally` even on exception.
-| Unit tests folder (NEW) | Add `SyncJobWorkScoreTest.kt`. | None | Build config for JUnit.
-
-#### Steps
-1. Update `SyncJob` root class signature.  
-2. Touch every data class line – IntelliJ quick-fix.  
-3. Update queue logic in `SyncController.run()` to subtract `job.workScore` in `finally`.
-
----
-## 3️⃣ PR-3  – Foreground-Service Heuristics
-
-| File | Change | Blast-Radius | Risk |
-|------|--------|-------------|------|
-| `InitialSyncForegroundService.kt` | Replace usage of `status.isSyncing` with `syncController.totalWorkScore` (> `WORK_THRESHOLD` = 10). | Medium – UI string only. | Service may flicker → add hysteresis of 5 seconds same as today.
-| `SyncController.kt` | Derive `isSyncing = totalWorkScore.value > 0` for backwards compatibility. | Medium | None.
-
-#### Steps
-1. Add companion `WORK_THRESHOLD` = 10.  
-2. Subscribe to `totalWorkScore` instead of `status.isSyncing`.
-
----
-## 4️⃣ PR-4  – Back-fill & Eviction Alignment
-
-| File | Change | Blast-Radius | Risk |
-|------|--------|-------------|------|
-| `BackfillJobProducer.kt` | Before queuing headers, call `gatekeeperCachePressure.isAllowed(job)`; skip if false. | Low | None.
-| `CacheEvictionProducer.kt` | Change soft threshold to **98 %** for hard eviction trigger, keep 90 % as soft gate. | Low | Wrong constant.
-| `SyncController.runCacheEviction()` | Modify selection predicate to `sentDate < now-90d AND (lastAccess == null || lastAccess < now-24h)`. | Medium | SQL perf – add new index on `lastAccessedTimestamp` (already exists).
-
----
-## 5️⃣ PR-5  – UI & Compatibility Clean-up
-
-| File | Change | Blast-Radius | Risk |
-|------|--------|-------------|------|
-| `mail/.../MessageDetailViewModel.kt` & others | Still rely on `isSyncing`. No change needed, flag now derived. | Low | None.
-| Documentation | Update `ARCHITECTURE.md` diagram once Gatekeepers & WorkScore merged. | None | Docs only.
-
----
-## 🛠️ General Risks & Mitigations
-1. **Deadlocks** – gatekeeper check inside `submit()` must be quick; use non-blocking caches or snapshot sizes.
-2. **WorkScore drift** – ensure decrement happens even if job throws; add unit test.
-3. **Foreground Service flaps** – add hysteresis (≥ 5 s below threshold before stop).
-4. **Schema migrations** – Changing eviction predicate needs no DB schema change, but if you later add new columns ensure `AppDatabase.migrations` updated.
-5. **Junior dev confusion** – Keep each PR < 400 loc; write comments in new interfaces; run `./gradlew test` locally.
+| `BackfillJobProducer.kt` | Modify the producer's logic. It should now track the *sync duration preference* it last ran with for each folder (e.g., in `FolderSyncStateEntity` or a separate table). If the current preference is greater than the last-used preference, it should trigger a new backfill, even if the previous one was "complete". | Medium | DB migration required if adding a column to `FolderSyncStateEntity`. Can be complex to get right. |
+| `core-db/src/main/java/net/melisma/core_db/entity/FolderSyncStateEntity.kt` | Add a `backfillSyncDurationDays: Int?` column to store the setting used during the last backfill. | High | Requires a Room migration. |
+| `core-db/src/main/java/net/melisma/core_db/AppDatabase.kt` | Implement the `M_XX_YY` migration to add the new column to the `folder_sync_state` table. | High | Risk of crashing users on upgrade if migration fails. Must be tested thoroughly. |
+| `CHANGELOG.md`, `SYNCLOG.md` | Update documentation to reflect the final, completed state of the Sync Engine v2.1. | Low | Docs only. |
 
 ---
 ## ✅ Definition of Done
-- All existing UI flows compile and behave unchanged.
-- New unit tests in PR-2 pass.
-- Foreground service starts only when `totalWorkScore ≥ 10` for >2 ticks and stops after 5 idle ticks.
-- Back-fill pauses automatically when cache ≥ 90 % of limit.
-- Cache eviction only runs when usage ≥ 98 % or at 24-h cadence. 
+- Bulk downloads for bodies and attachments occur automatically in the background when network and cache conditions are suitable.
+- Changing the "Sync mail for" setting from "30 days" to "90 days" correctly triggers a new backfill to download the missing 60 days of history.
+- The `CHANGELOG.md` and `SYNCLOG.md` are updated to mark the v2.1 feature set as complete.
+- The project builds successfully with `./gradlew build`. 

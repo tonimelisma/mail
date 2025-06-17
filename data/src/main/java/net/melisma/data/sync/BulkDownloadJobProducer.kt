@@ -5,6 +5,7 @@ import kotlinx.coroutines.withContext
 import net.melisma.core_data.connectivity.NetworkMonitor
 import net.melisma.core_data.model.SyncJob
 import net.melisma.core_db.AppDatabase
+import net.melisma.data.sync.gate.CachePressureGatekeeper
 import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -20,12 +21,24 @@ import kotlinx.coroutines.flow.first
 class BulkDownloadJobProducer @Inject constructor(
     private val networkMonitor: NetworkMonitor,
     private val appDatabase: AppDatabase,
+    private val cachePressureGatekeeper: CachePressureGatekeeper,
 ) : JobProducer {
 
     override suspend fun produce(): List<SyncJob> = withContext(Dispatchers.IO) {
-        if (!networkMonitor.isOnline.first()) {
+        val networkStatus = networkMonitor.isOnline.first()
+        if (!networkStatus || networkMonitor.isMetered()) {
+            Timber.d("Skipping BulkDownloadJobProducer due to network state (Online: $networkStatus, Metered: ${networkMonitor.isMetered()})")
             return@withContext emptyList()
         }
+
+        // Pre-flight check with the cache gatekeeper. We create a dummy job because the gatekeeper
+        // only cares about the `isProactiveDownload` flag.
+        val dummyJob = SyncJob.BulkFetchBodies("") // AccountId doesn't matter for this check
+        if (!cachePressureGatekeeper.isAllowed(dummyJob)) {
+            Timber.d("Skipping BulkDownloadJobProducer due to cache pressure.")
+            return@withContext emptyList()
+        }
+
         val jobs = mutableListOf<SyncJob>()
         val accountDao = appDatabase.accountDao()
         val messageDao = appDatabase.messageDao()

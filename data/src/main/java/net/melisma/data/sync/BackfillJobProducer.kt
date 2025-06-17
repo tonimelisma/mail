@@ -30,6 +30,7 @@ class BackfillJobProducer @Inject constructor(
         val folderDao = appDatabase.folderDao()
         val messageDao = appDatabase.messageDao()
         val accountDao = appDatabase.accountDao()
+        val syncStateDao = appDatabase.folderSyncStateDao()
 
         val prefs = userPrefs.userPreferencesFlow.first()
         val daysWindow = prefs.initialSyncDurationDays
@@ -40,14 +41,21 @@ class BackfillJobProducer @Inject constructor(
         accounts.forEach { account ->
             val folders = folderDao.getFoldersForAccountSuspend(account.id)
             folders.forEach { folder ->
-                val oldestMsgTs = messageDao.getOldestMessageTimestamp(folder.id)
-                if (oldestMsgTs == null || oldestMsgTs > cutoff) {
-                    // We are missing part of the 90-day window – request more.
-                    jobs += SyncJob.HeaderBackfill(folder.id, pageToken = null, accountId = account.id)
+                val syncState = syncStateDao.getState(folder.id)
+                val watermark = syncState?.continuousHistoryToTimestamp
+
+                if (watermark == null || watermark > cutoff) {
+                    // The watermark is either unknown or not old enough to satisfy the user's preference.
+                    // We may need to start a new backfill or continue an existing one.
+                    if (watermark == null || syncState.nextPageToken != null) {
+                        Timber.i("BackfillJobProducer: Queuing backfill for folder ${folder.name}. " +
+                                "Reason: Watermark is ${if(watermark == null) "null" else "too recent"} and pagination is possible.")
+                        jobs += SyncJob.HeaderBackfill(folder.id, pageToken = syncState?.nextPageToken, accountId = account.id)
+                    }
                 }
             }
         }
-        if (jobs.isNotEmpty()) Timber.d("BackfillJobProducer queued ${jobs.size} header pages")
+        if (jobs.isNotEmpty()) Timber.d("BackfillJobProducer queued ${jobs.size} jobs")
         jobs
     }
 } 

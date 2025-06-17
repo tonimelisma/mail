@@ -20,7 +20,10 @@ interface MessageFolderJunctionDao {
     suspend fun deleteByFolder(folderId: String)
 
     @Query("SELECT folderId FROM message_folder_junction WHERE messageId = :messageId")
-    suspend fun getFoldersForMessage(messageId: String): List<String>
+    suspend fun getFolderIdsForMessage(messageId: String): List<String>
+
+    @Query("SELECT folderId FROM message_folder_junction WHERE messageId IN (:messageIds)")
+    suspend fun getFolderIdsForMessageIds(messageIds: Set<String>): List<String>
 
     @Query("SELECT messageId FROM message_folder_junction WHERE folderId = :folderId")
     fun getMessageIdsForFolder(folderId: String): Flow<List<String>>
