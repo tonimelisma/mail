@@ -32,6 +32,7 @@
 *   **Requirement 2.3 (Archive Message):** 🟢 **Completed** - Archiving is implemented as a "move" operation.
 *   **Requirement 2.4 (Customizable Swipe Actions - UI/UX):** 🔴 **Not Started** - There is no implementation for swipe actions.
 *   **Requirement 2.1 (Auth Reliability - Microsoft silent token):** 🟢 **Completed** (2025-09-17) – Persist active MS account ID at sign-in so `MicrosoftKtorTokenProvider` can obtain tokens without spurious re-auth prompts.
+*   **Requirement 2.2 (Sync Reliability - Message delta API):** 🟢 **Completed** (2025-09-17) – Switched to folder-level `/me/mailFolders/delta` query to avoid 400 errors on unsupported `/me/messages/delta`.
 
 **EPIC 3: Composing & Sending (Offline Capable)** (Medium-High Priority)
 
