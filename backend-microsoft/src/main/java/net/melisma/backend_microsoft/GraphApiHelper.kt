@@ -1021,13 +1021,54 @@ class GraphApiHelper @Inject constructor(
             }
             // ... rest of the function
 
-            // --- START OF ADDED PLACEHOLDER ---
-            Timber.w("syncMessagesForFolder (Delta) for folder $folderRemoteId with Ktor: Full delta fetch and processing logic is not yet implemented after URL construction. Request URL built: $requestUrl")
-            // Placeholder: Actual Ktor call to 'requestUrl', deserialize GraphDeltaResponse<KtorGraphMessage>,
-            // map KtorGraphMessage to domain Message, handle removed items, and manage nextLink/deltaLink.
-            // For now, returning a failure to indicate it's not implemented.
-            Result.failure(NotImplementedError("Ktor: Delta message sync for folder $folderRemoteId not fully implemented."))
-            // --- END OF ADDED PLACEHOLDER ---
+            val collectedNewOrUpdated = mutableListOf<Message>()
+            val collectedDeletedIds = mutableListOf<String>()
+
+            var nextUrl: String? = requestUrl
+            var finalDeltaLink: String? = syncToken
+
+            do {
+                val urlToFetch = nextUrl ?: break
+
+                val response: HttpResponse = httpClient.get(urlToFetch) {
+                    accept(ContentType.Application.Json)
+                    maxResults?.let { parameter("\$top", it) }
+                }
+
+                if (!response.status.isSuccess()) {
+                    val body = response.bodyAsText()
+                    val httpEx = ClientRequestException(response, body)
+                    return@withContext Result.failure(ApiServiceException(errorMapper.mapExceptionToErrorDetails(httpEx)))
+                }
+
+                val deltaResp = response.body<GraphDeltaResponse<KtorGraphMessage>>()
+
+                deltaResp.value.forEach { gm ->
+                    if (gm.removed != null) {
+                        collectedDeletedIds.add(gm.id)
+                    } else {
+                        collectedNewOrUpdated.add(
+                            mapKtorGraphMessageToDomainMessage(
+                                gm,
+                                accountId,
+                                folderRemoteId
+                            )
+                        )
+                    }
+                }
+
+                deltaResp.deltaLink?.let { finalDeltaLink = it }
+                nextUrl = deltaResp.nextLink
+
+            } while (nextUrl != null)
+
+            Result.success(
+                DeltaSyncResult(
+                    newOrUpdatedItems = collectedNewOrUpdated,
+                    deletedItemIds = collectedDeletedIds.distinct(),
+                    nextSyncToken = finalDeltaLink
+                )
+            )
         } catch (e: Exception) {
             Timber.e(e, "Exception during Graph delta message sync for folder $folderRemoteId")
             Result.failure(ApiServiceException(errorMapper.mapExceptionToErrorDetails(e)))
