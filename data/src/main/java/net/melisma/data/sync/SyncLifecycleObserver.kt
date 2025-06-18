@@ -45,5 +45,13 @@ class SyncLifecycleObserver @Inject constructor(
         net.melisma.core_data.util.DiagnosticUtils.logDeviceState(appContext, "lifecycle onStop")
         syncController.stopActivePolling()
         syncController.startPassivePolling()
+
+        // Ensure foreground sync service starts right away if there's outstanding work.
+        if (syncController.totalWorkScore.value > 0) {
+            val intent = android.content.Intent().apply {
+                setClassName(appContext, "net.melisma.mail.sync.InitialSyncForegroundService")
+            }
+            androidx.core.content.ContextCompat.startForegroundService(appContext, intent)
+        }
     }
 } 

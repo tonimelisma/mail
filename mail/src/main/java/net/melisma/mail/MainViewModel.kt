@@ -130,7 +130,9 @@ class MainViewModel @Inject constructor(
     private val _pendingAuthIntent = MutableStateFlow<Intent?>(null)
     val pendingAuthIntent: StateFlow<Intent?> = _pendingAuthIntent.asStateFlow()
 
-    private val _requestPostNotificationsPermission = MutableSharedFlow<Unit>()
+    // Replay = 1 so that the Activity can still receive the permission request event
+    // even if it starts collecting slightly after the emission (race during cold start).
+    private val _requestPostNotificationsPermission = MutableSharedFlow<Unit>(replay = 1, extraBufferCapacity = 1)
     val requestPostNotificationsPermission = _requestPostNotificationsPermission.asSharedFlow()
 
     private var pendingSignInProvider: String? = null

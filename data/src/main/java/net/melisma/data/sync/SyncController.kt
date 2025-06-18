@@ -79,13 +79,13 @@ class SyncController @Inject constructor(
         private const val BASE_RETRY_DELAY_MS = 10_000L // 10 seconds
         private const val MAX_RETRY_JITTER_MS = 2_000L // 2 seconds
         /**
-         * Minimum aggregated work score that triggers escalation to a foreground service while the
-         * app is in the background. Lowered from 10 → **5** so that a single `BulkFetchBodies`
-         * job (score = 5) is now sufficient to start the service before any heavy network work
-         * begins. This prevents the system from aggressively restricting background traffic on
-         * older Android versions and gives us a safety-margin for network connectivity.
+         * Any pending work while the app is backgrounded should run under a foreground
+         * service so Android will not throttle network traffic.  A threshold of **1**
+         * means the service will start as soon as the very first job is enqueued rather
+         * than waiting for an aggregate score of 5 which previously caused hundreds of
+         * failing background requests.
          */
-        private const val WORK_THRESHOLD = 5
+        private const val WORK_THRESHOLD = 1
     }
 
     init {
@@ -103,10 +103,10 @@ class SyncController @Inject constructor(
 
                 // Centralised foreground-service management
                 if (score >= WORK_THRESHOLD) {
-                    val intent = Intent().apply {
-                        setClassName(appContext, "net.melisma.mail.sync.InitialSyncForegroundService")
-                    }
-                    ContextCompat.startForegroundService(appContext, intent)
+                    // Start (or restart) the foreground service. If it's already running the
+                    // call is ignored by the framework, so we avoid a compile-time dependency
+                    // on the service class (which lives in the mail module).
+                    maybeStartInitialSyncService()
                 }
 
                 if (score == 0) {
