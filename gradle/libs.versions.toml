@@ -4,8 +4,7 @@
 agp = "8.10.1"
 kotlin = "2.1.21"
 kotlinxSerialization = "1.8.1"
-firebaseBomVersion = "33.1.2"
-google-services-plugin = "4.4.2"
+
 ktor = "3.2.0"
 coreKtx = "1.16.0"
 junit = "4.13.2"
@@ -48,10 +47,7 @@ paging = "3.3.6"
 
 # WorkManager
 
-# Firebase
-firebaseBom = { group = "com.google.firebase", name = "firebase-bom", version.ref = "firebaseBomVersion" }
-firebaseAnalytics = { group = "com.google.firebase", name = "firebase-analytics-ktx" }
-firebaseMessaging = { group = "com.google.firebase", name = "firebase-messaging-ktx" }
+
 
 [libraries]
 kotlin-stdlib = { group = "org.jetbrains.kotlin", name = "kotlin-stdlib", version.ref = "kotlin" }
@@ -139,7 +135,7 @@ androidx-paging-compose = { group = "androidx.paging", name = "paging-compose", 
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
-google-services = { id = "com.google.gms.google-services", version.ref = "google-services-plugin" }
+
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlin-ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
