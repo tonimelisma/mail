@@ -563,13 +563,22 @@ class SyncController @Inject constructor(
                 return@withContext
             }
 
-            val result = service.downloadAttachment(job.messageId, job.attachmentId.toString())
+            val result = service.downloadAttachment(job.messageId, attachment.remoteAttachmentId ?: attachment.id.toString())
 
             if (result.isFailure) {
                 val ex = result.exceptionOrNull()
-                attachmentDao.updateSyncStatus(job.attachmentId, EntitySyncStatus.ERROR, ex?.message)
-                if (ex is net.melisma.core_data.errors.ApiServiceException && ex.errorDetails.isNeedsReAuth) {
-                    accountDao.setNeedsReauthentication(job.accountId, true)
+                Timber.e(ex, "Failed to download attachment ${job.attachmentId}")
+
+                // Fast-path recovery for stale attachment token (Gmail 400 INVALID_ARGUMENT).
+                if (ex is net.melisma.core_data.errors.ApiServiceException &&
+                    (ex.errorDetails.message.contains("Invalid attachment token", ignoreCase = true) ||
+                     ex.errorDetails.code?.equals("invalidArgument", ignoreCase = true) == true)) {
+                    Timber.w("Stale attachment token – purging local row and refreshing message ${job.messageId}")
+                    attachmentDao.deleteAttachment(job.attachmentId)
+                    // Re-queue a body fetch which will in turn schedule fresh attachment jobs if needed.
+                    submit(SyncJob.FetchFullMessageBody(job.messageId, job.accountId))
+                } else {
+                    attachmentDao.updateSyncStatus(job.attachmentId, net.melisma.core_data.model.EntitySyncStatus.ERROR, ex?.message)
                 }
                 return@withContext
             }
