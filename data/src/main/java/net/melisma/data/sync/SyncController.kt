@@ -497,9 +497,22 @@ class SyncController @Inject constructor(
 
             if (result.isFailure) {
                 val ex = result.exceptionOrNull()
-                messageDao.setSyncError(job.messageId, ex?.message ?: "Unknown error")
-                if (ex is net.melisma.core_data.errors.ApiServiceException && ex.errorDetails.isNeedsReAuth) {
-                    accountDao.setNeedsReauthentication(job.accountId, true)
+
+                // Detect Gmail invalid bodyId / stale message issue (similar to attachment token).
+                if (ex is net.melisma.core_data.errors.ApiServiceException &&
+                    (ex.errorDetails.message.contains("Invalid message" , true) ||
+                     ex.errorDetails.message.contains("Invalid attachment token", true) ||
+                     ex.errorDetails.code?.equals("invalidArgument", true) == true)) {
+                    Timber.w("Stale body identifier – forcing folder refresh for message ${job.messageId}")
+                    val folderId = appDatabase.messageFolderJunctionDao().getFolderIdsForMessage(job.messageId).firstOrNull()
+                    if (folderId != null) {
+                        submit(SyncJob.ForceRefreshFolder(job.accountId, folderId))
+                    }
+                } else {
+                    messageDao.setSyncError(job.messageId, ex?.message ?: "Unknown error")
+                    if (ex is net.melisma.core_data.errors.ApiServiceException && ex.errorDetails.isNeedsReAuth) {
+                        accountDao.setNeedsReauthentication(job.accountId, true)
+                    }
                 }
                 return@withContext
             }
