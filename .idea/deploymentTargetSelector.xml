@@ -4,6 +4,14 @@
     <selectionStates>
       <SelectionState runConfigName="mail">
         <option name="selectionMode" value="DROPDOWN" />
+        <DropdownSelection timestamp="2025-06-18T04:10:09.237509Z">
+          <Target type="DEFAULT_BOOT">
+            <handle>
+              <DeviceId pluginId="PhysicalDevice" identifier="serial=4A091FDAP000BX" />
+            </handle>
+          </Target>
+        </DropdownSelection>
+        <DialogSelection />
       </SelectionState>
       <SelectionState runConfigName="calendar">
         <option name="selectionMode" value="DROPDOWN" />
